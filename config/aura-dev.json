@@ -1,0 +1,21 @@
+{
+  "stage": "dev",
+  "region": "us-west-1",
+  "userPoolId": "us-west-1_KSpdUo5a7",
+  "clientId": "25r2s81bddihbt6lq5vgmcom0u",
+  "platform": "android",
+  "appVersion": "0.1.0",
+  "consentPolicyVersion": "2026-10",
+  "services": {
+    "identity": "https://z4gym50rj6.execute-api.us-west-1.amazonaws.com",
+    "health-data": "https://zi1gzljvyi.execute-api.us-west-1.amazonaws.com",
+    "notification": "https://3cg0pfx707.execute-api.us-west-1.amazonaws.com",
+    "calendar": "https://aob7sn3p56.execute-api.us-west-1.amazonaws.com",
+    "capacity": "https://1yahj6uq14.execute-api.us-west-1.amazonaws.com",
+    "content": "https://xxqd7w9915.execute-api.us-west-1.amazonaws.com",
+    "habit": "https://3nqojzxs89.execute-api.us-west-1.amazonaws.com",
+    "planner": "https://twwmoc3omh.execute-api.us-west-1.amazonaws.com",
+    "session": "https://uu0572vbaa.execute-api.us-west-1.amazonaws.com",
+    "task": "https://mr2kgvvph6.execute-api.us-west-1.amazonaws.com"
+  }
+}
