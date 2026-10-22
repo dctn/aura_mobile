@@ -79,7 +79,10 @@ Session; **End** stops it (or **Mark as done**). The bar also shows a session th
 - **Settings** (gear, BS-01): name and body details (tap Birth date, Height or Weight for a sheet; Sex is a pick; each saves at once), health goals (saved as a second write, so a refused goal
   doesn't lose the body details), the band (pair, sync, last sync), the 17 alert switches, the inbox (read, dismiss,
   snooze), export, delete account, dark mode and sign out.
-- **Test lab** (flask button): one row per alert feature.
+- **Test lab** (flask button): one row per alert feature. **Run** sends the scenario's band days; the row then
+  watches for 12 min and says what AWS did at every look: "AWS hasn't computed 21 Oct yet", or "AWS computed
+  21 Oct at 21:05: sleepLatencyMin = 39 (rule: > 30 on 4+ nights). No alert yet", until **Passed**. **Check now**
+  looks again at any time.
 
 ## Test lab
 
@@ -92,7 +95,7 @@ and shows **Passed** when the alert appears, and the alert shows on Recovery and
 
 - **Compute now** spends one of the backend's **5 computes an hour** instead of waiting about 2 minutes. The lab counts them and refuses a 6th.
 - **Direct** rows cross a raw threshold and fire reliably. **Derived** rows push a composite score, so the result depends on the deployed pipeline and the account's history, and they may need a second run.
-- When the next windows go more than 35 days back, older runs start to blur into the rules' 30-day history. For a clean slate, delete the account in Profile and sign up again. **Reset lab** only forgets which dates were used.
+- Runs only write into the **last 33 days**: Health Data keeps band minutes 35 days from their own time, and older ones can vanish before the day is computed. That is room for a few scenarios per account (all 18 need ~140 days). When rows say **No room left**, wait for new days, or delete the account in Profile and sign up again. **Reset lab** only forgets which dates were used; re-sending over used dates mixes old and new data.
 - **Push is not set up** on dev (the APNs secret is empty). Alerts arrive in the in-app inbox and on Recovery. The app checks again every minute.
 
 ## Per-feature test guide
@@ -100,7 +103,7 @@ and shows **Passed** when the alert appears, and the alert shows on Recovery and
 | Feature | Lab run sends | Then, in the app |
 |---|---|---|
 | DX-01 Sleep-debt payback (derived) | 14 short nights (5 h 45 m) | **Set an earlier bedtime**: moves the bedtime goal 30 min earlier. The phone reminds you 30 min before bed (local alarm, while the app is open) |
-| DX-02 Anchor wake time (derived) | A week of bedtimes from 20:00 to 03:00, ending on a Monday | **Pick one wake time**: sets the wake-time goal; the wake alarm rings at that time (local) |
+| DX-02 Anchor wake time (derived) | Two weeks of bedtimes swinging 20:00 / 03:00 (waking 03:45 / 10:45), ending on a Monday | **Pick one wake time**: sets the wake-time goal; the wake alarm rings at that time (local) |
 | DX-03 Better-nights plan (derived) | 5 nights that each take 45 min to fall asleep | **Start the wind-down**: 10-min timer with a to-do box; each line becomes a task. Once DX-03 has fired in 3 different weeks, it offers the **sleep check** (7 ISI questions, score of 28) |
 | DX-04 Short-night nap (direct) | One 5 h 30 m night | **Start a 10-min nap**: timer, saved as a Session |
 | DX-05 Easy-day call (derived) | 9 calm nights, then a short night with high HR and low HRV | **Start a recovery break**: lists today's and tomorrow's hard training (gym, run, HIIT…) to move to tomorrow, then a 10-min recovery break |
@@ -137,7 +140,7 @@ the lab. The row should time out with no alert. Turn it back on and run again: i
 ## Develop
 
 ```
-uv run pytest        # 145 tests: config, HTTP rules, routes, simulator, lab runner, store, feature steps, offscreen UI
+uv run pytest        # 165 tests: config, HTTP rules, routes, simulator, lab runner, store, feature steps, offscreen UI
 uv run ruff check src tests scripts
 ```
 

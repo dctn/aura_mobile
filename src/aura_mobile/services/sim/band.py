@@ -24,6 +24,8 @@ from zoneinfo import ZoneInfo
 MAX_PACKETS = 40
 MAX_RR = 200
 FIRMWARE = "demo-sim-1.0"
+#: HR while lying awake before sleep, as a share of the night's resting HR (see segments_of)
+LATENCY_HR_RATIO = 1.16
 _MASK = 0xFFFFFFFF
 
 
@@ -68,6 +70,7 @@ class DayShape:
     skin_delta_c: float = 0.0  # added to the night's skin temperature (DX-06)
     spo2_dips: int = 0  # minutes at 88 % spread over the night (PB-05)
     sleep_rmssd: float = 55.0  # how variable the night's beats are; low means low HRV (DX-05, DX-06)
+    day_minutes: int = 0  # quiet waking minutes after the morning, a few steps each (DX-02)
 
     def but(self, **changes) -> DayShape:
         return replace(self, **changes)
@@ -92,7 +95,11 @@ def healthy_day(day: str, time_zone: str, seed: int = 7) -> DayShape:
 def segments_of(shape: DayShape) -> list[Segment]:
     out = [Segment(30, 8, 76, 33.3, 40, kind="wind-down")]
     if shape.latency_minutes > 0:
-        out.append(Segment(shape.latency_minutes, 0, 64, 34.0, 40, kind="latency"))
+        # Health Data counts latency from still minutes whose HR sits between 1.12× and 1.25× the night's floor
+        # (pipeline/sleep.py); a flat 64 was barely 1.1× a 58 sleep HR and read as sleep (dev, 22 Oct: latency 0–26).
+        # 1.16× gives 38–40 min for a 45-min latency in the pipeline itself.
+        out.append(Segment(shape.latency_minutes, 0, round(shape.resting_hr * LATENCY_HR_RATIO), 34.0, 40,
+                           kind="latency"))
     out.append(
         Segment(shape.sleep_minutes, 0, shape.resting_hr, 34.6 + shape.skin_delta_c, shape.sleep_rmssd, kind="sleep")
     )
@@ -104,6 +111,10 @@ def segments_of(shape: DayShape) -> list[Segment]:
     if shape.stress_minutes > 0:
         # A few steps a minute so it does not read as one long sitting bout with the one before it.
         out.append(Segment(shape.stress_minutes, 4, 96, 33.6, 15, kind="stress"))
+    if shape.day_minutes > 0:
+        # Health Data's main sleep must sit 10% under the median HR of still waking minutes 10:00-22:00
+        # (pipeline/sleep.py); without them an evening bedtime's first hours are most of that window.
+        out.append(Segment(shape.day_minutes, 6, 72, 33.4, 35, kind="day"))
     out.append(Segment(20, 3, 70, 33.5, 35, kind="tail"))
     return out
 

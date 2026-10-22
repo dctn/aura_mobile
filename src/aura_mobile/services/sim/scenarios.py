@@ -57,6 +57,16 @@ class Scenario:
             return [target - timedelta(days=1), target]
         return [target - timedelta(days=self.days - 1 - i) for i in range(self.days)]
 
+    def footprint(self, target: Date) -> list[Date]:
+        """Every date whose day file this run's packets land in: :meth:`dates` plus the evening before the first
+        night (a night starts the day before its date). The lab keeps footprints apart, because a day that is already
+        final takes newer packets only in an assemble 30 minutes later (dev, 22 Oct: DX-03's first evening made
+        16 Oct final 3 min before DX-04 sent that night)."""
+        dates = self.dates(target)
+        if self.days == 0 or self.compute_empty_target:
+            return dates
+        return [dates[0] - timedelta(days=1), *dates]
+
     def shapes(self, target: Date, time_zone: str) -> list[DayShape]:
         out: list[DayShape] = []
         for i in range(self.days):
@@ -73,8 +83,13 @@ def _last(n: int, change: Mut) -> Mut:
 SCENARIOS: tuple[Scenario, ...] = (
     Scenario("DX-01", 14, "14 short nights (5 h 45 m) build a fortnight's sleep debt past 2 h.",
              lambda b, _i: b.but(sleep_minutes=345)),
-    Scenario("DX-02", 7, "Bedtimes swing from 20:00 to 03:00 across the week; lands on a Monday.",
-             lambda b, i: b.but(bed_hour=(23, 20, 2, 21, 0, 23, 3)[i]), weekday=0),
+    # The rule reads wakeRegularityMin: the spread (std dev) of wake times over the 14 nights *before* the Monday.
+    # 7 swinging nights left most of that window to earlier, steadier runs (dev, 22 Oct: 111 min, under 120), so all
+    # 14 nights swing: waking 03:45, then 10:45, and so on (about 215 min). The 03:00 nights need a waking afternoon:
+    # without one the next 20:00 bedtime filled their 10:00-22:00 waking window and no sleep was found (dev: 0).
+    Scenario("DX-02", 14, "Two weeks of bedtimes swinging between 20:00 and 03:00 (waking 03:45 or 10:45); "
+                          "lands on a Monday.",
+             lambda b, i: b.but(bed_hour=(20, 3)[i % 2], day_minutes=390), weekday=0),
     Scenario("DX-03", 5, "Five nights that each take 45 min to fall asleep.",
              lambda b, _i: b.but(latency_minutes=45, resting_hr=58)),
     Scenario("DX-04", 1, "One 5 h 30 m night, under the 6 h nap line.",

@@ -3,8 +3,9 @@
 Why a window of *unused* days: a computed day is kept, and the alert engine allows one alert per feature per day
 (``alert-<date>-<featureId>``). Re-sending the same dates would only re-compute what is there, so every run takes
 fresh dates, walking back from yesterday. The dates already used are remembered per account in
-``%APPDATA%\\AuraMobileDemo\\lab-<sub>.json``. When the windows reach more than ~35 days back, earlier runs start to
-blur into the rules' 30-day history; delete the test account in Profile and sign up again for a clean one.
+``%APPDATA%\\AuraMobileDemo\\lab-<sub>.json``. Every date a run writes lies in the last :data:`WINDOW_DAYS`
+days (Health Data drops older band minutes); when that room is used up, wait for new days or delete the test account
+in Profile and sign up again.
 
 Synchronous and Qt-free. The UI runs :meth:`LabRunner.run` on a worker thread and passes ``progress``.
 """
@@ -28,11 +29,18 @@ from aura_mobile.services.sim.band import band_day, batches
 from aura_mobile.services.sim.scenarios import Scenario
 
 COMPUTES_PER_HOUR = 5
-LOOKBACK_DAYS = 150
-STALE_AFTER_DAYS = 35
+#: Health Data keeps a stored band minute for 35 days from the minute's own time (aws_docs health-data
+#: data-access/keys.ts SAMPLE_DAYS), and DynamoDB may delete an expired one before its day is assembled (dev, 22 Oct:
+#: 16 and 17 Sep lost their first hours, so DX-03's first two nights read 0). So every date a run writes stays in the
+#: last 33 days: two days' margin for the upload and the assemble.
+SAMPLE_DAYS = 35
+WINDOW_DAYS = SAMPLE_DAYS - 2
+NO_ROOM = (f"No room left in the last {WINDOW_DAYS} days (AWS keeps band data {SAMPLE_DAYS} days). Each new day "
+           "frees one; or delete the account in Profile and sign up again.")
 UPLOAD_THREADS = 3  # dev runs at most 10 Lambdas at once for the whole account
-NO_CONSENT = ("Health Data refused the run: this account has no health-data consent on dev (Identity has to be "
-              "redeployed with the mobile routes first). Nothing was sent and no dates were used.")
+NO_CONSENT = ("Health Data refused the run: health data is off for this account. Turn it on (Settings, or sign in "
+              "again) and run again. Nothing was sent and no dates were used.")
+STOPPED_EARLY = "Stopped before anything was sent. No dates were used."
 
 Progress = Callable[[str, float], None]
 
@@ -51,6 +59,14 @@ class LabRun:
     posted_packets: int = 0
     computed: bool = False
     found_alert: str | None = None
+    #: the server took at least one of the run's writes (check-in, samples or compute)
+    accepted: bool = False
+
+    @property
+    def is_ghost(self) -> bool:
+        """Nothing of it reached the server: a refused or stopped run, or one saved by a lab from before 22 Oct
+        that kept refused runs (no ``accepted`` flag, 0 packets)."""
+        return not (self.accepted or self.posted_packets or self.computed or self.found_alert)
 
 
 @dataclass
@@ -74,7 +90,18 @@ class LabState:
         state.touched = set(raw.get("touched") or [])
         state.runs = [LabRun(**r) for r in raw.get("runs") or [] if isinstance(r, dict)]
         state.computes = list(raw.get("computes") or [])
+        if state.drop_ghosts():
+            state.save()
         return state
+
+    def drop_ghosts(self) -> int:
+        """Forget runs that sent nothing and give their dates back. Returns how many were dropped."""
+        ghosts = [r for r in self.runs if r.is_ghost]
+        if ghosts:
+            self.runs = [r for r in self.runs if not r.is_ghost]
+            kept = {d for r in self.runs for d in r.dates}
+            self.touched.difference_update({d for r in ghosts for d in r.dates} - kept)
+        return len(ghosts)
 
     def save(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -103,12 +130,15 @@ class LabState:
 
 
 def choose_target(scenario: Scenario, touched: set[str], today: Date) -> Date | None:
-    """The latest date ≤ yesterday that fits the scenario's weekday/day-of-month and whose window is unused."""
-    for back in range(1, LOOKBACK_DAYS):
+    """The latest date ≤ yesterday that fits the scenario's weekday/day-of-month and whose footprint is unused and
+    inside the last :data:`WINDOW_DAYS` days."""
+    oldest = today - timedelta(days=WINDOW_DAYS)
+    for back in range(1, WINDOW_DAYS + 1):
         target = today - timedelta(days=back)
-        if not scenario.fits(target):
-            continue
-        if all(d.isoformat() not in touched for d in scenario.dates(target)):
+        footprint = scenario.footprint(target)
+        if min(footprint) < oldest:
+            return None  # further back only moves the window further out
+        if scenario.fits(target) and all(d.isoformat() not in touched for d in footprint):
             return target
     return None
 
@@ -135,27 +165,23 @@ class LabRunner:
             return None
         return target, scenario.dates(target)
 
-    def is_stale(self, target: Date) -> bool:
-        return (self.today() - target).days > STALE_AFTER_DAYS
-
     def run(self, scenario: Scenario, *, compute_now: bool = False, progress: Progress | None = None) -> LabRun:
         """Send the scenario. Returns the run; the alert is looked for afterwards with :meth:`find_alert`."""
         self._cancel.clear()
         report = progress or (lambda _m, _f: None)
         planned = self.plan(scenario)
         if planned is None:
-            raise RuntimeError("No unused dates left in the last 150 days. Reset the lab or use a fresh account.")
-        target, dates = planned
-        run = LabRun(scenario.feature_id, target.isoformat(), [d.isoformat() for d in dates],
+            raise RuntimeError(NO_ROOM)
+        target, _dates = planned
+        run = LabRun(scenario.feature_id, target.isoformat(), [d.isoformat() for d in scenario.footprint(target)],
                      datetime.now(UTC).isoformat())
         # Mark the dates first: a half-sent window is still used.
         self.state.touched.update(run.dates)
         self.state.runs.append(run)
         self.state.save()
 
-        # The first write goes alone: when the server refuses it (no consent on dev), nothing else is sent and the
-        # run is forgotten, so its dates stay free.
-        accepted = False
+        # The first write goes alone: when the server refuses it (health data off), nothing else is sent and the
+        # run is forgotten, so its dates stay free. So is a run stopped before anything was sent.
         try:
             tz = ZoneInfo(self.time_zone)
             for ci in scenario.checkins:
@@ -163,7 +189,7 @@ class LabRunner:
                 taken = datetime.combine(day, time(ci.hour), tzinfo=tz)
                 report(f"Check-in: {ci.kind} {ci.value}/5 on {day.isoformat()}", 0.02)
                 self.api.post_checkin(ci.kind, taken_at=taken, **{ci.kind: ci.value})
-                accepted = True
+                run.accepted = True
 
             shapes = scenario.shapes(target, self.time_zone)
             total = sum(len(band_day(s, with_rr=False)) for s in shapes) or 1
@@ -173,10 +199,10 @@ class LabRunner:
                     report("Stopped.", sent / total)
                     break
                 chunks = list(batches(band_day(shape)))
-                if chunks and not accepted:
+                if chunks and not run.accepted:
                     sent += self._post_batch(chunks.pop(0))
                     run.posted_packets = sent
-                    accepted = True
+                    run.accepted = True
                 with ThreadPoolExecutor(max_workers=UPLOAD_THREADS) as pool:
                     for done in pool.map(self._post_batch, chunks):
                         sent += done
@@ -189,13 +215,17 @@ class LabRunner:
                 report(f"Computing {target.isoformat()}…", 0.99)
                 self.api.compute_day(target.isoformat())
                 self.state.computes.append(datetime.now(UTC).isoformat())
-                run.computed = True
-        except ApiError as exc:
-            if not accepted:
+                run.computed = run.accepted = True
+        except Exception as exc:
+            if not run.accepted:
                 self._forget(run)
-            if exc.status == 404 and "consent" in exc.message.lower():
+            if isinstance(exc, ApiError) and (exc.code == "consent_required"
+                                              or (exc.status == 404 and "consent" in exc.message.lower())):
                 raise RuntimeError(NO_CONSENT) from exc
             raise
+        if not run.accepted:
+            self._forget(run)
+            raise RuntimeError(STOPPED_EARLY)
         self.state.save()
         report("Sent. Waiting for the day to compute (about 2 min)…", 1.0)
         return run
@@ -233,3 +263,58 @@ class LabRunner:
 
     def day_status(self, run: LabRun) -> dict | None:
         return self.api.metrics_day(run.target)
+
+    def check(self, run: LabRun, rule: str = "", days: int = 1) -> LabCheck:
+        """The run's alert or, while there is none, what AWS computed for its target day: whether the day is
+        computed yet, and the metric the rule reads (the first field name in ``rule``). A rule that counts nights
+        ("on 4+ nights") also gets that metric for each of the run's ``days`` nights."""
+        alert = self.find_alert(run)
+        if alert is not None:
+            return LabCheck(run.target, alert=alert)
+        day = self.day_status(run) or {}
+        name = rule_field(rule)
+        value = (day.get("metrics") or {}).get(name) if name else None
+        nights: tuple[tuple[str, object], ...] = ()
+        if name and days > 1 and night_count(rule):
+            first = (Date.fromisoformat(run.target) - timedelta(days=days - 1)).isoformat()
+            got = {d.get("date"): (d.get("metrics") or {}).get(name)
+                   for d in self.api.metrics_range(first, run.target, fields=name)}
+            nights = tuple((d, got.get(d)) for d in _days_between(first, run.target))
+        return LabCheck(run.target, computed=bool(day), final=bool(day.get("final")),
+                        computed_at=day.get("computedAt"), field=name, value=value, nights=nights)
+
+
+@dataclass
+class LabCheck:
+    """One look at a run on the server."""
+
+    target: str
+    alert: dict | None = None
+    computed: bool = False
+    final: bool = False
+    computed_at: str | None = None
+    field: str | None = None
+    value: object = None
+    #: (date, value) for each night of the run, for a rule that counts nights
+    nights: tuple[tuple[str, object], ...] = ()
+
+
+def rule_field(rule: str) -> str | None:
+    """``sleepLatencyMin`` from "sleepLatencyMin > 30 on 4+ nights" (the first camelCase metric name)."""
+    import re
+
+    found = re.search(r"\b[a-z]+[A-Z][A-Za-z0-9]*\b", rule)
+    return found.group(0) if found else None
+
+
+def night_count(rule: str) -> tuple[float, int] | None:
+    """(30, 4) from "sleepLatencyMin > 30 on 4+ nights": the bar each night must pass, and how many must."""
+    import re
+
+    found = re.search(r"> *(\d+(?:\.\d+)?) on (\d+)\+ nights", rule)
+    return (float(found.group(1)), int(found.group(2))) if found else None
+
+
+def _days_between(first: str, last: str) -> list[str]:
+    start, end = Date.fromisoformat(first), Date.fromisoformat(last)
+    return [(start + timedelta(days=i)).isoformat() for i in range((end - start).days + 1)]

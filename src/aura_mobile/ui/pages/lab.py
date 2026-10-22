@@ -13,7 +13,14 @@ from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget
 
 from aura_mobile.core.features import LabMode
-from aura_mobile.services.sim.runner import COMPUTES_PER_HOUR, LabRun
+from aura_mobile.services.sim.runner import (
+    COMPUTES_PER_HOUR,
+    NO_ROOM,
+    WINDOW_DAYS,
+    LabCheck,
+    LabRun,
+    night_count,
+)
 from aura_mobile.services.sim.scenarios import SCENARIOS, Scenario
 from aura_mobile.ui import context as area
 from aura_mobile.ui import kit, layers
@@ -37,6 +44,40 @@ MODE_NOTE = {
 
 def _day(d: date) -> str:
     return f"{d.day} {d.strftime('%b')}"
+
+
+def _clock(at: datetime | str) -> str:
+    """Local HH:MM of an instant (a datetime, or the server's ISO string)."""
+    if isinstance(at, str):
+        at = datetime.fromisoformat(at.replace("Z", "+00:00"))
+    return at.astimezone().strftime("%H:%M")
+
+
+def describe_check(seen: LabCheck, rule: str, watching_until: str | None) -> str:
+    """What AWS has done with a run that has no alert yet, so a row never just says "Looking…"."""
+    day = _day(date.fromisoformat(seen.target))
+    now = datetime.now().strftime("%H:%M")
+    if not seen.computed:
+        text = f"AWS hasn't computed {day} yet (it does about 2 min after the last minute arrives)."
+    else:
+        when = f" at {_clock(seen.computed_at)}" if seen.computed_at else ""
+        text = f"AWS computed {day}{when}"
+        bar = night_count(rule)
+        if seen.field and seen.nights and bar:
+            values = ", ".join("none" if v is None else f"{v:g}" if isinstance(v, float) else str(v)
+                               for _d, v in seen.nights)
+            over = sum(1 for _d, v in seen.nights if isinstance(v, int | float) and v > bar[0])
+            text += (f": {seen.field} by night {values}. {over} of {len(seen.nights)} nights over {bar[0]:g}; "
+                     f"the rule needs {bar[1]}")
+        elif seen.field:
+            shown = "no value" if seen.value is None else seen.value
+            text += f": {seen.field} = {shown} (rule: {rule})"
+        text += ". No alert yet."
+    if watching_until:
+        return f"{text} Checked {now}; watching until {watching_until}."
+    if seen.computed:
+        return f"{text} Checked {now}; stopped watching. If the value misses the rule, the data didn't trigger it."
+    return f"{text} Checked {now}. Check now looks again."
 
 
 def _span(dates: list[date]) -> str:
@@ -134,7 +175,7 @@ class LabPage(Page):
             "backend computes the day itself about 2 minutes later, then the alert appears in Recovery.")
         self.usage = kit.Row("Computes", "", "", icon="flask", accent=t.TEAL)
         self.summary.add(self.usage)
-        self.stale = kit.Row("Older history", "", icon="info", accent=t.STRESS, wrap=True)
+        self.stale = kit.Row("Out of dates", "", icon="info", accent=t.STRESS, wrap=True)
         set_tone(self.stale.sub, "warn")
         self.stale.hide()
         self.summary.add(self.stale)
@@ -169,23 +210,22 @@ class LabPage(Page):
         self.usage.set_value(f"{used} of {COMPUTES_PER_HOUR}")
         self.usage.set_sub(f"{len(lab.state.touched)} dates used · {lab.time_zone}")
         self.usage.setToolTip(f"Computes this hour: {used} of {COMPUTES_PER_HOUR}")
-        stale = False
+        full = False
         for fid, row in self.rows.items():
             planned = lab.plan(row.scenario)
             if planned is None:
-                row.plan.setText("No unused dates left. Reset the lab or use a fresh account.")
+                row.plan.setText(f"No room left in the last {WINDOW_DAYS} days.")
                 row.run.setEnabled(False)
+                full = True
                 continue
             target, dates = planned
             row.plan.setText(f"Next: {_span(dates)} → alert {_day(target)}")
             row.plan.setToolTip(f"{dates[0].isoformat()} … {dates[-1].isoformat()} → {target.isoformat()}")
-            stale = stale or lab.is_stale(target)
             row.run.setEnabled(self._running is None)
             if fid not in self._watching and fid != self._running:
                 self._show_last(row)
-        self.stale.set_sub("Next windows reach more than 35 days back, where older runs blur into the rules' "
-                           "30-day history. Delete the account in Profile and sign up again for a clean slate.")
-        set_shown(self.stale, stale)
+        self.stale.set_sub(NO_ROOM)
+        set_shown(self.stale, full)
         self.summary.list.update()
 
     def _show_last(self, row: LabRow) -> None:
@@ -195,7 +235,9 @@ class LabPage(Page):
         elif last.found_alert:
             row.set_status(f"Passed · alert {last.found_alert}", "good")
         else:
-            row.set_status(f"Last run {last.target}: no alert seen yet. Check now to look again.")
+            ran = datetime.fromisoformat(last.started_at).astimezone().strftime("%d %b %H:%M")
+            row.set_status(f"Last run {ran}, data for {_day(date.fromisoformat(last.target))}: no alert seen yet. "
+                           "Check now to look again.")
 
     # -- running ---------------------------------------------------------------
 
@@ -272,8 +314,10 @@ class LabPage(Page):
         if run is None:
             row.set_status("Not run yet.")
             return
-        row.set_status("Looking…")
-        self.ctx.call(lambda: lab.find_alert(run), self._make_found(fid), self._make_lookup_failed(fid))
+        row.set_status("Asking AWS…")
+        scenario = row.scenario
+        self.ctx.call(lambda: lab.check(run, scenario.feature.rule, scenario.days), self._make_found(fid),
+                      self._make_lookup_failed(fid))
 
     def _watch(self) -> None:
         lab = self.ctx.lab
@@ -283,20 +327,21 @@ class LabPage(Page):
         now = datetime.now(UTC)
         for fid, (run, give_up) in list(self._watching.items()):
             if now > give_up:
-                del self._watching[fid]
-                self.rows[fid].set_status(
-                    f"No alert for {run.target} yet. Derived rules sometimes need a second run; "
-                    "Check now looks again.", "warn")
-                continue
-            self.ctx.call(lambda run=run: lab.find_alert(run), self._make_found(fid), self._make_lookup_failed(fid))
+                del self._watching[fid]  # one last look; its answer says watching has stopped
+            scenario = self.rows[fid].scenario
+            self.ctx.call(lambda run=run, s=scenario: lab.check(run, s.feature.rule, s.days), self._make_found(fid),
+                          self._make_lookup_failed(fid))
 
     def _make_found(self, fid: str):
-        def found(alert: dict | None) -> None:
+        def found(seen: LabCheck) -> None:
             row = self.rows[fid]
-            if alert is None:
-                if fid not in self._watching:
-                    row.set_status("Not there yet. Try again in a minute.")
+            if seen.alert is None:
+                watching = self._watching.get(fid)
+                until = _clock(watching[1]) if watching else None
+                tone = "" if watching or seen.computed else "warn"
+                row.set_status(describe_check(seen, row.scenario.feature.rule, until), tone)
                 return
+            alert = seen.alert
             self._watching.pop(fid, None)
             row.set_status(f"Passed · {alert.get('title') or alert.get('id')} on {alert.get('date')}", "good")
             self.ctx.toast.emit(f"{fid} fired: {alert.get('title') or 'alert'}")
