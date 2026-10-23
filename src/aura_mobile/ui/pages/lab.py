@@ -1,5 +1,5 @@
-"""Test lab: one list per alert feature. Run sends that feature's synthetic band days to dev, then the page watches
-``GET /v1/alerts`` until the alert shows (or gives up).
+"""Test lab: one list per alert feature, and one month that raises them together. Run sends the synthetic band days
+to dev, then the page watches ``GET /v1/alerts`` until the alerts show (or gives up).
 
 Only one run at a time: they share the band's upload threads and the 5-computes-an-hour cap. Watching is a single
 page timer that asks about every run still waiting.
@@ -21,7 +21,7 @@ from aura_mobile.services.sim.runner import (
     LabRun,
     night_count,
 )
-from aura_mobile.services.sim.scenarios import SCENARIOS, Scenario
+from aura_mobile.services.sim.scenarios import ALL_AT_ONCE, SCENARIOS, Scenario
 from aura_mobile.ui import context as area
 from aura_mobile.ui import kit, layers
 from aura_mobile.ui import tokens as t
@@ -77,6 +77,22 @@ def describe_check(seen: LabCheck, rule: str, watching_until: str | None) -> str
         return f"{text} Checked {now}; watching until {watching_until}."
     if seen.computed:
         return f"{text} Checked {now}; stopped watching. If the value misses the rule, the data didn't trigger it."
+    return f"{text} Checked {now}. Check now looks again."
+
+
+def describe_month(seen: LabCheck, feature_ids: tuple[str, ...], watching_until: str | None) -> str:
+    """Which of the month's alerts are in and which are still to come."""
+    fired = seen.fired or {}
+    waiting = [f for f in feature_ids if f not in fired]
+    if not waiting:
+        return f"Passed · all {len(feature_ids)} alerts fired."
+    text = f"{len(fired)} of {len(feature_ids)} fired"
+    text += f": {', '.join(sorted(fired))}. Waiting for {', '.join(waiting)}." if fired else "."
+    if not seen.computed:
+        text += f" AWS hasn't computed the last day ({_day(date.fromisoformat(seen.target))}) yet."
+    now = datetime.now().strftime("%H:%M")
+    if watching_until:
+        return f"{text} Checked {now}; watching until {watching_until} (NI-04's timer takes ~2 h)."
     return f"{text} Checked {now}. Check now looks again."
 
 
@@ -158,13 +174,57 @@ class LabRow(kit.Group):
         self.bar.set_fraction(fraction or 0.0)
 
 
+class MonthRow(kit.Group):
+    """The all-at-once month: what it sends, then which of its alerts have fired."""
+
+    compute = None  # every day of it is past, so each computes itself
+
+    def __init__(self, scenario: Scenario) -> None:
+        super().__init__("All at once", "One run sends one month of data on the same dates and should raise every "
+                                        "alert below, the way a real month of a real person would.")
+        self.scenario = scenario
+        self.head = kit.Row("All features at once", f"{len(scenario.feature_ids)} alerts · {scenario.days} days",
+                            icon="flask", accent=t.TEAL)
+        self.add(self.head)
+        body = QWidget()
+        lay = QVBoxLayout(body)
+        lay.setContentsMargins(16, 10, 16, 12)
+        lay.setSpacing(6)
+        lay.addWidget(label(scenario.note, "rowsub", wrap=True))
+        lay.addWidget(label(f"Covers {', '.join(scenario.feature_ids)}. BS-02 needs empty days, so it runs alone.",
+                            "small", wrap=True))
+        self.plan = label("", "rowtitle", wrap=True)
+        lay.addWidget(self.plan)
+        self.bar = kit.Bar(height=5)
+        self.bar.hide()
+        lay.addWidget(self.bar)
+        self.status = label("", "rowsub", wrap=True)
+        lay.addWidget(self.status)
+        lay.addSpacing(4)
+        buttons = QHBoxLayout()
+        buttons.setSpacing(4)
+        self.run = kit.text_button("Run", "smprimary")
+        self.run.setProperty("feature", scenario.feature_id)
+        self.run.setMinimumWidth(64)
+        buttons.addWidget(self.run)
+        self.check = kit.text_button("Check now", "link")
+        self.check.setProperty("feature", scenario.feature_id)
+        buttons.addWidget(self.check)
+        buttons.addStretch(1)
+        lay.addLayout(buttons)
+        self.add(body)
+
+    set_status = LabRow.set_status
+    set_progress = LabRow.set_progress
+
+
 class LabPage(Page):
     areas = (area.ALERTS,)
     heading = "Test lab"
 
     def __init__(self, ctx: AppContext) -> None:
         super().__init__(ctx)
-        self.rows: dict[str, LabRow] = {}
+        self.rows: dict[str, LabRow | MonthRow] = {}
         self._running: str | None = None
         #: feature id → (run, give up at)
         self._watching: dict[str, tuple[LabRun, datetime]] = {}
@@ -187,6 +247,12 @@ class LabPage(Page):
         self.reset_row.clicked.connect(self._reset)
         self.summary.add(self.reset_row)
         self.column.addWidget(self.summary)
+
+        month = MonthRow(ALL_AT_ONCE)
+        month.run.clicked.connect(self._run)
+        month.check.clicked.connect(self._check)
+        self.rows[ALL_AT_ONCE.feature_id] = month
+        self.column.addWidget(month)
 
         for scenario in SCENARIOS:
             row = LabRow(scenario)
@@ -214,7 +280,9 @@ class LabPage(Page):
         for fid, row in self.rows.items():
             planned = lab.plan(row.scenario)
             if planned is None:
-                row.plan.setText(f"No room left in the last {WINDOW_DAYS} days.")
+                row.plan.setText(f"Needs {row.scenario.days + 1} unused days in a row in the last {WINDOW_DAYS}: a "
+                                 "fresh account." if row.scenario.covers else
+                                 f"No room left in the last {WINDOW_DAYS} days.")
                 row.run.setEnabled(False)
                 full = True
                 continue
@@ -232,6 +300,11 @@ class LabPage(Page):
         last = self.ctx.lab.state.latest_run(row.scenario.feature_id) if self.ctx.lab else None
         if last is None:
             row.set_status("Not run yet.")
+        elif row.scenario.covers:
+            ids = row.scenario.feature_ids
+            seen = f" ({', '.join(last.found)})" if last.found else ""
+            row.set_status(f"Last run: {len(last.found)} of {len(ids)} alerts seen{seen}. Check now to look again.",
+                           "good" if len(last.found) == len(ids) else "")
         elif last.found_alert:
             row.set_status(f"Passed · alert {last.found_alert}", "good")
         else:
@@ -249,7 +322,7 @@ class LabPage(Page):
         if lab is None or self._running is not None:
             return
         row = self._row()
-        compute_now = row.compute.isChecked()
+        compute_now = row.compute is not None and row.compute.isChecked()
         if compute_now and lab.state.computes_this_hour() >= COMPUTES_PER_HOUR:
             layers.Alert.tell(self, "Compute cap", "5 computes are used this hour. Turn Compute off; the day's own "
                                                    "final run comes about 2 min after sending.")
@@ -315,9 +388,14 @@ class LabPage(Page):
             row.set_status("Not run yet.")
             return
         row.set_status("Asking AWS…")
-        scenario = row.scenario
-        self.ctx.call(lambda: lab.check(run, scenario.feature.rule, scenario.days), self._make_found(fid),
-                      self._make_lookup_failed(fid))
+        self.ctx.call(self._look(row.scenario, run), self._make_found(fid), self._make_lookup_failed(fid))
+
+    def _look(self, scenario: Scenario, run: LabRun):
+        """The lookup for one run, to call on a worker thread."""
+        lab = self.ctx.lab
+        if scenario.covers:
+            return lambda: lab.check_month(run, scenario.feature_ids)
+        return lambda: lab.check(run, scenario.feature.rule, scenario.days)
 
     def _watch(self) -> None:
         lab = self.ctx.lab
@@ -328,13 +406,15 @@ class LabPage(Page):
         for fid, (run, give_up) in list(self._watching.items()):
             if now > give_up:
                 del self._watching[fid]  # one last look; its answer says watching has stopped
-            scenario = self.rows[fid].scenario
-            self.ctx.call(lambda run=run, s=scenario: lab.check(run, s.feature.rule, s.days), self._make_found(fid),
+            self.ctx.call(self._look(self.rows[fid].scenario, run), self._make_found(fid),
                           self._make_lookup_failed(fid))
 
     def _make_found(self, fid: str):
         def found(seen: LabCheck) -> None:
             row = self.rows[fid]
+            if seen.fired is not None:
+                self._month_found(row, seen)
+                return
             if seen.alert is None:
                 watching = self._watching.get(fid)
                 until = _clock(watching[1]) if watching else None
@@ -347,6 +427,23 @@ class LabPage(Page):
             self.ctx.toast.emit(f"{fid} fired: {alert.get('title') or 'alert'}")
             self.ctx.notify(area.ALERTS)
         return found
+
+    def _month_found(self, row: MonthRow, seen: LabCheck) -> None:
+        fid = row.scenario.feature_id
+        ids = row.scenario.feature_ids
+        fired = seen.fired or {}
+        for each, alert in fired.items():
+            single = self.rows.get(each)
+            if single is not None:
+                single.set_status(f"Passed in the all-at-once run · {alert.get('title') or alert.get('id')} on "
+                                  f"{alert.get('date')}", "good")
+        done = len(fired) == len(ids)
+        if done:
+            self._watching.pop(fid, None)
+            self.ctx.notify(area.ALERTS)
+        watching = self._watching.get(fid)
+        tone = "good" if done else "" if watching or seen.computed else "warn"
+        row.set_status(describe_month(seen, ids, _clock(watching[1]) if watching else None), tone)
 
     def _make_lookup_failed(self, fid: str):
         def failed(exc: Exception) -> None:

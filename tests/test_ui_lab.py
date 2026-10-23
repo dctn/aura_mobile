@@ -76,3 +76,34 @@ def test_a_night_counting_rule_lists_each_night(phone):
     lab._make_found("DX-03")(LabCheck("2026-10-15", computed=True, field="sleepLatencyMin", value=37, nights=nights))
     text = row.status.text()
     assert "sleepLatencyMin by night 0, 0, 26, 25, 37. 1 of 5 nights over 30; the rule needs 4" in text
+
+
+def test_the_month_row_lists_what_fired_and_what_is_still_coming(phone):
+    window, _ctx, _api = phone
+    window._open_lab()
+    settle()
+    lab = window.lab
+    run = LabRun("ALL", "2026-10-19", ["2026-09-23", "2026-10-19"], datetime.now(UTC).isoformat(), 30000,
+                 accepted=True)
+    lab._watching["ALL"] = (run, datetime.now(UTC) + timedelta(minutes=160))
+    fired = {"DX-04": {"id": "a1", "title": "Short night", "date": "2026-10-13"},
+             "PB-05": {"id": "a2", "title": "Worth a health check", "date": "2026-10-17"}}
+    lab._make_found("ALL")(LabCheck("2026-10-19", computed=True, fired=fired))
+    text = lab.rows["ALL"].status.text()
+    assert text.startswith("2 of 16 fired: DX-04, PB-05. Waiting for DX-01")
+    assert "watching until" in text and "ALL" in lab._watching
+    assert lab.rows["DX-04"].status.text().startswith("Passed in the all-at-once run")
+
+
+def test_the_month_passes_when_every_alert_is_in(phone):
+    window, _ctx, _api = phone
+    window._open_lab()
+    settle()
+    lab = window.lab
+    month = lab.rows["ALL"]
+    run = LabRun("ALL", "2026-10-19", ["2026-10-19"], datetime.now(UTC).isoformat(), 1, accepted=True)
+    lab._watching["ALL"] = (run, datetime.now(UTC) + timedelta(minutes=10))
+    fired = {f: {"id": f, "date": "2026-10-19"} for f in month.scenario.feature_ids}
+    lab._make_found("ALL")(LabCheck("2026-10-19", computed=True, fired=fired))
+    assert month.status.text() == "Passed · all 16 alerts fired."
+    assert "ALL" not in lab._watching

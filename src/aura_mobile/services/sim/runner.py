@@ -41,6 +41,9 @@ UPLOAD_THREADS = 3  # dev runs at most 10 Lambdas at once for the whole account
 NO_CONSENT = ("Health Data refused the run: health data is off for this account. Turn it on (Settings, or sign in "
               "again) and run again. Nothing was sent and no dates were used.")
 STOPPED_EARLY = "Stopped before anything was sent. No dates were used."
+#: Health Data computes VO2max only when HRmax rests on the profile's age (pipeline/workout.py has_profile_hr_anchor)
+NO_BIRTH_DATE = ("PB-04 reads VO2max, which AWS computes only with your birth date. Set it in Profile, then run "
+                 "again. Nothing was sent.")
 
 Progress = Callable[[str, float], None]
 
@@ -61,12 +64,14 @@ class LabRun:
     found_alert: str | None = None
     #: the server took at least one of the run's writes (check-in, samples or compute)
     accepted: bool = False
+    #: a run for several features: the ones whose alert was seen
+    found: list[str] = field(default_factory=list)
 
     @property
     def is_ghost(self) -> bool:
         """Nothing of it reached the server: a refused or stopped run, or one saved by a lab from before 22 Oct
         that kept refused runs (no ``accepted`` flag, 0 packets)."""
-        return not (self.accepted or self.posted_packets or self.computed or self.found_alert)
+        return not (self.accepted or self.posted_packets or self.computed or self.found_alert or self.found)
 
 
 @dataclass
@@ -172,6 +177,8 @@ class LabRunner:
         planned = self.plan(scenario)
         if planned is None:
             raise RuntimeError(NO_ROOM)
+        if "PB-04" in scenario.feature_ids and not (self.api.me() or {}).get("birthDate"):
+            raise RuntimeError(NO_BIRTH_DATE)
         target, _dates = planned
         run = LabRun(scenario.feature_id, target.isoformat(), [d.isoformat() for d in scenario.footprint(target)],
                      datetime.now(UTC).isoformat())
@@ -261,6 +268,28 @@ class LabRunner:
                 return alert
         return None
 
+    def find_alerts(self, run: LabRun, feature_ids: tuple[str, ...]) -> dict[str, dict]:
+        """Each of ``feature_ids``'s alerts the run raised (the first per feature), by the same test as
+        :meth:`find_alert`."""
+        start = min(run.dates) if run.dates else run.target
+        started = run.started_at[:10]
+        fired: dict[str, dict] = {}
+        for alert in self.api.alerts(start, self.today().isoformat()):
+            fid, day = alert.get("featureId"), str(alert.get("date") or "")
+            if fid in feature_ids and fid not in fired and (day in run.dates or day >= started):
+                fired[fid] = alert
+        if sorted(fired) != run.found:
+            run.found = sorted(fired)
+            self.state.save()
+        return fired
+
+    def check_month(self, run: LabRun, feature_ids: tuple[str, ...]) -> LabCheck:
+        """A run for several features: which alerts are in, and whether its last day is computed yet."""
+        fired = self.find_alerts(run, feature_ids)
+        day = {} if len(fired) == len(feature_ids) else self.day_status(run) or {}
+        return LabCheck(run.target, computed=bool(day), final=bool(day.get("final")),
+                        computed_at=day.get("computedAt"), fired=fired)
+
     def day_status(self, run: LabRun) -> dict | None:
         return self.api.metrics_day(run.target)
 
@@ -297,6 +326,8 @@ class LabCheck:
     value: object = None
     #: (date, value) for each night of the run, for a rule that counts nights
     nights: tuple[tuple[str, object], ...] = ()
+    #: a run for several features: feature id → its alert, for the ones that fired
+    fired: dict[str, dict] | None = None
 
 
 def rule_field(rule: str) -> str | None:

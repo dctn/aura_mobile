@@ -26,6 +26,9 @@ MAX_RR = 200
 FIRMWARE = "demo-sim-1.0"
 #: HR while lying awake before sleep, as a share of the night's resting HR (see segments_of)
 LATENCY_HR_RATIO = 1.16
+#: BioZ (chest impedance) for the breathing bursts: Health Data needs at least 2 Hz (pipeline/respiration.py MIN_HZ)
+BIOZ_HZ = 4
+BREATHS_PER_MIN = 15
 _MASK = 0xFFFFFFFF
 
 
@@ -71,6 +74,7 @@ class DayShape:
     spo2_dips: int = 0  # minutes at 88 % spread over the night (PB-05)
     sleep_rmssd: float = 55.0  # how variable the night's beats are; low means low HRV (DX-05, DX-06)
     day_minutes: int = 0  # quiet waking minutes after the morning, a few steps each (DX-02)
+    breath_pauses: int = 0  # 14-second breathing pauses in a BioZ burst during the night (PB-05)
 
     def but(self, **changes) -> DayShape:
         return replace(self, **changes)
@@ -93,12 +97,15 @@ def healthy_day(day: str, time_zone: str, seed: int = 7) -> DayShape:
 
 
 def segments_of(shape: DayShape) -> list[Segment]:
-    out = [Segment(30, 8, 76, 33.3, 40, kind="wind-down")]
+    # The hour before sleep is Health Data's evening HRV (pipeline/heart.py: hrvAboveBaseline); a low-HRV night
+    # starts low there too, or DX-06's "HRV below baseline" is a coin toss against the calm nights before it.
+    evening_rmssd = min(40.0, shape.sleep_rmssd)
+    out = [Segment(30, 8, 76, 33.3, evening_rmssd, kind="wind-down")]
     if shape.latency_minutes > 0:
         # Health Data counts latency from still minutes whose HR sits between 1.12× and 1.25× the night's floor
         # (pipeline/sleep.py); a flat 64 was barely 1.1× a 58 sleep HR and read as sleep (dev, 22 Oct: latency 0–26).
         # 1.16× gives 38–40 min for a 45-min latency in the pipeline itself.
-        out.append(Segment(shape.latency_minutes, 0, round(shape.resting_hr * LATENCY_HR_RATIO), 34.0, 40,
+        out.append(Segment(shape.latency_minutes, 0, round(shape.resting_hr * LATENCY_HR_RATIO), 34.0, evening_rmssd,
                            kind="latency"))
     out.append(
         Segment(shape.sleep_minutes, 0, shape.resting_hr, 34.6 + shape.skin_delta_c, shape.sleep_rmssd, kind="sleep")
@@ -163,6 +170,7 @@ def band_day(shape: DayShape, *, with_rr: bool = True, battery: int = 80) -> lis
     at = int(night_start(shape).timestamp())
     for seg in segments_of(shape):
         dips = _dip_minutes(seg.minutes, shape.spo2_dips) if seg.kind == "sleep" else set()
+        breath = _breath_minutes(seg.minutes, shape.breath_pauses) if seg.kind == "sleep" else {}
         for i in range(seg.minutes):
             steps += max(0, int(_round(seg.steps_per_min + (rng() - 0.5) * 6)))
             hr = _round(seg.hr + (rng() - 0.5) * 4)
@@ -183,6 +191,9 @@ def band_day(shape: DayShape, *, with_rr: bool = True, battery: int = 80) -> lis
             }
             if with_rr:
                 packet["rr"] = _beats(beat_rng, at, hr, seg.rmssd)
+            if i in breath:
+                packet["bioz"] = [{"burstId": f"{shape.date}-breath", "tStart": at, "hz": BIOZ_HZ,
+                                   "samples": _breath_samples(breath[i], shape.seed + i)}]
             packets.append(packet)
             at += 60
     return packets
@@ -193,6 +204,29 @@ def _dip_minutes(minutes: int, count: int) -> set[int]:
         return set()
     step = max(1, minutes // (count + 1))
     return {step * (k + 1) for k in range(count) if step * (k + 1) < minutes}
+
+
+def _breath_minutes(minutes: int, pauses: int) -> dict[int, bool]:
+    """{sleep minute: has a pause} for one BioZ burst starting 90 min into the night. Every other minute pauses, and
+    the burst runs one clean minute past the last pause, so most of its 60 s windows stay clean breathing: Health Data
+    reads a burst's cycles only when at least half its windows are (pipeline/respiration.py)."""
+    if pauses <= 0:
+        return {}
+    start = 90
+    span = {start + k: k % 2 == 1 for k in range(2 * pauses + 1)}
+    return {m: p for m, p in span.items() if m < minutes}
+
+
+def _breath_samples(pause: bool, seed: int) -> list[int]:
+    """One minute of chest impedance: 15 breaths a minute, and with ``pause`` a 14-second flat stretch from second 20.
+    Health Data counts a breathing cycle of 10 s or more (and twice the night's median) as one disturbance."""
+    rng = seeded(seed)
+    out = []
+    for k in range(BIOZ_HZ * 60):
+        t = k / BIOZ_HZ
+        wave = 0.0 if pause and 20 <= t < 34 else 800 * math.sin(2 * math.pi * BREATHS_PER_MIN / 60 * t)
+        out.append(int(_round(20_000 + wave + (rng() - 0.5) * 20)))
+    return out
 
 
 def batches(packets: Sequence[dict], size: int = MAX_PACKETS) -> Iterator[list[dict]]:

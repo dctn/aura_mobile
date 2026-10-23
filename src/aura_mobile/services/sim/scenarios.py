@@ -41,10 +41,16 @@ class Scenario:
     compute_empty_target: bool = False
     #: the alert does not come from the target's run but from a timer it books ~2 h later
     timer_wait_minutes: int = 0
+    #: a scenario for several features at once (its ``feature_id`` is then not a feature's)
+    covers: tuple[str, ...] = ()
 
     @property
     def feature(self) -> Feature:
         return BY_ID[self.feature_id]
+
+    @property
+    def feature_ids(self) -> tuple[str, ...]:
+        return self.covers or (self.feature_id,)
 
     def fits(self, target: Date) -> bool:
         if self.weekday is not None and target.weekday() != self.weekday:
@@ -104,14 +110,19 @@ SCENARIOS: tuple[Scenario, ...] = (
              lambda b, _i: b.but(wake_walk_minutes=0, active_minutes=5), weekday=3),
     Scenario("PB-01", 5, "The sleep window jumps from 23:00 to 01:00-03:00, so the body clock drifts.",
              lambda b, i: b.but(bed_hour=(23, 2, 3, 1, 2)[i]), ),
-    Scenario("PB-02", 21, "Three weeks of short sleep, high HR and heavy load; lands on a Monday.",
-             lambda b, _i: b.but(sleep_minutes=345, resting_hr=66, active_minutes=120), weekday=0),
+    # Burnout scores the last days against the ones before (HRV, resting HR, recovery) plus sleep debt and daily
+    # stress, so a fortnight of plain days comes first. Three flat weeks of short sleep scored Low (offline, 23 Oct).
+    Scenario("PB-02", 21, "Two ordinary weeks, then a week of short late nights, high resting HR, low HRV and "
+                          "long stressed afternoons; lands on a Monday.",
+             lambda b, i: b if i < 14 else b.but(sleep_minutes=300, bed_hour=1, resting_hr=58, sleep_rmssd=20,
+                                                  stress_minutes=150, sitting_bout_minutes=20), weekday=0),
     Scenario("PB-03", 1, "One unbroken 95-minute desk bout.",
              lambda b, _i: b.but(sitting_bout_minutes=95)),
     Scenario("PB-04", 24, "A fit first week fades into three sedentary weeks with resting HR creeping up.",
              lambda b, i: b.but(active_minutes=70 if i < 4 else 10, resting_hr=50 + i // 3)),
-    Scenario("PB-05", 10, "Ten nights with 15 overnight SpO2 dips each.",
-             lambda b, _i: b.but(spo2_dips=15, resting_hr=60, sleep_minutes=420)),
+    # breathingDisturbances come only from BioZ breathing bursts (pipeline/respiration.py); without them it is absent.
+    Scenario("PB-05", 10, "Ten nights with 15 overnight SpO2 dips each, and breathing pauses on the nights.",
+             lambda b, _i: b.but(spo2_dips=15, resting_hr=60, sleep_minutes=420, breath_pauses=6)),
     Scenario("NI-02", 1, "Three low mood check-ins (1/5) over two days, then a computed day.",
              checkins=(CheckIn("mood", 1, 1, 10), CheckIn("mood", 2, 1, 19), CheckIn("mood", 1, 0, 9))),
     Scenario("NI-03", 1, "A day on the 1st or 15th with no connection check-ins this fortnight.",
@@ -123,3 +134,57 @@ SCENARIOS: tuple[Scenario, ...] = (
 )
 
 BY_FEATURE: dict[str, Scenario] = {s.feature_id: s for s in SCENARIOS}
+
+MONTH_DAYS = 26
+#: the swinging-bedtime fortnight, then the steady days
+SWING_DAYS = 12
+#: the last week: the burnout week
+HARD_DAYS = 7
+
+
+def _month(b: DayShape, i: int) -> DayShape:
+    """Day ``i`` (0 = first) of :data:`ALL_AT_ONCE`, a 26-day month ending on a Monday (so day 25, 18, 11 and 4 are
+    Mondays and 21, 14, 7 and 0 Thursdays). Each rule needs its own pattern, and they are laid out so none undoes
+    another. Proven offline through Health Data's own day pipeline (every day, state carried) with the rules applied
+    to each day: all 13 band features fire, on two different months."""
+    hard = MONTH_DAYS - HARD_DAYS
+    if i < SWING_DAYS:
+        # DX-02, PB-01: bedtimes swinging 20:00 / 03:00, with DX-02's waking afternoon (and no extra activity, or a
+        # 03:00 day runs into the next 20:00 bedtime). Calm, with a low resting HR: the VO2max (PB-04) and the
+        # resting-HR baseline (DX-05, DX-06) to fall from.
+        b = b.but(bed_hour=(20, 3)[i % 2], day_minutes=390, resting_hr=50)
+    else:
+        # DX-09: sedentary from here, so Thursday day 21 ends a week under 150 active minutes. PB-04: resting HR
+        # creeps up, so VO2max (Uth: 15.3 × HRmax / resting HR) drops 2+ points by day 20.
+        b = b.but(active_minutes=5, wake_walk_minutes=0, resting_hr=52 + (i - SWING_DAYS) // 2)
+    if SWING_DAYS <= i < SWING_DAYS + 5:
+        b = b.but(latency_minutes=45)  # DX-03: five slow nights
+    if i == 13:
+        b = b.but(sitting_bout_minutes=95)  # PB-03
+    if i == 15:
+        b = b.but(stress_minutes=120, sitting_bout_minutes=20)  # DX-07
+    if i == 17:
+        b = b.but(resting_hr=b.resting_hr + 10, sleep_rmssd=18, skin_delta_c=0.6)  # DX-06 (and DX-05)
+    if i >= 17:
+        b = b.but(spo2_dips=15)  # PB-05: 7+ nights of dips by day 23
+    if i >= hard:
+        # The burnout week ending on the Monday (PB-02): short late nights (DX-01, DX-04), resting HR up, low HRV,
+        # a long stressed afternoon every day. The breathing pauses give PB-05 its disturbances.
+        b = b.but(sleep_minutes=300, bed_hour=1, resting_hr=b.resting_hr + 6, sleep_rmssd=20, stress_minutes=150,
+                  sitting_bout_minutes=20, breath_pauses=6)
+    return b
+
+
+#: Every alert the band, the check-ins and the timer can raise, from one month of data on the same dates, as a real
+#: month of a real person would. BS-02 needs days with no data, so it stays a run of its own.
+ALL_AT_ONCE = Scenario(
+    "ALL", MONTH_DAYS,
+    "One month for 16 alerts: 12 nights of swinging bedtimes, slow nights, a desk bout, a stressed afternoon, a "
+    "fever-like night, then a burnout week with short nights, SpO2 dips and breathing pauses, three low moods, and "
+    "the hydration timer. Lands on a Monday. Needs your birth date in Profile (VO2max uses it).",
+    _month, weekday=0,
+    checkins=(CheckIn("mood", 1, 1, 10), CheckIn("mood", 2, 1, 19), CheckIn("mood", 1, 0, 9)),
+    timer_wait_minutes=150,
+    covers=("DX-01", "DX-02", "DX-03", "DX-04", "DX-05", "DX-06", "DX-07", "DX-09",
+            "PB-01", "PB-02", "PB-03", "PB-04", "PB-05", "NI-02", "NI-03", "NI-04"),
+)

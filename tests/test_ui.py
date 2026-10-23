@@ -207,7 +207,7 @@ def test_lab_has_a_row_per_alert_feature(phone):
     window, _ctx, _api = phone
     window._open_lab()
     settle()
-    assert set(window.lab.rows) == {f.id for f in ALERT_FEATURES}
+    assert set(window.lab.rows) == {f.id for f in ALERT_FEATURES} | {"ALL"}
     assert all(row.run.isEnabled() for row in window.lab.rows.values())
     assert "Next:" in window.lab.rows["DX-04"].plan.text()
 

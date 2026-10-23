@@ -96,6 +96,11 @@ and shows **Passed** when the alert appears, and the alert shows on Recovery and
 - **Compute now** spends one of the backend's **5 computes an hour** instead of waiting about 2 minutes. The lab counts them and refuses a 6th.
 - **Direct** rows cross a raw threshold and fire reliably. **Derived** rows push a composite score, so the result depends on the deployed pipeline and the account's history, and they may need a second run.
 - Runs only write into the **last 33 days**: Health Data keeps band minutes 35 days from their own time, and older ones can vanish before the day is computed. That is room for a few scenarios per account (all 18 need ~140 days). When rows say **No room left**, wait for new days, or delete the account in Profile and sign up again. **Reset lab** only forgets which dates were used; re-sending over used dates mixes old and new data.
+- **All features at once** (top row) sends **one 26-day month** ending on a Monday, on the same dates for every
+  feature, the way a real person's month would look. It should raise 16 alerts (all but BS-02, which needs empty days).
+  It needs 27 unused days in a row (a fresh account) and your **birth date in Profile** (VO2max, PB-04, needs it).
+  It was proven offline through Health Data's own day pipeline before it was added. The row lists which alerts are in
+  and which are still to come; NI-04's timer takes about 2 h.
 - **Push is not set up** on dev (the APNs secret is empty). Alerts arrive in the in-app inbox and on Recovery. The app checks again every minute.
 
 ## Per-feature test guide
@@ -140,7 +145,7 @@ the lab. The row should time out with no alert. Turn it back on and run again: i
 ## Develop
 
 ```
-uv run pytest        # 165 tests: config, HTTP rules, routes, simulator, lab runner, store, feature steps, offscreen UI
+uv run pytest        # 181 tests: config, HTTP rules, routes, simulator, lab runner, store, feature steps, offscreen UI
 uv run ruff check src tests scripts
 ```
 

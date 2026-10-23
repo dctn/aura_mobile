@@ -7,9 +7,10 @@ from datetime import UTC, date, datetime, timedelta
 import pytest
 
 from aura_mobile.core.features import ALERT_FEATURES, BY_ID, FEATURES, LabMode
-from aura_mobile.services.sim.band import band_day, batches, healthy_day, live_packets, seeded
+from aura_mobile.services.sim.band import BIOZ_HZ, band_day, batches, healthy_day, live_packets, seeded, segments_of
 from aura_mobile.services.sim.runner import (
     COMPUTES_PER_HOUR,
+    NO_BIRTH_DATE,
     WINDOW_DAYS,
     LabRun,
     LabRunner,
@@ -17,7 +18,7 @@ from aura_mobile.services.sim.runner import (
     choose_target,
     night_count,
 )
-from aura_mobile.services.sim.scenarios import BY_FEATURE, SCENARIOS
+from aura_mobile.services.sim.scenarios import ALL_AT_ONCE, BY_FEATURE, SCENARIOS
 
 TZ = "Asia/Kolkata"
 
@@ -356,3 +357,104 @@ def test_dx02_days_never_overlap_and_each_has_a_waking_afternoon():
     assert all(s.day_minutes >= 360 for s in shapes)
     times = [p["t"] for s in shapes for p in band_day(s, with_rr=False)]
     assert len(times) == len(set(times))
+
+
+class ProfiledApi(FakeApi):
+    def __init__(self, alerts=(), birth_date="1995-06-01"):
+        super().__init__(alerts)
+        self.profile = {"birthDate": birth_date} if birth_date else {}
+
+    def me(self):
+        return self.profile
+
+    def metrics_day(self, day):
+        return None
+
+
+@pytest.mark.parametrize("weekday", range(7))
+def test_the_month_lands_on_a_monday_inside_a_fresh_window(weekday):
+    today = date(2026, 10, 19) + timedelta(days=weekday)
+    target = choose_target(ALL_AT_ONCE, set(), today)
+    assert target is not None and target.weekday() == 0 and target < today
+    assert min(ALL_AT_ONCE.footprint(target)) >= today - timedelta(days=WINDOW_DAYS)
+
+
+def test_the_month_covers_every_alert_but_bs02_and_sends_each_minute_once():
+    assert set(ALL_AT_ONCE.covers) == {s.feature_id for s in SCENARIOS} - {"BS-02"}
+    shapes = ALL_AT_ONCE.shapes(date(2026, 10, 19), TZ)
+    assert len(shapes) == ALL_AT_ONCE.days
+    times = [p["t"] for s in shapes for p in band_day(s, with_rr=False)]
+    assert len(times) == len(set(times))
+
+
+def test_the_month_carries_each_rules_pattern():
+    """The month the offline pipeline proved (23 Oct): its patterns must stay where the rules look for them."""
+    target = date(2026, 10, 19)
+    shapes = ALL_AT_ONCE.shapes(target, TZ)
+    by_date = {date.fromisoformat(s.date): s for s in shapes}
+    assert sum(1 for s in shapes[:14] if s.bed_hour in (20, 3)) >= 12  # DX-02, PB-01
+    assert sum(1 for s in shapes if s.latency_minutes > 30) >= 4  # DX-03
+    assert any(s.sitting_bout_minutes >= 75 for s in shapes)  # PB-03
+    assert any(s.stress_minutes >= 90 for s in shapes)  # DX-07
+    assert any(s.skin_delta_c >= 0.3 and s.sleep_rmssd < 30 for s in shapes)  # DX-06
+    assert sum(1 for s in shapes if s.spo2_dips >= 10) >= 7 and shapes[-1].breath_pauses >= 5  # PB-05
+    thursday = target - timedelta(days=4)
+    week = [by_date[thursday - timedelta(days=k)] for k in range(7)]
+    assert all(s.active_minutes + s.wake_walk_minutes < 20 for s in week)  # DX-09
+    assert shapes[0].resting_hr < shapes[-1].resting_hr - 5  # PB-04, PB-02
+    assert shapes[-1].sleep_minutes < 360  # DX-01, DX-04
+    moods = [c for c in ALL_AT_ONCE.checkins if c.kind == "mood"]
+    assert len(moods) >= 3 and sum(c.value for c in moods) / len(moods) <= 2  # NI-02
+    assert not [c for c in ALL_AT_ONCE.checkins if c.kind == "connection"]  # NI-03
+
+
+def test_breath_pauses_ride_a_bioz_burst_in_the_night():
+    """PB-05's breathingDisturbances come only from BioZ bursts; one piece a minute, inside its packet's window."""
+    packets = band_day(healthy_day("2026-10-20", TZ).but(breath_pauses=6), with_rr=False)
+    pieces = [(i, p, b) for i, p in enumerate(packets) for b in p.get("bioz", [])]
+    assert len(pieces) == 13
+    assert len({b["burstId"] for _i, _p, b in pieces}) == 1
+    for i, p, b in pieces:
+        assert b["tStart"] == p["t"] and b["hz"] == BIOZ_HZ and len(b["samples"]) == BIOZ_HZ * 60 <= 3840
+        assert all(isinstance(x, int) for x in b["samples"])
+        assert p["device"]["steps"] - packets[i - 1]["device"]["steps"] <= 3  # asleep, not moving
+    pause = slice(20 * BIOZ_HZ, 34 * BIOZ_HZ)
+    flat = [b for _i, _p, b in pieces if max(b["samples"][pause]) - min(b["samples"][pause]) < 40]
+    assert len(flat) == 6
+    assert not any("bioz" in p for p in band_day(healthy_day("2026-10-20", TZ), with_rr=False))
+
+
+def test_the_evening_before_a_low_hrv_night_is_low_too():
+    """DX-06's HRV-below-baseline reads the hour before sleep (heart.py eveningHrv); a fixed 40 ms wind-down made it
+    a coin toss."""
+    calm = segments_of(healthy_day("2026-10-20", TZ))
+    tense = segments_of(healthy_day("2026-10-20", TZ).but(sleep_rmssd=18, latency_minutes=45))
+    assert calm[0].rmssd == 40
+    assert tense[0].rmssd == tense[1].rmssd == 18
+
+
+@pytest.mark.parametrize("scenario", [ALL_AT_ONCE, BY_FEATURE["PB-04"]], ids=lambda s: s.feature_id)
+def test_a_vo2max_run_needs_a_birth_date_first(tmp_path, scenario):
+    state = LabState.load("s", tmp_path)
+    api = ProfiledApi(birth_date=None)
+    with pytest.raises(RuntimeError, match="birth date"):
+        LabRunner(api, state).run(scenario)
+    assert api.samples == 0 and not api.checkins and state.touched == set()
+    assert NO_BIRTH_DATE.endswith("Nothing was sent.")
+
+
+def test_the_month_finds_each_of_its_alerts(tmp_path):
+    state = LabState.load("s", tmp_path)
+    runner = LabRunner(ProfiledApi(), state)
+    run = runner.run(ALL_AT_ONCE)
+    assert run.feature_id == "ALL" and len(run.dates) == ALL_AT_ONCE.days + 1
+    first, old = run.dates[1], (date.fromisoformat(run.dates[0]) - timedelta(days=5)).isoformat()
+    runner.api = ProfiledApi([
+        {"id": "a1", "featureId": "DX-02", "date": first},
+        {"id": "a2", "featureId": "PB-02", "date": run.target},
+        {"id": "a3", "featureId": "DX-04", "date": old},  # an older run's
+        {"id": "a4", "featureId": "BS-02", "date": run.target},  # not one of the month's
+    ])
+    seen = runner.check_month(run, ALL_AT_ONCE.feature_ids)
+    assert set(seen.fired) == {"DX-02", "PB-02"}
+    assert LabState.load("s", tmp_path).latest_run("ALL").found == ["DX-02", "PB-02"]
