@@ -1,0 +1,31 @@
+.trylink { color: var(--page-ink); text-align: left; text-decoration: underline; text-decoration-color: var(--page-line); text-underline-offset: 4px; }
+.trylink:hover { color: var(--accent); text-decoration-color: currentColor; }
+
+.steps { display: grid; grid-template-columns: repeat(4, 1fr); gap: 20px; margin-top: 28px; }
+.step-top { display: flex; align-items: center; gap: 12px; }
+.step-line { flex: 1; height: 2px; background: linear-gradient(90deg, var(--page-line), transparent); }
+.step h3 { margin: 14px 0 6px; font-size: 17px; }
+.step p { margin: 0; color: var(--page-ink2); font-size: 15px; line-height: 1.5; }
+
+.fgroups { columns: 3 300px; column-gap: 28px; margin-top: 24px; }
+.fgroup { break-inside: avoid; margin-bottom: 26px; }
+.fgroup h3 { margin: 0 0 10px; font-size: 13px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--page-ink2); }
+.feature { display: flex; gap: 12px; padding: 12px 0; border-top: 1px solid var(--page-line); }
+.feature .disc { margin-top: 2px; }
+.fname { font-weight: 650; font-size: 15px; }
+.fcode { margin-left: 4px; font-size: 11px; font-weight: 600; color: var(--tone); font-variant-numeric: tabular-nums; letter-spacing: 0.04em; }
+.fshows { margin-top: 2px; font-size: 14px; color: var(--page-ink); }
+.fdoes { margin-top: 2px; font-size: 13.5px; color: var(--page-ink2); line-height: 1.45; }
+
+.about { display: grid; grid-template-columns: repeat(3, 1fr); gap: 28px; margin-top: 16px; }
+.about h3 { margin: 0 0 6px; font-size: 17px; }
+.about p { margin: 0; color: var(--page-ink2); line-height: 1.55; font-size: 15px; }
+
+@media (max-width: 960px) {
+  .steps { grid-template-columns: 1fr 1fr; }
+  .step-line { display: none; }
+  .about { grid-template-columns: 1fr; gap: 18px; }
+}
+@media (max-width: 480px) {
+  .steps { grid-template-columns: 1fr; }
+}

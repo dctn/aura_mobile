@@ -1,0 +1,42 @@
+/* The action sheets (recovery/sheets.tsx) and the Recovery / Modes / Sessions screens. Token colours only. */
+
+.rc-intro { margin: 0 4px; font-size: var(--t-sub); color: var(--label2); }
+.rc-question { margin: 4px 4px 0; font-size: 20px; font-weight: 600; line-height: 1.25; }
+.rc-head { display: grid; gap: 4px; margin: 4px 0 0; }
+.rc-kicker { margin: 0 4px; font-size: var(--t-small); font-weight: 700; letter-spacing: 0.06em; color: var(--accent); }
+.rc-head .muted { margin: 0 4px; }
+.rc-quiet { color: var(--label2); }
+.rc-check { display: flex; color: var(--accent); }
+
+.rc-faces { display: grid; gap: 8px; padding: 16px 14px 12px; }
+.rc-facewords { display: grid; grid-template-columns: repeat(5, 1fr); gap: 4px; text-align: center; font-size: var(--t-small); color: var(--label2); }
+
+.rc-name { width: 100%; border: 0; outline: none; color: var(--label); }
+.rc-seg { display: inline-block; width: 150px; }
+.rc-seg.off { opacity: 0.45; pointer-events: none; }
+.timepill { color: var(--label); }
+.timepill:disabled { color: var(--label3); }
+
+.rc-todo { padding: 8px 16px; }
+.rc-todo textarea { width: 100%; min-height: 112px; resize: none; border: 0; outline: none; background: transparent; color: var(--label); line-height: 1.4; }
+
+.rc-line { height: 4px; border-radius: 2px; background: var(--fill); overflow: hidden; }
+.rc-line > span { display: block; height: 100%; border-radius: 2px; background: var(--accent); transition: width 0.2s; }
+
+/* Recovery */
+.rc-todo-list { display: grid; gap: 14px; }
+
+/* Modes */
+.rc-titlefield { width: 180px; text-align: right; border: 0; outline: none; background: transparent; color: var(--label); }
+.rc-titlefield::placeholder { color: var(--label3); }
+
+/* Sessions */
+.rc-running { display: grid; gap: 14px; padding: 16px 18px; border-radius: var(--r-big); }
+.rc-running .rc-rhead { display: flex; align-items: center; gap: 12px; }
+.rc-running .rc-rname { font-weight: 600; font-size: var(--t-title); }
+.rc-running .rc-rstate { font-size: var(--t-sub); color: var(--label2); }
+.rc-running .rc-rbuttons { display: flex; align-items: center; gap: 16px; }
+.rc-rbtn { width: 52px; height: 52px; border-radius: 50%; display: grid; place-items: center; background: var(--fill); color: var(--label); }
+.rc-rbtn:hover { background: var(--fill2); }
+.rc-rbtn.stop { background: var(--bad); color: #fff; }
+.rc-rbuttons .grow { flex: 1; }

@@ -1,0 +1,110 @@
+/* Search, Metric, Logging, Settings and Inbox: the pieces kit.css has no class for. Token colours only. */
+
+/* -- Search ------------------------------------------------------------------------------------------------------ */
+
+.sx-search { margin-top: 8px; }
+.sx-search input { min-width: 0; min-height: 36px; }
+.sx-search input::-webkit-search-cancel-button { display: none; }
+.sx-clear {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 9px;
+  background: var(--label3);
+  color: var(--card);
+  flex: none;
+}
+.sx-nothing { text-align: center; margin-top: 24px; }
+
+/* -- Metric ------------------------------------------------------------------------------------------------------ */
+
+.sx-hero { display: flex; flex-direction: column; gap: 2px; margin-top: -2px; }
+.sx-heronum { display: flex; align-items: baseline; gap: 10px; }
+.sx-heronum .n { font-size: 56px; font-weight: 700; letter-spacing: -0.02em; line-height: 1.05; }
+.sx-heronum .u { font-weight: 600; color: var(--label2); font-size: var(--t-row); }
+.sx-avg { display: flex; align-items: baseline; gap: 6px; }
+.sx-avg .v { color: var(--tone); font-weight: 600; font-size: var(--t-row); }
+
+.sx-chart { display: flex; flex-direction: column; gap: 16px; padding: 14px 16px 18px; }
+.sx-empty { text-align: center; margin-top: -8px; }
+
+.sx-trend { display: flex; flex-direction: column; gap: 4px; padding: 16px 18px; }
+.sx-trendhead { display: flex; align-items: center; gap: 8px; }
+.sx-trendhead .t { font-size: 18px; font-weight: 700; }
+.sx-arrow { display: flex; color: var(--tone); }
+.sx-arrow.down { transform: scaleY(-1); }
+.sx-trendline { display: flex; align-items: baseline; gap: 6px; }
+.sx-trendline .big { font-size: 30px; font-weight: 700; letter-spacing: -0.01em; }
+
+/* -- Logging ----------------------------------------------------------------------------------------------------- */
+
+.sx-card { display: flex; flex-direction: column; gap: 10px; }
+.sx-chead { display: flex; align-items: center; gap: 10px; }
+.sx-chead .name { flex: 1; font-weight: 600; }
+.sx-chead .note { font-size: var(--t-sub); color: var(--label2); }
+.sx-card .bignum { margin: 0; }
+.sx-buttons { display: flex; gap: 8px; }
+.sx-buttons .btn { flex: 1; }
+.sx-strength { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.sx-strength .btn.go { min-width: 64px; }
+
+.sx-drops { display: flex; flex-wrap: wrap; gap: 10px; }
+.sx-drops svg { fill: color-mix(in srgb, var(--tone) 22%, transparent); }
+.sx-drops svg.on { fill: var(--tone); }
+
+.sx-progress { height: 4px; border-radius: 2px; background: var(--fill); overflow: hidden; flex: none; }
+.sx-progress span { display: block; height: 100%; border-radius: 2px; background: var(--accent); transition: width 0.2s; }
+.sx-question { display: flex; flex-direction: column; gap: 4px; padding: 8px 4px 0; }
+.sx-kicker { font-size: var(--t-head); font-weight: 600; letter-spacing: 0.04em; color: var(--label2); }
+.sx-qtext { font-size: 20px; font-weight: 600; line-height: 1.25; }
+.sx-check { display: flex; color: var(--accent); }
+.sx-intro { padding: 4px 4px 0; color: var(--label2); }
+
+/* -- Settings ---------------------------------------------------------------------------------------------------- */
+
+.sx-tgroup { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+.sx-ttitle { margin: 0 4px; font-size: 17px; font-weight: 700; }
+.sx-account { display: flex; align-items: center; gap: 14px; padding: 14px 16px; position: relative; }
+.sx-account + .row::before { content: ''; position: absolute; top: 0; right: 0; left: 16px; border-top: 1px solid var(--sep); }
+.sx-account .grow { flex: 1; min-width: 0; }
+.sx-avatar {
+  display: grid;
+  place-items: center;
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #fff;
+  font-size: 24px;
+  font-weight: 600;
+  flex: none;
+}
+.sx-who { font-size: 20px; font-weight: 600; }
+.sx-gaps { font-size: var(--t-sub); color: var(--warn); }
+.sx-theme { width: 190px; flex: none; }
+.sx-wrap { white-space: normal; font-size: var(--t-sub); }
+
+.sx-center { display: flex; justify-content: center; padding: 8px 0; }
+.sx-center .stepper .val { min-width: 110px; font-size: 18px; }
+.sx-center .stepper button { width: 52px; height: 40px; }
+.sx-jumps { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+.sx-jumps .chip { text-align: center; }
+.sx-birth { display: grid; grid-template-columns: 2fr 3fr 3fr; gap: 8px; }
+.sx-birth select { appearance: auto; }
+
+/* -- Inbox ------------------------------------------------------------------------------------------------------- */
+
+.sx-note { align-items: flex-start; padding-top: 10px; padding-bottom: 10px; }
+.sx-note .disc { margin-top: 1px; }
+.sx-notehead { display: flex; align-items: baseline; gap: 8px; }
+.sx-notehead .title { flex: 1; min-width: 0; }
+.sx-notehead .small { flex: none; }
+.sx-note .sub { display: block; margin-top: 2px; }
+.sx-note.unread .title { font-weight: 600; }
+.sx-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--accent); flex: none; margin-top: 7px; }
+
+.sx-time { min-width: 76px; text-align: center; font-size: var(--t-row); }
+.sx-clock { display: flex; align-items: center; justify-content: center; gap: 8px; padding: 8px 0; }
+.sx-clock select { width: 96px; text-align: center; font-size: 20px; appearance: auto; }
+.sx-colon { font-size: 22px; font-weight: 600; }

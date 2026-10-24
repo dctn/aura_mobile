@@ -1,0 +1,186 @@
+/* Colours, type and sizes from demo/src/aura_mobile/ui/tokens.py ("Aura Clarus Mobile" prototype), light and dark.
+   The theme follows the system unless the visitor picks one: <html data-theme="light|dark">. */
+
+:root {
+  --phone-w: 390px;
+  --phone-h: 844px;
+  --gutter: 16px;
+  --section-gap: 28px;
+  --font: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', Roboto, system-ui, sans-serif;
+
+  --t-large: 32px;
+  --t-nav: 16px;
+  --t-title: 16px;
+  --t-row: 15px;
+  --t-sub: 13px;
+  --t-head: 12px;
+  --t-small: 11px;
+  --t-big: 30px;
+  --t-clock: 76px;
+
+  --r-card: 14px;
+  --r-list: 12px;
+  --r-tile: 7px;
+  --r-sheet: 14px;
+  --r-big: 24px;
+  --r-pill: 32px;
+
+  --row-min: 44px;
+  --nav-h: 44px;
+  --tabbar-h: 62px;
+
+  --fitness: #ff6b35;
+  --cardiac: #ff2d55;
+  --sleep: #5e5ce6;
+  --stress: #ff9500;
+  --workout: #ff3b30;
+  --recovery: #34c759;
+  --blue: #007aff;
+  --teal: #5ac8fa;
+  --focus: #ffcc00;
+  --cyan: #32ade6;
+  --purple: #af52de;
+  --mint: #00c7be;
+
+  --night-bg: #000;
+  --night-fg: #f2f2f7;
+  --night-2: rgba(235, 235, 245, 0.6);
+  --night-fill: rgba(120, 120, 128, 0.32);
+
+  /* light */
+  --bg: #f5f5f5;
+  --card: #fff;
+  --card2: #fff;
+  --sheet: #f2f2f7;
+  --fill: rgba(120, 120, 128, 0.12);
+  --fill2: rgba(120, 120, 128, 0.2);
+  --label: #1c1c1e;
+  --label2: rgba(60, 60, 67, 0.6);
+  --label3: #8e8e93;
+  --sep: rgba(60, 60, 67, 0.18);
+  --bar: rgba(250, 250, 250, 0.94);
+  --alert: rgba(242, 242, 247, 0.98);
+  --accent: #007aff;
+  --accent-soft: rgba(0, 122, 255, 0.14);
+  --switch-on: #34c759;
+  --switch-off: rgba(120, 120, 128, 0.16);
+  --seg-thumb: #fff;
+  --good: #34c759;
+  --warn: #ff9500;
+  --bad: #ff3b30;
+  --scrim: rgba(0, 0, 0, 0.28);
+  --scrim-strong: rgba(0, 0, 0, 0.42);
+  --grabber: rgba(60, 60, 67, 0.3);
+  --shadow: rgba(0, 0, 0, 0.16);
+  --go: #1ed760;
+  --go-ink: #0b1f12;
+  --pill: #121212;
+  --pill-ink: #fff;
+  --pill-ink2: rgba(255, 255, 255, 0.6);
+
+  /* the page around the phone */
+  --page: #eceae6;
+  --page-ink: #1c1c1e;
+  --page-ink2: #5b5b60;
+  --page-line: rgba(0, 0, 0, 0.1);
+  --frame: #1c1c1e;
+}
+
+:root[data-theme='dark'] {
+  --bg: #000;
+  --card: #1c1c1e;
+  --card2: #2c2c2e;
+  --sheet: #1c1c1e;
+  --fill: rgba(120, 120, 128, 0.24);
+  --fill2: rgba(120, 120, 128, 0.36);
+  --label: #f2f2f7;
+  --label2: rgba(235, 235, 245, 0.6);
+  --label3: #98989d;
+  --sep: rgba(235, 235, 245, 0.16);
+  --bar: rgba(30, 30, 30, 0.94);
+  --alert: rgba(44, 44, 46, 0.98);
+  --accent: #0a84ff;
+  --accent-soft: rgba(10, 132, 255, 0.22);
+  --switch-on: #30d158;
+  --switch-off: rgba(120, 120, 128, 0.32);
+  --seg-thumb: #636366;
+  --good: #30d158;
+  --warn: #ff9f0a;
+  --bad: #ff453a;
+  --scrim: rgba(0, 0, 0, 0.5);
+  --scrim-strong: rgba(0, 0, 0, 0.66);
+  --grabber: rgba(235, 235, 245, 0.3);
+  --shadow: rgba(0, 0, 0, 0.5);
+  --pill: #2c2c2e;
+  --page: #111113;
+  --page-ink: #f2f2f7;
+  --page-ink2: #a1a1a8;
+  --page-line: rgba(255, 255, 255, 0.12);
+  --frame: #3a3a3c;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --bg: #000;
+    --card: #1c1c1e;
+    --card2: #2c2c2e;
+    --sheet: #1c1c1e;
+    --fill: rgba(120, 120, 128, 0.24);
+    --fill2: rgba(120, 120, 128, 0.36);
+    --label: #f2f2f7;
+    --label2: rgba(235, 235, 245, 0.6);
+    --label3: #98989d;
+    --sep: rgba(235, 235, 245, 0.16);
+    --bar: rgba(30, 30, 30, 0.94);
+    --alert: rgba(44, 44, 46, 0.98);
+    --accent: #0a84ff;
+    --accent-soft: rgba(10, 132, 255, 0.22);
+    --switch-on: #30d158;
+    --switch-off: rgba(120, 120, 128, 0.32);
+    --seg-thumb: #636366;
+    --good: #30d158;
+    --warn: #ff9f0a;
+    --bad: #ff453a;
+    --scrim: rgba(0, 0, 0, 0.5);
+    --scrim-strong: rgba(0, 0, 0, 0.66);
+    --grabber: rgba(235, 235, 245, 0.3);
+    --shadow: rgba(0, 0, 0, 0.5);
+    --pill: #2c2c2e;
+    --page: #111113;
+    --page-ink: #f2f2f7;
+    --page-ink2: #a1a1a8;
+    --page-line: rgba(255, 255, 255, 0.12);
+    --frame: #3a3a3c;
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  background: var(--page);
+  color: var(--page-ink);
+  font-family: var(--font);
+  -webkit-font-smoothing: antialiased;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+}
+
+input,
+textarea,
+select {
+  font: inherit;
+  color: inherit;
+}

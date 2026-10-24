@@ -1,0 +1,353 @@
+/* The Home calendar and Home's own pieces (ui/theme.py: calcard, calmonth, calday, calsub, calempty, taskrow,
+   taskdone, softpill, bigcard). Every colour is a token from styles/tokens.css, so dark mode follows. */
+
+/* -- the card ------------------------------------------------------------------------------------------------- */
+
+.cal-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 14px 16px;
+}
+
+.cal-head { display: flex; align-items: center; gap: 6px; }
+.cal-month { flex: 1; min-width: 0; font-size: 22px; font-weight: 700; white-space: nowrap; }
+.cal-mode { width: 132px; flex: none; }
+
+/* -- the days ------------------------------------------------------------------------------------------------- */
+
+.cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); }
+.cal-wd {
+  height: 20px;
+  display: grid;
+  place-items: center;
+  font-size: var(--t-small);
+  font-weight: 600;
+  color: var(--label3);
+}
+.cal-cell {
+  height: 44px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding-top: 3px;
+  border-radius: 10px;
+}
+.cal-disc {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: var(--t-row);
+  color: var(--label);
+  font-variant-numeric: tabular-nums;
+  transition: background 0.12s;
+}
+.cal-cell:hover .cal-disc { background: var(--fill); }
+.cal-cell.out .cal-disc { color: var(--label3); }
+.cal-cell.today .cal-disc { color: var(--accent); font-weight: 600; box-shadow: inset 0 0 0 1.6px var(--accent); }
+.cal-cell.chosen .cal-disc { background: var(--go); color: var(--go-ink); font-weight: 600; box-shadow: none; }
+.cal-dots { display: flex; gap: 2px; height: 5px; margin-top: 2px; }
+.cal-dot { width: 5px; height: 5px; border-radius: 50%; }
+.cal-dot.event { background: var(--stress); }
+.cal-dot.task { background: var(--accent); }
+
+/* -- the chosen day ------------------------------------------------------------------------------------------- */
+
+.cal-dayhead { display: flex; align-items: center; gap: 8px; }
+.cal-dayhead .grow { flex: 1; min-width: 0; }
+.cal-daytitle { font-size: 17px; font-weight: 700; }
+.cal-count { font-size: var(--t-sub); color: var(--label2); }
+.cal-add { min-width: 92px; min-height: 36px; border-radius: 18px; font-size: var(--t-row); }
+
+/* -- the hours ------------------------------------------------------------------------------------------------ */
+
+.cal-hoursbox { position: relative; }
+.cal-hours {
+  height: 100%;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: thin;
+  overscroll-behavior: contain;
+}
+.cal-day { position: relative; }
+.cal-hour { position: absolute; left: 0; right: 0; height: 0; }
+.cal-hlabel {
+  position: absolute;
+  left: 0;
+  top: -8px;
+  height: 16px;
+  line-height: 16px;
+  text-align: right;
+  font-size: var(--t-small);
+  color: var(--label3);
+  font-variant-numeric: tabular-nums;
+}
+.cal-hline { position: absolute; right: 0; top: 0; border-top: 1px solid var(--sep); }
+.cal-lanes { position: absolute; top: 0; bottom: 0; right: 2px; cursor: pointer; }
+
+.cal-block {
+  position: absolute;
+  display: flex;
+  align-items: flex-start;
+  gap: 5px;
+  padding: 3px 6px 0 10px;
+  border-radius: 8px;
+  overflow: hidden;
+  text-align: left;
+  background: color-mix(in srgb, var(--tone) 20%, transparent);
+}
+.cal-block::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 4px;
+  border-radius: 2px;
+  background: var(--tone);
+}
+.cal-block:hover { background: color-mix(in srgb, var(--tone) 30%, transparent); }
+.cal-block.done { background: color-mix(in srgb, var(--tone) 14%, transparent); }
+.cal-ring {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  margin-top: 3px;
+  border-radius: 50%;
+  border: 1.5px solid var(--tone);
+  display: grid;
+  place-items: center;
+  color: #fff;
+}
+.cal-ring.on { background: var(--tone); }
+.cal-btext { min-width: 0; flex: 1; display: flex; flex-direction: column; }
+.cal-btitle {
+  font-size: var(--t-sub);
+  font-weight: 600;
+  line-height: 18px;
+  color: var(--label);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cal-block.done .cal-btitle { color: var(--label3); text-decoration: line-through; }
+.cal-bspan { font-size: var(--t-small); line-height: 16px; color: var(--label2); white-space: nowrap; }
+
+.cal-now { position: absolute; right: 0; height: 0; border-top: 1.6px solid var(--bad); pointer-events: none; }
+.cal-now i {
+  position: absolute;
+  left: -4px;
+  top: -4.8px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--bad);
+}
+
+/* "Nothing planned · tap to add": centred in the visible hours, over no hour label; taps go through to the hour */
+.cal-empty {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 8px;
+  pointer-events: none;
+}
+.cal-empty span {
+  max-width: 100%;
+  padding: 6px 14px;
+  border-radius: 14px;
+  border: 1px solid var(--sep);
+  background: var(--card);
+  color: var(--label2);
+  font-size: var(--t-sub);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* -- the to-do list ------------------------------------------------------------------------------------------- */
+
+.cal-todohead { display: flex; align-items: center; justify-content: space-between; min-height: 24px; }
+.cal-todohead > span { font-size: var(--t-sub); font-weight: 600; color: var(--label2); }
+.cal-todohead .link { padding: 2px 0; font-size: var(--t-row); }
+.cal-todo { display: flex; flex-direction: column; gap: 8px; }
+
+.cal-taskrow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 48px;
+  padding: 4px 12px 4px 10px;
+  border-radius: 16px;
+  background: var(--fill);
+  cursor: pointer;
+}
+.cal-taskrow:hover { background: var(--fill2); }
+.cal-taskrow .grow { flex: 1; min-width: 0; }
+.cal-taskrow .chev { color: var(--label3); flex: none; }
+.cal-check {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  margin: 3.5px;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1.6px var(--label3);
+  display: grid;
+  place-items: center;
+  color: #fff;
+}
+.cal-check:hover { box-shadow: inset 0 0 0 1.6px var(--accent); }
+.cal-check.on { background: var(--accent); box-shadow: none; }
+.cal-ttitle { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cal-tdone { color: var(--label3); text-decoration: line-through; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cal-tsub { font-size: var(--t-sub); color: var(--label2); }
+.cal-tsub.warn { color: var(--warn); }
+
+.cal-quick {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 48px;
+  padding: 4px 8px 4px 14px;
+  border-radius: 16px;
+  background: var(--fill);
+}
+.cal-quick .field { flex: 1; min-width: 0; min-height: 36px; }
+.cal-quick .field::placeholder { color: var(--label2); }
+
+/* -- the add / edit sheet ------------------------------------------------------------------------------------- */
+
+.cal-ico {
+  flex: none;
+  width: 29px;
+  height: 29px;
+  border-radius: 7px;
+  display: grid;
+  place-items: center;
+  background: var(--tone);
+  color: #fff;
+}
+.cal-datestep .val { min-width: 96px; }
+.cal-title:focus { box-shadow: none; }
+.cal-timepill {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 8px;
+  padding: 4px 8px;
+  background: var(--fill);
+  font-variant-numeric: tabular-nums;
+}
+.cal-timepill select {
+  appearance: none;
+  -webkit-appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--label);
+  padding: 2px 1px;
+  text-align: center;
+  cursor: pointer;
+  outline: none;
+}
+.cal-timepill select:focus-visible { box-shadow: 0 0 0 2px var(--accent-soft); border-radius: 4px; }
+.cal-timepill option { background: var(--card); color: var(--label); }
+.cal-note { padding: 0 16px; }
+
+/* -- Home's own pieces ---------------------------------------------------------------------------------------- */
+
+.home-stack { display: flex; flex-direction: column; gap: 14px; }
+.home-stack.tight { gap: 10px; }
+.home-plus { color: var(--accent); display: grid; place-items: center; width: 32px; height: 32px; border-radius: 16px; }
+.home-plus:hover { background: var(--fill); }
+.home-trail { display: flex; align-items: center; gap: 2px; }
+.home-trail .link, .home-link { font-size: var(--t-row); font-weight: 400; }
+
+.home-move { display: flex; align-items: center; gap: 16px; padding: 16px 18px; }
+.home-move .pct { font-size: 15px; font-weight: 700; }
+.home-move .mlabel { font-weight: 600; }
+.home-move .bignum { margin: 0; }
+.home-move .note { font-size: var(--t-sub); color: var(--label2); }
+
+.home-band {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 48px;
+  padding: 4px 8px 4px 16px;
+  border-radius: 22px;
+  background: var(--card);
+  color: var(--label2);
+}
+.home-band .say { flex: 1; min-width: 0; color: var(--label); }
+.home-band.warn, .home-band.warn .say { color: var(--warn); }
+
+.home-pin-tick { color: var(--accent); display: flex; }
+
+/* -- dragging ------------------------------------------------------------------------------------------------- */
+
+.cal-flip { display: contents; }
+.cal-block.grab, .cal-taskrow.grab { cursor: grab; touch-action: pan-y; }
+.cal-block.lifted, .cal-taskrow.lifted { opacity: 0.35; }
+/* the bottom edge of a block: drag it to change the length */
+.cal-stretch { position: absolute; left: 0; right: 0; bottom: 0; height: 7px; cursor: ns-resize; }
+.cal-block.grab:hover .cal-stretch::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  bottom: 2px;
+  width: 18px;
+  height: 3px;
+  margin-left: -9px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--tone) 70%, transparent);
+}
+/* where the block would land */
+.cal-block.cal-preview {
+  left: 0;
+  right: 3px;
+  z-index: 3;
+  pointer-events: none;
+  background: color-mix(in srgb, var(--tone) 34%, transparent);
+  outline: 1.5px dashed var(--tone);
+  outline-offset: -1.5px;
+}
+.cal-cell.drop .cal-disc { background: var(--accent); color: #fff; font-weight: 600; box-shadow: none; }
+/* held at the hours' left or right edge: the day flips */
+.cal-side {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 22px;
+  z-index: 4;
+  display: grid;
+  place-items: center;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  pointer-events: none;
+}
+.cal-side.l { left: 0; border-radius: 8px 0 0 8px; }
+.cal-side.r { right: 0; border-radius: 0 8px 8px 0; }
+.cal-dragchip {
+  position: fixed;
+  z-index: 1000;
+  max-width: 220px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 6px 10px;
+  border-radius: 10px;
+  background: var(--card);
+  color: var(--label);
+  box-shadow: 0 4px 16px var(--shadow);
+  font-size: var(--t-sub);
+  pointer-events: none;
+}
+.cal-dragchip b { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cal-dragchip span { color: var(--label2); font-variant-numeric: tabular-nums; }
+body.cal-dragging { user-select: none; -webkit-user-select: none; cursor: grabbing; }
+body.cal-dragging * { cursor: grabbing !important; }
