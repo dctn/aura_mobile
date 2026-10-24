@@ -4,6 +4,7 @@
 import { useState, type ReactNode } from 'react';
 import type { Nav } from '../app/nav';
 import { FaceScale, Group, Icon, Row, Segmented, SheetFrame, Switch } from '../kit/kit';
+import { Picker } from '../kit/Picker';
 import { tone } from '../lib/catalog';
 import { TimePill } from '../calendar/ItemSheet';
 import { addDays, clock, localParts, weekday } from '../lib/agenda';
@@ -214,9 +215,7 @@ function ConnectionSheet({ today, onSubmit, close }: { today: string; onSubmit: 
         <Row
           title="Day"
           trailing={
-            <select className="timepill" value={day} disabled={!meal} onChange={(e) => setDay(e.target.value)} aria-label="Day">
-              {days.map((d) => <option key={d} value={d}>{dayText(d)}</option>)}
-            </select>
+            <Picker className="timepill" label="Day" value={day} disabled={!meal} options={days.map((d) => ({ value: d, label: dayText(d) }))} onChange={setDay} />
           }
         />
         <Row

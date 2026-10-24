@@ -6,6 +6,7 @@ import { useState, type ReactNode } from 'react';
 import { backLabel, useNav } from '../app/nav';
 import { tone } from '../lib/catalog';
 import { Group, Icon, Row, SheetFrame, Stepper } from '../kit/kit';
+import { Picker } from '../kit/Picker';
 import { age } from './logic';
 import './search.css';
 
@@ -128,13 +129,9 @@ export function TimeSheet({ title, value, onSave, close }: { title: string; valu
   return (
     <SheetFrame title={title} onCancel={close} action="Save" onAction={() => { onSave(`${pad(h)}:${pad(m)}`); close(); }}>
       <div className="sx-clock">
-        <select className="field" value={h} onChange={(e) => setH(Number(e.target.value))} aria-label="Hour">
-          {Array.from({ length: 24 }, (_, i) => <option key={i} value={i}>{pad(i)}</option>)}
-        </select>
+        <Picker className="field" label="Hour" value={h} options={Array.from({ length: 24 }, (_, i) => ({ value: i, label: pad(i) }))} onChange={setH} />
         <span className="sx-colon">:</span>
-        <select className="field" value={m} onChange={(e) => setM(Number(e.target.value))} aria-label="Minute">
-          {Array.from({ length: 12 }, (_, i) => <option key={i} value={i * 5}>{pad(i * 5)}</option>)}
-        </select>
+        <Picker className="field" label="Minute" value={m} options={Array.from({ length: 12 }, (_, i) => ({ value: i * 5, label: pad(i * 5) }))} onChange={setM} />
       </div>
     </SheetFrame>
   );
@@ -164,15 +161,9 @@ export function BirthSheet({ value, today, onSave, close }: { value: string | nu
   return (
     <SheetFrame title="Birth date" onCancel={close} action="Save" onAction={() => { onSave(day); close(); }}>
       <div className="sx-birth">
-        <select className="field" value={d} onChange={(e) => setD(Number(e.target.value))} aria-label="Day">
-          {Array.from({ length: 31 }, (_, i) => <option key={i} value={i + 1}>{i + 1}</option>)}
-        </select>
-        <select className="field" value={m} onChange={(e) => setM(Number(e.target.value))} aria-label="Month">
-          {MONTHS.map((name, i) => <option key={name} value={i + 1}>{name}</option>)}
-        </select>
-        <select className="field" value={y} onChange={(e) => setY(Number(e.target.value))} aria-label="Year">
-          {years.map((yr) => <option key={yr} value={yr}>{yr}</option>)}
-        </select>
+        <Picker className="field" label="Day" value={Math.min(d, daysIn(y, m))} options={Array.from({ length: daysIn(y, m) }, (_, i) => ({ value: i + 1, label: String(i + 1) }))} onChange={setD} />
+        <Picker className="field" label="Month" value={m} options={MONTHS.map((name, i) => ({ value: i + 1, label: name }))} onChange={setM} />
+        <Picker className="field" label="Year" value={y} options={years.map((yr) => ({ value: yr, label: String(yr) }))} onChange={setY} />
       </div>
       <div className="foot">{dateText(day, true)} · age {age(day, today)}</div>
     </SheetFrame>

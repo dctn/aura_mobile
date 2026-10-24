@@ -13,6 +13,8 @@
   font-size: var(--t-row);
   line-height: 1.3;
 }
+/* thin scrollbars in the theme's colours, closer to a phone than the browser's wide grey ones */
+.screen * { scrollbar-width: thin; scrollbar-color: var(--fill2) transparent; }
 
 .page {
   position: absolute;
@@ -232,6 +234,33 @@ button.row:hover { background: var(--fill); }
 .field:focus { box-shadow: 0 0 0 2px var(--accent-soft); }
 .field.plain { background: transparent; padding: 6px 0; }
 .timepill { border: 0; border-radius: 8px; padding: 6px 10px; background: var(--fill); font-variant-numeric: tabular-nums; }
+
+/* the app's own drop-down (Picker.tsx): the browser's list would be light on a dark phone and open outside it */
+.picker { display: inline-flex; align-items: center; justify-content: space-between; gap: 6px; color: var(--label); text-align: left; font-variant-numeric: tabular-nums; }
+.picker:disabled { color: var(--label3); cursor: default; }
+.picker:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--accent-soft); }
+.picker-val { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.picker-caret { flex: none; color: var(--label3); }
+.picker.bare { padding: 2px 1px; border-radius: 4px; }
+.picker.bare .picker-caret { display: none; }
+.picker-scrim { position: absolute; inset: 0; z-index: 70; }
+.picker-list {
+  position: absolute;
+  z-index: 71;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  background: var(--card2);
+  color: var(--label);
+  border-radius: 12px;
+  box-shadow: 0 12px 32px var(--shadow), 0 0 0 1px var(--sep);
+  outline: none;
+}
+.picker-list li { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 36px; padding: 0 10px; border-radius: 8px; cursor: pointer; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.picker-list li.active { background: var(--fill); }
+.picker-list li.on { color: var(--accent); font-weight: 600; }
 
 .searchbox {
   display: flex;

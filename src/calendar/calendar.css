@@ -248,19 +248,6 @@
   background: var(--fill);
   font-variant-numeric: tabular-nums;
 }
-.cal-timepill select {
-  appearance: none;
-  -webkit-appearance: none;
-  border: 0;
-  background: transparent;
-  color: var(--label);
-  padding: 2px 1px;
-  text-align: center;
-  cursor: pointer;
-  outline: none;
-}
-.cal-timepill select:focus-visible { box-shadow: 0 0 0 2px var(--accent-soft); border-radius: 4px; }
-.cal-timepill option { background: var(--card); color: var(--label); }
 .cal-note { padding: 0 16px; }
 
 /* -- Home's own pieces ---------------------------------------------------------------------------------------- */

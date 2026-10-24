@@ -8,6 +8,7 @@ import { useAura } from '../app/store';
 import { useNav } from '../app/nav';
 import { addDays, localParts, type Item } from '../lib/agenda';
 import { Icon, Segmented, SheetFrame, Stepper, Switch } from '../kit/kit';
+import { Picker } from '../kit/Picker';
 import { doneChanges, eventTimes, newEvent, newTask, taskChanges } from './rows';
 import { shortDay } from './zone';
 
@@ -53,13 +54,9 @@ export function TimePill({ value, onChange }: { value: number; onChange: (minute
   const two = (n: number) => String(n).padStart(2, '0');
   return (
     <span className="cal-timepill">
-      <select aria-label="Hour" value={h} onChange={(e) => onChange(Number(e.target.value) * 60 + m)}>
-        {Array.from({ length: 24 }, (_, i) => <option key={i} value={i}>{two(i)}</option>)}
-      </select>
+      <Picker className="bare" label="Hour" value={h} options={Array.from({ length: 24 }, (_, i) => ({ value: i, label: two(i) }))} onChange={(x) => onChange(x * 60 + m)} />
       <span>:</span>
-      <select aria-label="Minute" value={m} onChange={(e) => onChange(h * 60 + Number(e.target.value))}>
-        {minutes.map((x) => <option key={x} value={x}>{two(x)}</option>)}
-      </select>
+      <Picker className="bare" label="Minute" value={m} options={minutes.map((x) => ({ value: x, label: two(x) }))} onChange={(x) => onChange(h * 60 + x)} />
     </span>
   );
 }

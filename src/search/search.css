@@ -91,7 +91,6 @@
 .sx-jumps { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
 .sx-jumps .chip { text-align: center; }
 .sx-birth { display: grid; grid-template-columns: 2fr 3fr 3fr; gap: 8px; }
-.sx-birth select { appearance: auto; }
 
 /* -- Inbox ------------------------------------------------------------------------------------------------------- */
 
@@ -106,5 +105,5 @@
 
 .sx-time { min-width: 76px; text-align: center; font-size: var(--t-row); }
 .sx-clock { display: flex; align-items: center; justify-content: center; gap: 8px; padding: 8px 0; }
-.sx-clock select { width: 96px; text-align: center; font-size: 20px; appearance: auto; }
+.sx-clock .picker { width: 96px; justify-content: center; font-size: 20px; }
 .sx-colon { font-size: 22px; font-weight: 600; }

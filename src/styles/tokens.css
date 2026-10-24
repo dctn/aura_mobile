@@ -184,3 +184,10 @@ select {
   font: inherit;
   color: inherit;
 }
+
+/* Built-in browser parts (scrollbars, form controls) follow the site's theme, not only the system's. */
+:root { color-scheme: light; }
+:root[data-theme='dark'] { color-scheme: dark; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) { color-scheme: dark; }
+}

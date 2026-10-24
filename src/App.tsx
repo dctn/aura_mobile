@@ -2,7 +2,7 @@
 // phone fills the screen first and the story follows.
 
 import { AuraProvider, useAura } from './app/store';
-import { NavProvider } from './app/nav';
+import { NavProvider, useNav } from './app/nav';
 import { Phone } from './app/Phone';
 import { changeCount } from './lib/local';
 import { Story, Hero } from './story/Story';
@@ -20,6 +20,17 @@ function ago(at: string | null, now: Date): string {
 /** "Live demo · read from AWS 1 min ago · your changes stay on this device · Reset". */
 function DemoChip() {
   const aura = useAura();
+  const nav = useNav();
+  // the app's own dialog, inside the phone; the browser's confirm() box would ignore the theme
+  const reset = () =>
+    nav.showAlert({
+      title: 'Reset your changes?',
+      body: 'Forget your changes and show the demo account as it is.',
+      buttons: [
+        { label: 'Cancel', role: 'cancel' },
+        { label: 'Reset', role: 'destructive', onPress: () => aura.edit.reset() },
+      ],
+    });
   const { status } = aura;
   const changes = changeCount(aura.local);
   const source =
@@ -33,7 +44,7 @@ function DemoChip() {
       {changes > 0 && (
         <>
           <span className="sep">·</span>
-          <button className="chiplink" onClick={() => window.confirm('Forget your changes and show the demo account as it is?') && aura.edit.reset()}>
+          <button className="chiplink" onClick={reset}>
             Reset {changes}
           </button>
         </>
