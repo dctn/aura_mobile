@@ -38,7 +38,7 @@ The API address comes from `VITE_DEMO_API` in `.env.local`. It's a public URL, n
 `.env.example`). Leave it unset and the site runs on the bundled sample.
 
 `dist/` is plain files, so any static host can serve it. GitHub Pages builds and publishes it on every push to
-`main` (`.github/workflows/pages.yml`).
+the `demo-website` branch (`.github/workflows/pages.yml`).
 
 ## Layout
 

@@ -1,10 +1,10 @@
-# Build the site and publish it to GitHub Pages on every push to main (or by hand from the Actions tab).
+# Build the site and publish it to GitHub Pages on every push to demo-website (or by hand from the Actions tab).
 # Actions are pinned to commits. The data URL is the public CloudFront address, not a secret.
 name: pages
 
 on:
   push:
-    branches: [main]
+    branches: [demo-website]
   workflow_dispatch:
 
 permissions:
