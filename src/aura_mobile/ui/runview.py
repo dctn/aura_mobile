@@ -1,8 +1,9 @@
 """The full-phone timer (RunView) and the MiniBar it hides into.
 
 A run covers the phone: Hide ⌄ and ⓘ at the top; a kicker, the title, a big clock, a line of text and a thin
-progress line in the middle; End and Pause at the bottom. Variants: night (black, for the nap), a breathing pacer
-(DX-07) and the wind-down's list for tomorrow (DX-03).
+progress line in the middle; round Pause and red ✕ (End) buttons at the bottom. Variants: night (black, for the nap),
+a breathing pacer (DX-07), the wind-down's list for tomorrow (DX-03) and open-ended (Flowtime: 0 minutes, the clock
+counts up). Search's modes open with a 3-2-1 :class:`CountdownView` first (:func:`countdown`).
 
 The view never blocks: :func:`start` returns at once and calls ``on_finish`` (the time ran out and the person closed
 the "Done" sheet, or chose "Mark as done") or ``on_cancel`` (End session). Hide slides it down into the MiniBar,
@@ -179,8 +180,12 @@ class RunView(QFrame):
         self.settled = False
         self._closing = False
         self.done_sheet: layers.Sheet | None = None
+        #: Flowtime: no length, the clock counts up from 0 and the time never runs out
+        self.open_ended = float(minutes) <= 0
         self._total = max(1.0, float(minutes) * 60)
         self._left = self._total
+        self._elapsed = 0.0
+        self._since = time.monotonic()
         self._ends = time.monotonic() + self._total
         self._breath = 0.0
         self._last_frame = time.monotonic()
@@ -203,7 +208,8 @@ class RunView(QFrame):
 
         word = "Breathe" if breathing else KIND_WORDS.get(kind, kind.title() or "Session")
         whole = int(minutes) if float(minutes).is_integer() else minutes
-        self.kicker = label(f"{word} · {whole} min".upper(), "kicker")
+        length = "open" if self.open_ended else f"{whole} min"
+        self.kicker = label(f"{word} · {length}".upper(), "kicker")
         self.kicker.setProperty("tint", self.tint)
         self.title = label(title, "runtitle", wrap=True)
         for w in (self.kicker, self.title):
@@ -234,6 +240,7 @@ class RunView(QFrame):
         bar_row = QHBoxLayout()
         bar_row.setContentsMargins(44, 0, 44, 0)
         self.bar = kit.Bar(accent if self.tint != "blue" else "accent", 4)
+        set_shown(self.bar, not self.open_ended)
         bar_row.addWidget(self.bar)
         lay.addLayout(bar_row)
         if panel is not None:
@@ -241,16 +248,22 @@ class RunView(QFrame):
             lay.addWidget(panel)
         lay.addStretch(3 if panel is None else 1)
 
+        # the Figma live view: a round grey pause and a red ✕; their text is the tooltip (and what tests read)
         buttons = QHBoxLayout()
-        buttons.setSpacing(12)
-        self.end_button = kit.text_button("End", "grey")
-        self.end_button.clicked.connect(self.ask_end)
-        self.pause_button = kit.text_button("Pause", "primary")
-        self.pause_button.setProperty("tint", self.tint)
+        buttons.setSpacing(40)
+        buttons.addStretch(1)
+        self.pause_button = kit.RoundButton("pause", 72, tip="Pause")
+        self.pause_button.setText("Pause")
         self.pause_button.clicked.connect(self.toggle_pause)
-        for b in (self.end_button, self.pause_button):
-            b.setMinimumHeight(50)
-            buttons.addWidget(b, 1)
+        self.end_button = kit.RoundButton("stop", 72, tip="End")
+        self.end_button.setText("End")
+        self.end_button.clicked.connect(self.ask_end)
+        if night:  # the theme's grey disappears on black
+            self.pause_button.LOOKS = {**kit.RoundButton.LOOKS, "pause": (t.NIGHT_FILL, t.NIGHT_FG, "bars2"),
+                                       "play": (t.NIGHT_FILL, t.NIGHT_FG, "playsolid")}
+        for b in (self.pause_button, self.end_button):
+            buttons.addWidget(b)
+        buttons.addStretch(1)
         lay.addLayout(buttons)
 
         self._tick_timer = QTimer(self)
@@ -274,10 +287,16 @@ class RunView(QFrame):
 
     @property
     def elapsed_seconds(self) -> int:
-        return int(self._total - self._left)
+        return int(self._elapsed if self.open_ended else self._total - self._left)
+
+    @property
+    def clock_seconds(self) -> float:
+        """What the clock shows: the time left, or (open-ended) the time so far."""
+        return self._elapsed if self.open_ended else self._left
 
     def start(self) -> None:
         self._ends = time.monotonic() + self._left
+        self._since = time.monotonic()
         self._tick_timer.start(TICK_MS)
         if self.circle is not None:
             self._last_frame = time.monotonic()
@@ -286,6 +305,12 @@ class RunView(QFrame):
 
     def _tick(self) -> None:
         if self.paused or self.ended:
+            return
+        if self.open_ended:
+            now = time.monotonic()
+            self._elapsed += now - self._since
+            self._since = now
+            self._render()
             return
         self._left = max(0.0, self._ends - time.monotonic())
         self._render()
@@ -303,7 +328,7 @@ class RunView(QFrame):
         self._last_frame = now
 
     def _render(self) -> None:
-        self.clock.setText(clock_text(self._left))
+        self.clock.setText(clock_text(self.clock_seconds))
         self.bar.set_fraction(1 - self._left / self._total)
         bar = getattr(self.window(), "minibar", None)
         if isinstance(bar, MiniBar) and bar.isVisible():
@@ -312,12 +337,19 @@ class RunView(QFrame):
     def toggle_pause(self) -> None:
         if self.ended:
             return
+        if self.open_ended and not self.paused:
+            self._elapsed += time.monotonic() - self._since
         self.paused = not self.paused
         if self.paused:
-            self._left = max(0.0, self._ends - time.monotonic())
+            if not self.open_ended:
+                self._left = max(0.0, self._ends - time.monotonic())
         else:
             self._ends = time.monotonic() + self._left
-        self.pause_button.setText("Resume" if self.paused else "Pause")
+            self._since = time.monotonic()
+        verb = "Resume" if self.paused else "Pause"
+        self.pause_button.setText(verb)
+        self.pause_button.setToolTip(verb)
+        self.pause_button.set_kind("play" if self.paused else "pause")
         self._render()
 
     def time_up(self) -> None:
@@ -344,10 +376,14 @@ class RunView(QFrame):
         """End early: an action sheet; "Mark as done" completes the run, "End session" stops it."""
         if self.ended:
             return
-        if not self.paused:
-            self._left = max(0.0, self._ends - time.monotonic())
-        choice = layers.ActionSheet.pick(self, f"End now? {minutes_left_text(self._left).capitalize()}.",
-                                         [("Mark as done", ""), ("End session", "danger")])
+        if self.open_ended:
+            self._tick()
+            title = f"End now? {clock_text(self._elapsed)} so far."
+        else:
+            if not self.paused:
+                self._left = max(0.0, self._ends - time.monotonic())
+            title = f"End now? {minutes_left_text(self._left).capitalize()}."
+        choice = layers.ActionSheet.pick(self, title, [("Mark as done", ""), ("End session", "danger")])
         if choice == 0:
             self.complete()
         elif choice == 1:
@@ -433,14 +469,63 @@ class RunView(QFrame):
 
     def show_info(self) -> None:
         whole = int(self.minutes) if float(self.minutes).is_integer() else self.minutes
-        parts = [f"{whole} minutes, timed on this phone and saved as a session."]
+        length = "Open-ended" if self.open_ended else f"{whole} minutes"
+        parts = [f"{length}, timed on this phone and saved as a session."]
         if self.note.text():
             parts.insert(0, self.note.text())
         parts.append("Hide keeps it running above the tabs. End lets you stop early or count it as done.")
         layers.Alert.tell(self, self.title_text, "\n\n".join(parts))
 
     def text(self) -> str:
-        return f"{self.title_text} · {clock_text(self._left)}"
+        return f"{self.title_text} · {clock_text(self.clock_seconds)}"
+
+
+# -- the 3-2-1 before a mode starts ----------------------------------------------------------------------------
+
+
+class CountdownView(QFrame):
+    """3-2-1 over the whole phone (the Figma countdown ring), then ``on_done``. Cancel drops it and starts nothing."""
+
+    def __init__(self, window: QWidget, seconds: int, on_done: Callable[[], None]) -> None:
+        super().__init__(window)
+        self.setObjectName("runview")
+        self.on_done: Callable[[], None] | None = on_done
+        self.seconds = seconds
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(t.GUTTER, 14, t.GUTTER, 48)
+        lay.addStretch(1)
+        self.ring = kit.CountdownRing(200, 12)
+        self.ring.finished.connect(self._finished)
+        lay.addWidget(self.ring, 0, Qt.AlignmentFlag.AlignHCenter)
+        lay.addStretch(1)
+        self.cancel_button = kit.text_button("Cancel", "link")
+        self.cancel_button.clicked.connect(self.cancel)
+        lay.addWidget(self.cancel_button, 0, Qt.AlignmentFlag.AlignHCenter)
+        self.setGeometry(0, 0, window.width(), window.height())
+        self.hide()
+
+    def start(self) -> None:
+        self.show()
+        self.raise_()
+        self.ring.start(self.seconds)
+
+    def _finished(self) -> None:
+        callback, self.on_done = self.on_done, None
+        self._close()
+        if callback is not None:
+            callback()
+
+    def cancel(self) -> None:
+        self.ring.stop()
+        self.on_done = None
+        self._close()
+
+    def _close(self) -> None:
+        window = self.window()
+        if getattr(window, "countdown_view", None) is self:
+            window.countdown_view = None
+        self.hide()
+        self.deleteLater()
 
 
 class _CheckBadge(QWidget):
@@ -542,8 +627,9 @@ class MiniBar(QFrame):
             self.tile.name, self.tile.accent = ("wind" if run.breathing else "sleep" if run.night else "timer",
                                                 run.accent)
             self.title.setText(run.title_text)
-            self.sub.setText("Paused · " + clock_text(run.left_seconds) if run.paused
-                             else f"{clock_text(run.left_seconds)} left")
+            clock = clock_text(run.clock_seconds)
+            self.sub.setText("Paused · " + clock if run.paused
+                             else f"Running · {clock}" if run.open_ended else f"{clock} left")
             self.pause_button.name = "play" if run.paused else "pause"
             self.pause_button.setToolTip("Resume" if run.paused else "Pause")
             self.pause_button.show()
@@ -593,8 +679,8 @@ class MiniBar(QFrame):
         run = self.run()
         if run is not None:
             run.expand()
-        elif self.session is not None and hasattr(self.host, "show_tab"):
-            self.host.show_tab(2)  # Search lists the running session with its buttons
+        elif self.session is not None and hasattr(self.host, "open_sessions"):
+            self.host.open_sessions()  # Search → Sessions has the running session with its buttons
 
     def eventFilter(self, obj: QObject, event: QEvent) -> bool:
         if event.type() == QEvent.Type.Resize and obj is self.host:
@@ -695,6 +781,20 @@ def _room_for_bar(window: QWidget, on: bool) -> None:
         page = getattr(window, name, None)
         if hasattr(page, "set_bottom_room"):
             page.set_bottom_room(room)
+
+
+def countdown(parent: QWidget | None, on_done: Callable[[], None], seconds: int = 3) -> CountdownView:
+    """3-2-1 over the phone that holds ``parent``, then ``on_done``. Returns at once."""
+    window = phone_of(parent)
+    if window is None:
+        raise RuntimeError("No phone window to count down in")
+    old = getattr(window, "countdown_view", None)
+    if isinstance(old, CountdownView):
+        old.cancel()
+    view = CountdownView(window, seconds, on_done)
+    window.countdown_view = view
+    view.start()
+    return view
 
 
 def start(parent: QWidget | None, title: str, minutes: float, *, note: str = "", accent: str = t.RECOVERY,

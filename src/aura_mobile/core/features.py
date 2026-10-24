@@ -64,6 +64,26 @@ class Feature:
     def has_alert(self) -> bool:
         return self.lab is not LabMode.ACCOUNT
 
+    @property
+    def reason(self) -> str:
+        """Two or three words under the pill's title ("Short night")."""
+        return SHORT[self.id][0]
+
+    @property
+    def verb(self) -> str:
+        """The one-word green button ("Nap")."""
+        return SHORT[self.id][1]
+
+    @property
+    def metric(self) -> str:
+        """The daily metric column the feature reads, for the card under its pill ("" when none)."""
+        return SHORT[self.id][2]
+
+    @property
+    def icon(self) -> str:
+        """The glyph name in ``ui/icons.py``."""
+        return SHORT[self.id][3]
+
 
 FEATURES: tuple[Feature, ...] = (
     Feature("DX-01", "Sleep-debt payback", "Sleep", "sleep",
@@ -148,6 +168,28 @@ FEATURES: tuple[Feature, ...] = (
             Action.RECONNECT, "Reconnect the band", "day not computed and no fresh day before it",
             LabMode.QUIET_DAY),
 )
+
+#: id -> (reason, verb, metric column, icon): the short copy of the simple screens
+SHORT: dict[str, tuple[str, str, str, str]] = {
+    "DX-01": ("Sleep debt", "Bedtime", "sleepDebtMin14", "alarm"),
+    "DX-02": ("Wake time drifts", "Set alarm", "wakeRegularityMin", "sunrise"),
+    "DX-03": ("Slow to sleep", "Wind down", "sleepLatencyMin", "evening"),
+    "DX-04": ("Short night", "Nap", "totalSleepMin", "sleep"),
+    "DX-05": ("Low recovery", "Recover", "recoveryScore", "recover"),
+    "DX-06": ("Getting ill?", "Rest", "restingHrBpm", "heart"),
+    "DX-07": ("High stress", "Breathe", "stressDurationMin", "wind"),
+    "DX-09": ("Behind on movement", "Add walks", "weeklyActiveMinutes", "walk"),
+    "PB-01": ("Body clock late", "Plan light", "circadianAlignmentPct", "sun"),
+    "PB-02": ("Burnout rising", "Plan rest", "burnoutIndexScore", "flame"),
+    "PB-03": ("Sitting too long", "Move", "longestSittingBoutMin", "move"),
+    "PB-04": ("Fitness dropping", "Plan", "vo2max", "dumbbell"),
+    "PB-05": ("Worth a check", "Book", "spo2DipEvents", "shield"),
+    "NI-02": ("Low mood", "Check in", "", "bubble"),
+    "NI-03": ("Little contact", "Log", "", "people"),
+    "NI-04": ("Drink water", "Drink", "", "drop"),
+    "BS-01": ("Finish profile", "Open", "", "me"),
+    "BS-02": ("Not synced", "Reconnect", "", "band"),
+}
 
 BY_ID: dict[str, Feature] = {f.id: f for f in FEATURES}
 BY_ACTION: dict[str, Feature] = {f.action.value: f for f in FEATURES}

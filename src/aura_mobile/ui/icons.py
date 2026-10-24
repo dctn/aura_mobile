@@ -85,6 +85,11 @@ PATHS: dict[str, str] = {
     "out": '<path d="M14 4.5h4.5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1H14M10 16l4-4-4-4M14 12H4"/>',
     "trash": '<path d="M4.5 6.5h15M9.5 6.5V4h5v2.5M6.5 6.5l1 14h9l1-14"/>',
     "export": '<path d="M12 3.5v11M8 7.5l4-4 4 4M5 13.5v6h14v-6"/>',
+    "flag": '<path d="M6 21V4M6 4.5h11.5l-2.5 4.5 2.5 4.5H6"/>',
+    "bars2": '<path d="M9 6v12M15 6v12"/>',
+    "playsolid": '<path d="M8 5.5v13l10.5-6.5Z" fill="currentColor"/>',
+    "trend": '<path d="M3.5 17 9.5 11l4 4 7-7.5M15 7.5h5.5V13"/>',
+    "pin": '<path d="M12 21v-6M7 15h10l-2-3.5V5.5h1.5v-2h-9v2H9v6Z"/>',
 }
 
 

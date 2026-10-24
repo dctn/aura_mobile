@@ -1,5 +1,6 @@
 
-"""The shell (floating tab bar, pushed pages, theme) and Home (coach card, quick sheet, calendar, tasks, pins)."""
+"""The shell (floating tab bar, pushed pages, theme) and Home (alert pills and cards, Burnout, quick sheet,
+events, tasks, pins, the band line)."""
 
 from __future__ import annotations
 
@@ -78,16 +79,73 @@ def test_not_now_hides_the_alert_until_a_new_one(phone):
     window, ctx, api = phone
     home = window.home
     assert "Short night" in home.notice.text()
-    home.notice.dismissed.emit()
+    home._not_now()  # "Not now" in the pill's ⓘ sheet
     assert "Short night" not in home.notice.text()
-    assert "Nothing needed" in home.notice.text()
+    assert "All clear" in home.notice.text() and home.notice.verb.isHidden()
     api.new_alerts.append({"id": "alert-new-DX-07", "featureId": "DX-07", "date": TODAY.isoformat(),
                            "done": False, "title": "Time for a stress reset", "priority": "high"})
     from aura_mobile.ui import context as area
 
     ctx.notify(area.ALERTS)
     settle()
-    assert "Time for a stress reset" in home.notice.text()
+    assert home.notice.text() == "Stress reset · High stress · Breathe"
+
+
+def test_alert_pill_has_its_metric_card_and_verb(phone, monkeypatch):
+    window, _ctx, _api = phone
+    from aura_mobile.ui import actions
+
+    home = window.home
+    assert home.notice.text() == "Short-night nap · Short night · Nap"
+    card = home.alert_cards[0]
+    assert not card.isHidden() and card.name.text() == "Sleep" and card.big.text() == "5.6"
+    assert len(card.bars.values) == 14
+    assert home.pills[1].isHidden() or home.pills[1].parentWidget().isHidden()  # one open alert, one pill
+    performed: list[str] = []
+    monkeypatch.setattr(actions, "perform", lambda ctx, parent, alert: performed.append(alert["featureId"]))
+    home.notice.verb.click()
+    assert performed == ["DX-04"]
+
+
+def test_pill_tap_opens_a_short_sheet_and_not_now_snoozes(phone, monkeypatch):
+    window, _ctx, _api = phone
+    from aura_mobile.ui.pages.home import AlertSheet
+
+    home = window.home
+    seen: list[str] = []
+
+    def later(sheet):
+        seen.extend(w.text() for w in sheet.findChildren(type(sheet.title)))
+        assert sheet.footer_button.text() == "Nap"
+        sheet._later()
+        return QDialog.DialogCode.Rejected
+
+    monkeypatch.setattr(AlertSheet, "exec", later)
+    home.notice.clicked.emit()
+    assert any("Short-night nap" in x for x in seen) and any("10-min nap timer" in x for x in seen)
+    assert not any("DX-04" in x for x in seen)
+    assert "All clear" in home.notice.text()
+
+
+def test_burnout_pill_and_cards_open_their_metric(phone):
+    window, _ctx, _api = phone
+    home = window.home
+    assert home.burnout.text() == "Burnout risk · Moderate · See more"  # score 55
+    cards = home.burnout_cards
+    assert [c.name.text() for c in cards.values()] == ["Avg sleep", "Late nights", "Recovery"]
+    assert cards["avg_sleep"].big.text() == "6.1" and cards["late_nights"].big.text() == "3"
+    opened: list[str] = []
+    home.on_metric = opened.append
+    home.burnout.verb.click()
+    cards["late_nights"].clicked.emit()
+    home.movement.clicked.emit()
+    assert opened == ["burnout", "late_nights", "movement"]
+
+
+def test_band_line_is_one_short_line(phone):
+    window, _ctx, _api = phone
+    assert window.home.band_row.text() == "Not synced"  # the fake never synced from this phone
+    assert window.home.band_row.reconnect.text() == "Reconnect"
 
 
 def test_quick_sheet_logs_water_and_runs_steps_after_closing(phone, monkeypatch):

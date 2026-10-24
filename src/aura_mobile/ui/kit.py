@@ -8,6 +8,7 @@ at paint time, so a theme switch is just a restyle and a repaint.
 from __future__ import annotations
 
 from collections.abc import Sequence
+from typing import ClassVar
 
 from PyQt6.QtCore import QEasingCurve, QPointF, QRectF, QSize, Qt, QTime, QVariantAnimation, pyqtSignal
 from PyQt6.QtGui import QColor, QPainter, QPen
@@ -451,11 +452,13 @@ class Ring(QWidget):
 class Bars(QWidget):
     """A small bar chart: dim bars, the highlighted one in full colour, an optional dashed goal line."""
 
-    def __init__(self, height: int = 110, key: str = "accent") -> None:
+    def __init__(self, height: int = 110, key: str = "accent", *, track: bool = False) -> None:
         super().__init__()
         self.setFixedHeight(height)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.key = key
+        #: the Figma look: every bar a full-height rounded track, filled from the bottom, no gridlines
+        self.track = track
         self.values: list[float] = []
         self.labels: list[str] = []
         self.goal: float | None = None
@@ -470,8 +473,38 @@ class Bars(QWidget):
     def paintEvent(self, _event) -> None:
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        label_h = 16 if self.labels else 0
-        h = self.height() - label_h - 2
+        label_h = 16 if self.labels and not self.track else 0
+        h = self.height() - label_h - (0 if self.track else 2)
+        if self.track:
+            self._paint_tracks(p, h)
+        else:
+            self._paint_bars(p, h, label_h)
+
+    def _paint_tracks(self, p: QPainter, h: float) -> None:
+        n = len(self.values)
+        if not n:
+            return
+        top = max([*self.values, 1e-9])
+        slot = self.width() / n
+        bar_w = min(14.0, slot * 0.62)
+        accent = colour(self.key)
+        soft = QColor(accent)
+        soft.setAlphaF(0.30 if t.current().dark else 0.16)
+        p.setPen(Qt.PenStyle.NoPen)
+        r = bar_w / 2
+        for i, v in enumerate(self.values):
+            x = i * slot + (slot - bar_w) / 2
+            p.setBrush(soft)
+            p.drawRoundedRect(QRectF(x, 0, bar_w, h), r, r)
+            bh = max(bar_w, h * v / top) if v > 0 else 0
+            if bh:
+                c = QColor(accent)
+                if self.highlight >= 0 and i != self.highlight:
+                    c.setAlphaF(0.85)
+                p.setBrush(c)
+                p.drawRoundedRect(QRectF(x, h - bh, bar_w, bh), r, r)
+
+    def _paint_bars(self, p: QPainter, h: float, label_h: int) -> None:
         w = self.width()
         top = max([*self.values, self.goal or 0, 1.0]) * 1.1
         p.setPen(QPen(colour("sep"), 1))
@@ -675,6 +708,430 @@ class CoachCard(Clickable):
         return "\n".join(x for x in (self.say.text(), self.why.text()) if x)
 
 
+# -- the Figma look ---------------------------------------------------------------------------------------------
+
+
+class Disc(QWidget):
+    """A round icon: white on a feature colour (the pill's lead icon), or the colour on grey with ``soft``."""
+
+    def __init__(self, name: str, accent: str = "accent", size: int = 36, *, soft: bool = False) -> None:
+        super().__init__()
+        self.name, self.accent, self.soft = name, accent, soft
+        self.setFixedSize(size, size)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+
+    def set_icon(self, name: str, accent: str | None = None) -> None:
+        self.name = name
+        if accent:
+            self.accent = accent
+        self.update()
+
+    def paintEvent(self, _event) -> None:
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setPen(Qt.PenStyle.NoPen)
+        tone = colour(self.accent)
+        if self.soft:
+            tone.setAlphaF(0.18)
+        p.setBrush(tone)
+        p.drawEllipse(QRectF(self.rect()))
+        side = round(self.width() * 0.56)
+        off = (self.width() - side) / 2
+        ink = colour(self.accent) if self.soft else QColor("white")
+        p.drawPixmap(QPointF(off, off), icons.pixmap(self.name, ink, side, stroke=2.0))
+
+
+class ActionPill(Clickable):
+    """The black alert pill: a round icon, the title over a two-word reason, and one green verb button.
+
+    ``act`` is the green button, ``done`` the small check (shown with ``with_done``); a tap anywhere else emits
+    ``clicked``, which screens use for the ⓘ sheet."""
+
+    act = pyqtSignal()
+    done = pyqtSignal()
+
+    def __init__(self, icon: str = "bell", title: str = "", reason: str = "", verb: str = "", *,
+                 accent: str = "accent", with_done: bool = False) -> None:
+        super().__init__("pill")
+        self.setMinimumHeight(64)
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(12, 10, 12, 10)
+        lay.setSpacing(12)
+        self.disc = Disc(icon, accent, 40)
+        lay.addWidget(self.disc)
+        text = QVBoxLayout()
+        text.setSpacing(0)
+        self.title = label(title, "pilltitle", wrap=True)
+        self.reason = label(reason, "pillreason", wrap=True)
+        text.addWidget(self.title)
+        text.addWidget(self.reason)
+        lay.addLayout(text, 1)
+        self.check = IconButton("check", "iconbtn", key="pill_ink2", size=20, tip="Done")
+        self.check.clicked.connect(self.done)
+        set_shown(self.check, with_done)
+        lay.addWidget(self.check)
+        self.verb = text_button(verb, "go")
+        self.verb.clicked.connect(self.act)
+        set_shown(self.verb, bool(verb))
+        lay.addWidget(self.verb)
+        set_shown(self.reason, bool(reason))
+
+    def set_content(self, icon: str, title: str, reason: str = "", verb: str = "", *,
+                    accent: str = "accent") -> None:
+        self.disc.set_icon(icon, accent)
+        self.title.setText(title)
+        self.reason.setText(reason)
+        set_shown(self.reason, bool(reason))
+        self.verb.setText(verb)
+        set_shown(self.verb, bool(verb))
+
+    def text(self) -> str:
+        return " · ".join(x for x in (self.title.text(), self.reason.text(), self.verb.text()) if x)
+
+
+class MetricCard(Clickable):
+    """The light metric card: the label and "14 days", a big number and unit, then a row of rounded bar tracks."""
+
+    def __init__(self, name: str, unit: str = "", *, key: str = "accent", when: str = "14 days",
+                 chart_height: int = 64) -> None:
+        super().__init__("mcard")
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(18, 14, 18, 16)
+        lay.setSpacing(2)
+        head = QHBoxLayout()
+        self.name = label(name, "mlabel")
+        head.addWidget(self.name, 1)
+        self.when = label(when, "mwhen")
+        head.addWidget(self.when)
+        lay.addLayout(head)
+        big = QHBoxLayout()
+        big.setSpacing(4)
+        self.big = label("–", "mbig")
+        self.unit = label(unit, "munit")
+        set_shown(self.unit, bool(unit))
+        big.addWidget(self.big, 0, Qt.AlignmentFlag.AlignBottom)
+        big.addWidget(self.unit, 0, Qt.AlignmentFlag.AlignBottom)
+        big.addStretch(1)
+        lay.addLayout(big)
+        lay.addSpacing(6)
+        self.bars = Bars(chart_height, key, track=True)
+        lay.addWidget(self.bars)
+
+    def set_series(self, values: Sequence[float], big: str, unit: str | None = None, *,
+                   when: str | None = None) -> None:
+        """``values`` oldest first; ``big`` is the number to show (usually the newest, or an average)."""
+        self.big.setText(big or "–")
+        if unit is not None:
+            self.unit.setText(unit)
+            set_shown(self.unit, bool(unit))
+        if when is not None:
+            self.when.setText(when)
+        self.bars.set_data(values)
+
+    def text(self) -> str:
+        return " ".join(x for x in (self.name.text(), self.big.text(), self.unit.text()) if x)
+
+
+class DayStrip(QWidget):
+    """The black strip of five days, today in the middle as a green circle. Display only."""
+
+    def __init__(self, today=None, days: int = 5) -> None:
+        super().__init__()
+        self.setFixedHeight(64)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.count = days
+        self.today = today
+
+    def set_today(self, today) -> None:
+        self.today = today
+        self.update()
+
+    def days(self) -> list:
+        from datetime import date, timedelta
+
+        today = self.today or date.today()
+        half = self.count // 2
+        return [today + timedelta(days=i - half) for i in range(self.count)]
+
+    def paintEvent(self, _event) -> None:
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        pal = t.current()
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(t.qcolor(pal.pill))
+        p.drawRoundedRect(QRectF(self.rect()), t.R_BIG, t.R_BIG)
+        days = self.days()
+        slot = self.width() / len(days)
+        font = p.font()
+        for i, d in enumerate(days):
+            cell = QRectF(i * slot, 0, slot, self.height())
+            is_today = i == len(days) // 2
+            if is_today:
+                side = 46
+                p.setPen(Qt.PenStyle.NoPen)
+                p.setBrush(t.qcolor(pal.go))
+                p.drawEllipse(QRectF(cell.center().x() - side / 2, cell.center().y() - side / 2, side, side))
+            font.setPixelSize(t.SMALL)
+            font.setBold(False)
+            p.setFont(font)
+            p.setPen(t.qcolor(pal.go_ink if is_today else pal.pill_ink2))
+            p.drawText(QRectF(cell.left(), cell.top() + 12, slot, 14), Qt.AlignmentFlag.AlignCenter, d.strftime("%a"))
+            font.setPixelSize(t.ROW + 1)
+            font.setBold(True)
+            p.setFont(font)
+            p.setPen(t.qcolor(pal.go_ink if is_today else pal.pill_ink))
+            p.drawText(QRectF(cell.left(), cell.top() + 28, slot, 22), Qt.AlignmentFlag.AlignCenter, str(d.day))
+
+
+class CategoryRow(Row):
+    """A Search category: a coloured glyph (no tile), one word and a chevron."""
+
+    def __init__(self, title: str, icon: str, accent: str = "accent", value: str = "") -> None:
+        super().__init__(title, value=value, chevron=True)
+        self.has_tile = True
+        self.glyph = Glyph(icon, 24, accent, stroke=2.0)
+        holder = QWidget()
+        holder.setFixedSize(29, 29)
+        self.glyph.setParent(holder)
+        self.glyph.move(2, 2)
+        self.layout().insertWidget(0, holder)
+
+
+class StartPill(QPushButton):
+    """The big black "Start walking" pill with a green chevron disc on the left. A click, not a slide."""
+
+    def __init__(self, text: str = "Start") -> None:
+        super().__init__(text)
+        self.setProperty("class", "start")
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+    def paintEvent(self, event) -> None:
+        super().paintEvent(event)
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setPen(Qt.PenStyle.NoPen)
+        pal = t.current()
+        p.setBrush(t.qcolor(pal.go) if self.isEnabled() else colour("fill2"))
+        side = self.height() - 12
+        p.drawEllipse(QRectF(6, 6, side, side))
+        px = icons.pixmap("chevron", t.qcolor(pal.go_ink), 24, stroke=2.6)
+        p.drawPixmap(QPointF(6 + (side - 24) / 2, 6 + (side - 24) / 2), px)
+
+
+class CountdownRing(Ring):
+    """3-2-1 before a timer starts: the number in the middle, the ring emptying each second. ``finished`` at 0."""
+
+    finished = pyqtSignal()
+
+    def __init__(self, size: int = 220, stroke: int = 14, key: str = "go") -> None:
+        super().__init__(size, stroke, key)
+        from PyQt6.QtCore import QTimer
+
+        self.left = 0
+        self.total = 0
+        self._timer = QTimer(self)
+        self._timer.setInterval(1000)
+        self._timer.timeout.connect(self.tick)
+
+    def start(self, seconds: int = 3) -> None:
+        self.left = self.total = max(1, seconds)
+        self.set_fraction(1.0)
+        self._timer.start()
+
+    def stop(self) -> None:
+        self._timer.stop()
+
+    def tick(self) -> None:
+        self.left = max(0, self.left - 1)
+        self.set_fraction(self.left / self.total if self.total else 0)
+        if self.left == 0:
+            self._timer.stop()
+            self.finished.emit()
+
+    def paintEvent(self, event) -> None:
+        super().paintEvent(event)
+        if self.left <= 0:
+            return
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        font = p.font()
+        font.setPixelSize(round(self.width() * 0.36))
+        font.setBold(True)
+        p.setFont(font)
+        p.setPen(colour("label"))
+        p.drawText(QRectF(self.rect()), Qt.AlignmentFlag.AlignCenter, str(self.left))
+
+
+class RoundButton(QAbstractButton):
+    """The run view's big round buttons: ``flag`` and ``pause`` on grey, ``stop`` as a red ✕."""
+
+    #: kind: (background, ink, icon)
+    LOOKS: ClassVar[dict[str, tuple[str, str, str]]] = {
+        "flag": ("fill", "label", "flag"),
+        "pause": ("fill", "label", "bars2"),
+        "play": ("go", "go_ink", "playsolid"),
+        "stop": ("bad", "white", "xmark"),
+    }
+
+    def __init__(self, kind: str = "pause", size: int = 64, *, tip: str = "") -> None:
+        super().__init__()
+        self.kind = kind
+        self.setFixedSize(size, size)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        if tip:
+            self.setToolTip(tip)
+
+    def set_kind(self, kind: str) -> None:
+        self.kind = kind
+        self.update()
+
+    def paintEvent(self, _event) -> None:
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        bg, ink, icon = self.LOOKS.get(self.kind, self.LOOKS["pause"])
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(colour(bg))
+        p.drawEllipse(QRectF(self.rect()))
+        side = round(self.width() * 0.44)
+        off = (self.width() - side) / 2
+        p.drawPixmap(QPointF(off, off), icons.pixmap(icon, colour(ink), side, stroke=2.4))
+
+
+class IconTile(Clickable):
+    """A big rounded card with a coloured glyph, one word and a small note (presets, modes, logging)."""
+
+    def __init__(self, name: str, note: str = "", *, icon: str = "circle", accent: str = "accent") -> None:
+        super().__init__("bigcard")
+        self.setMinimumHeight(104)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(16, 14, 16, 14)
+        lay.setSpacing(2)
+        self.disc = Disc(icon, accent, 40, soft=True)
+        lay.addWidget(self.disc)
+        lay.addStretch(1)
+        self.name = label(name, "tilename")
+        self.note = label(note, "tilesub")
+        set_shown(self.note, bool(note))
+        lay.addWidget(self.name)
+        lay.addWidget(self.note)
+
+    def text(self) -> str:
+        return " · ".join(x for x in (self.name.text(), self.note.text()) if x)
+
+
+def section(text: str, trailing: QWidget | None = None) -> QWidget:
+    """A bold section title ("Today", "Burnout") with an optional link on the right."""
+    w = QWidget()
+    lay = QHBoxLayout(w)
+    lay.setContentsMargins(4, 6, 4, 0)
+    lay.addWidget(label(text, "section"), 1)
+    if trailing is not None:
+        lay.addWidget(trailing)
+    return w
+
+
+class FaceScale(QWidget):
+    """Five tappable faces, sad to happy (mood, connection). ``picked`` sends 1-5; the ``value`` face is filled."""
+
+    picked = pyqtSignal(int)
+
+    TINTS: ClassVar[tuple[str, ...]] = ("workout", "stress", "focus", "teal", "recovery")
+
+    def __init__(self, size: int = 46) -> None:
+        super().__init__()
+        self.face = size
+        self.value: int | None = None
+        self.setFixedHeight(size + 4)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+    def set_value(self, value: int | None) -> None:
+        self.value = value
+        self.update()
+
+    def rect_of(self, i: int) -> QRectF:
+        slot = self.width() / 5
+        return QRectF(i * slot + (slot - self.face) / 2, 2, self.face, self.face)
+
+    def paintEvent(self, _event) -> None:
+        from PyQt6.QtGui import QPainterPath
+
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        for i, tint in enumerate(self.TINTS):
+            r = self.rect_of(i)
+            tone = colour(tint)
+            on = self.value == i + 1
+            fill = QColor(tone)
+            if not on:
+                fill.setAlphaF(0.30 if t.current().dark else 0.18)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(fill)
+            p.drawEllipse(r)
+            ink = QColor("white") if on else tone
+            c, rad = r.center(), r.width() / 2
+            p.setBrush(ink)
+            for dx in (-0.3, 0.3):
+                p.drawEllipse(QPointF(c.x() + dx * rad, c.y() - 0.18 * rad), 0.09 * rad, 0.09 * rad)
+            smile = (i - 2) / 2 * 0.32 * rad
+            mouth = QPainterPath(QPointF(c.x() - 0.36 * rad, c.y() + 0.30 * rad - smile / 2))
+            mouth.quadTo(QPointF(c.x(), c.y() + 0.30 * rad + smile), QPointF(c.x() + 0.36 * rad,
+                                                                            c.y() + 0.30 * rad - smile / 2))
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.setPen(QPen(ink, max(2.0, rad * 0.09), cap=Qt.PenCapStyle.RoundCap))
+            p.drawPath(mouth)
+
+    def mouseReleaseEvent(self, event) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            pos = event.position()
+            for i in range(5):
+                if self.rect_of(i).adjusted(-6, -2, 6, 2).contains(pos):
+                    self.picked.emit(i + 1)
+                    break
+        super().mouseReleaseEvent(event)
+
+
+class DropRow(QWidget):
+    """A row of water drops, the first ``filled`` solid and the rest faint: glasses drunk against the goal."""
+
+    def __init__(self, accent: str = "blue", size: int = 26) -> None:
+        super().__init__()
+        self.accent, self.size_ = accent, size
+        self.total = self.filled = 0
+        self.setFixedHeight(size + 4)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+
+    def set_counts(self, filled: int, total: int) -> None:
+        self.filled, self.total = max(0, filled), max(0, total)
+        self.update()
+
+    def paintEvent(self, _event) -> None:
+        n = max(self.total, self.filled)
+        if not n:
+            return
+        from PyQt6.QtGui import QPainterPath
+
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        side = min(self.size_, int(self.width() / n) - 4)
+        step = min(self.width() / n, side + 10)
+        faint = colour(self.accent)
+        faint.setAlphaF(0.30 if t.current().dark else 0.18)
+        # a drop in a 24-unit box, filled: solid for a glass drunk, faint for one to go
+        drop = QPainterPath(QPointF(12, 2.5))
+        drop.cubicTo(QPointF(14.5, 5.5), QPointF(19, 10), QPointF(19, 14.5))
+        drop.arcTo(QRectF(5, 7.5, 14, 14), 0, -180)
+        drop.cubicTo(QPointF(5, 10), QPointF(9.5, 5.5), QPointF(12, 2.5))
+        p.setPen(Qt.PenStyle.NoPen)
+        for i in range(n):
+            p.save()
+            p.translate(i * step, 2)
+            p.scale(side / 24, side / 24)
+            p.setBrush(colour(self.accent) if i < self.filled else faint)
+            p.drawPath(drop)
+            p.restore()
+
+
 # -- nav bar ----------------------------------------------------------------------------------------------------
 
 
@@ -725,3 +1182,131 @@ class NavBar(QFrame):
         self.setProperty("compact", on)
         set_shown(self.title, on)
         repolish(self)
+
+
+# -- the Figma look: settings lists and the Test lab --------------------------------------------------------------
+
+
+class TitledGroup(Group):
+    """The Figma settings list: a bold title-case heading over a white radius-24 list, no footer."""
+
+    def __init__(self, heading: str = "", *, trailing: QWidget | None = None) -> None:
+        super().__init__(heading, trailing=trailing)
+        self.heading.setText(heading)
+        self.heading.setProperty("class", "grouptitle")
+        self.list.setProperty("class", "biglist")
+        self.layout().itemAt(0).widget().layout().setContentsMargins(4, 0, 4, 0)
+
+
+class GlyphRow(Row):
+    """A row led by a coloured glyph (no tile): the alert switches, the lab's features, the ⓘ sheets' lines."""
+
+    def __init__(self, title: str, icon: str, accent: str = "accent", *, value: str = "",
+                 trailing: QWidget | None = None, chevron: bool = False, wrap: bool = False) -> None:
+        super().__init__(title, value=value, trailing=trailing, chevron=chevron, wrap=wrap)
+        self.has_tile = True
+        self.glyph = Glyph(icon, 24, accent, stroke=2.0)
+        holder = QWidget()
+        holder.setFixedSize(29, 29)
+        self.glyph.setParent(holder)
+        self.glyph.move(2, 2)
+        self.layout().insertWidget(0, holder, 0, Qt.AlignmentFlag.AlignTop if wrap else Qt.AlignmentFlag.AlignVCenter)
+
+
+class Dot(QWidget):
+    """A status dot: ``good`` green, ``bad`` red, ``warn`` orange, ``busy`` accent, anything else grey."""
+
+    KEYS: ClassVar[dict[str, str]] = {"good": "good", "bad": "bad", "warn": "warn", "busy": "accent"}
+
+    def __init__(self, size: int = 10) -> None:
+        super().__init__()
+        self.tone = ""
+        self.setFixedSize(size, size)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+
+    def set_tone(self, tone: str) -> None:
+        self.tone = tone
+        self.update()
+
+    def paintEvent(self, _event) -> None:
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(colour(self.KEYS.get(self.tone, "label3")))
+        p.drawEllipse(QRectF(self.rect()))
+
+
+class CountRing(Ring):
+    """A ring with "3 / 16" in the middle."""
+
+    def __init__(self, size: int = 104, stroke: int = 10, key: str = "go") -> None:
+        super().__init__(size, stroke, key)
+        self.done, self.total = 0, 0
+
+    def set_count(self, done: int, total: int) -> None:
+        self.done, self.total = done, total
+        self.set_fraction(done / total if total else 0.0)
+
+    def paintEvent(self, event) -> None:
+        super().paintEvent(event)
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        font = p.font()
+        font.setPixelSize(round(self.width() * 0.28))
+        font.setBold(True)
+        p.setFont(font)
+        big = p.fontMetrics()
+        number = str(self.done)
+        small_font = p.font()
+        small_font.setPixelSize(round(self.width() * 0.13))
+        small_font.setBold(False)
+        rest = f" / {self.total}"
+        p.setFont(small_font)
+        small_w = p.fontMetrics().horizontalAdvance(rest)
+        x = (self.width() - big.horizontalAdvance(number) - small_w) / 2
+        base = self.height() / 2 + big.capHeight() / 2
+        p.setFont(font)
+        p.setPen(colour("label"))
+        p.drawText(QPointF(x, base), number)
+        p.setFont(small_font)
+        p.setPen(colour("label2"))
+        p.drawText(QPointF(x + big.horizontalAdvance(number), base), rest)
+
+
+class StatusChip(QWidget):
+    """A feature's glyph and code on a pill: grey ``wait``, green ``good``, red ``bad``."""
+
+    LOOKS: ClassVar[dict[str, tuple[str, str]]] = {
+        "wait": ("fill", "label2"), "good": ("go", "go_ink"), "bad": ("bad", "white")}
+
+    def __init__(self, code: str, icon: str) -> None:
+        super().__init__()
+        self.code, self.icon, self.state = code, icon, "wait"
+        self.setFixedHeight(32)
+        self.setMinimumWidth(70)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setToolTip(code)
+
+    def set_state(self, state: str) -> None:
+        self.state = state if state in self.LOOKS else "wait"
+        self.update()
+
+    def paintEvent(self, _event) -> None:
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        bg, ink = self.LOOKS[self.state]
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(colour(bg))
+        r = self.height() / 2
+        p.drawRoundedRect(QRectF(self.rect()), r, r)
+        font = p.font()
+        font.setPixelSize(t.SMALL + 1)
+        font.setBold(True)
+        p.setFont(font)
+        side = 15
+        text_w = p.fontMetrics().horizontalAdvance(self.code)
+        x = (self.width() - side - 4 - text_w) / 2
+        p.drawPixmap(QPointF(x, (self.height() - side) / 2), icons.pixmap(self.icon, colour(ink), side, stroke=2.2))
+        p.setPen(colour(ink))
+        p.drawText(QRectF(x + side + 4, 0, text_w + 2, self.height()),
+                   Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, self.code)

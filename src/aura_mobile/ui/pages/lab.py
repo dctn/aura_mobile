@@ -1,5 +1,9 @@
-"""Test lab: one list per alert feature, and one month that raises them together. Run sends the synthetic band days
-to dev, then the page watches ``GET /v1/alerts`` until the alerts show (or gives up).
+"""Test lab: one month that raises the alerts together, and one line per alert feature. Run sends the synthetic band
+days to dev, then the page watches ``GET /v1/alerts`` until the alerts show (or gives up).
+
+The month sits on top as a ring ("3 / 16") with a chip per alert; each feature is one line (glyph, name, a status
+dot, Run). Everything else a row says (the scenario, the rule, the next dates, what AWS computed) is in the sheet a
+tap on it opens; the how-it-works is behind the ⓘ.
 
 Only one run at a time: they share the band's upload threads and the 5-computes-an-hour cap. Watching is a single
 page timer that asks about every run still waiting.
@@ -10,9 +14,9 @@ from __future__ import annotations
 from datetime import UTC, date, datetime, timedelta
 
 from PyQt6.QtCore import QTimer
-from PyQt6.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QGridLayout, QHBoxLayout, QVBoxLayout, QWidget
 
-from aura_mobile.core.features import LabMode
+from aura_mobile.core.features import BY_ID, LabMode
 from aura_mobile.services.sim.runner import (
     COMPUTES_PER_HOUR,
     NO_ROOM,
@@ -27,7 +31,7 @@ from aura_mobile.ui import kit, layers
 from aura_mobile.ui import tokens as t
 from aura_mobile.ui.context import AppContext, describe_error
 from aura_mobile.ui.pages.base import Page
-from aura_mobile.ui.pages.profile import feature_tile, set_tone
+from aura_mobile.ui.pages.profile import FitSheet, info_button, set_tone
 from aura_mobile.ui.widgets import label, repolish, set_shown
 
 WATCH_MS = 20_000
@@ -40,6 +44,17 @@ MODE_NOTE = {
     LabMode.QUIET_DAY: "Quiet day (1 compute)",
     LabMode.TIMER: "Fires ~2 h later",
 }
+
+
+#: the ⓘ sheet
+ABOUT = (
+    ("flask", "Run sends synthetic band days for unused past dates to dev, the way the band would."),
+    ("clock", "Dev computes each day about 2 min after its last minute; then the alert shows in Recovery."),
+    ("bolt", f"Compute skips that wait, at most {COMPUTES_PER_HOUR} an hour. One run at a time."),
+    ("chart", "Derived features push a composite score, so they may need a second run."),
+    ("cal", "All at once sends one month that should raise every alert, the way a real month would. It needs a "
+            "fresh account."),
+)
 
 
 def _day(d: date) -> str:
@@ -112,61 +127,87 @@ def _enable_row(row: kit.Row, on: bool) -> None:
     repolish(row.title)
 
 
-class LabRow(kit.Group):
-    """One scenario: the feature, what the next run sends, progress, Run / Check now and the Compute switch."""
+class Detail(QWidget):
+    """What a row's sheet shows: the scenario, the rule, the next run's dates, AWS's last word and Check now. It
+    lives on the row (hidden) so every status update lands there; the sheet borrows it while open."""
 
-    def __init__(self, scenario: Scenario) -> None:
-        super().__init__()
-        feature = scenario.feature
-        self.scenario = scenario
-        derived = feature.reliability == "derived"
-        chip = label("derived" if derived else "direct", "chip")
-        chip.setFixedHeight(20)
-        chip.setToolTip("Derived: pushes a composite score, so it may need a second run."
-                        if derived else "Direct: crosses a raw threshold.")
-        icon, accent = feature_tile(feature)
-        self.head = kit.Row(feature.name, f"{feature.id} · {MODE_NOTE.get(feature.lab, '')}", icon=icon,
-                            accent=accent, trailing=chip)
-        self.add(self.head)
-
-        body = QWidget()
-        lay = QVBoxLayout(body)
-        lay.setContentsMargins(16, 10, 16, 12)
-        lay.setSpacing(6)
-        about = label(scenario.note, "rowsub", wrap=True)
-        lay.addWidget(about)
-        lay.addWidget(label(f"Rule: {feature.rule}", "small", wrap=True))
+    def __init__(self, owner: QWidget, meta: str, note: str, rule: str, feature_id: str) -> None:
+        super().__init__(owner)
+        self.hide()
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(4, 0, 4, 0)
+        lay.setSpacing(8)
+        lay.addWidget(label(meta, "codetag"))
+        lay.addWidget(label(note, "rowsub", wrap=True))
+        lay.addWidget(label(rule, "small", wrap=True))
         self.plan = label("", "rowtitle", wrap=True)
         lay.addWidget(self.plan)
-        self.bar = kit.Bar(height=5)
-        self.bar.hide()
-        lay.addWidget(self.bar)
         self.status = label("", "rowsub", wrap=True)
         lay.addWidget(self.status)
-        lay.addSpacing(4)
-        buttons = QHBoxLayout()
-        buttons.setSpacing(4)
-        self.run = kit.text_button("Run", "smprimary")
-        self.run.setProperty("feature", scenario.feature_id)
-        self.run.setMinimumWidth(64)
-        buttons.addWidget(self.run)
+        self.buttons = QHBoxLayout()
+        self.buttons.setSpacing(4)
         self.check = kit.text_button("Check now", "link")
-        self.check.setProperty("feature", scenario.feature_id)
-        buttons.addWidget(self.check)
-        buttons.addStretch(1)
-        buttons.addWidget(label("Compute", "rowsub"))
+        self.check.setProperty("feature", feature_id)
+        self.buttons.addWidget(self.check)
+        self.buttons.addStretch(1)
+        lay.addLayout(self.buttons)
+
+
+class LabRow(kit.Clickable):
+    """One scenario on one line: the feature's glyph and name, a status dot and Run. A tap opens its sheet
+    (:class:`Detail`: the scenario, the rule, the next run's dates, what AWS said, Check now, the Compute switch)."""
+
+    def __init__(self, scenario: Scenario) -> None:
+        super().__init__("row")
+        feature = scenario.feature
+        self.scenario = scenario
+        self.setProperty("tap", True)
+        self.setMinimumHeight(t.ROW_MIN + 4)
+        self.has_tile = True
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(16, 8, 12, 8)
+        lay.setSpacing(12)
+        lay.addWidget(kit.Glyph(feature.icon, 24, feature.accent, stroke=2.0))
+        lay.addSpacing(5)  # the name starts where the hairline does (57)
+        words = QVBoxLayout()
+        words.setSpacing(3)
+        line = QHBoxLayout()
+        line.setSpacing(6)
+        self.name = label(feature.name, "rowtitle")
+        line.addWidget(self.name)
+        line.addWidget(label(feature.id, "codetag"))
+        line.addStretch(1)
+        words.addLayout(line)
+        self.bar = kit.Bar(height=4)
+        self.bar.hide()
+        words.addWidget(self.bar)
+        lay.addLayout(words, 1)
+        self.dot = kit.Dot()
+        lay.addWidget(self.dot)
+        self.run = kit.text_button("Run", "run")
+        self.run.setProperty("feature", scenario.feature_id)
+        lay.addWidget(self.run)
+
+        derived = "derived" if feature.reliability == "derived" else "direct"
+        self.detail = Detail(self, f"{feature.id} · {MODE_NOTE.get(feature.lab, '')} · {derived}", scenario.note,
+                             f"Rule: {feature.rule}", scenario.feature_id)
+        self.plan, self.status, self.check = self.detail.plan, self.detail.status, self.detail.check
+        self.detail.buttons.addWidget(label("Compute", "rowsub"))
         self.compute = kit.Switch(tip="Spend one of the 5 hourly computes instead of waiting ~2 min for the final run.")
         if scenario.compute_empty_target:
             self.compute.setChecked(True)
             self.compute.setEnabled(False)
-        buttons.addWidget(self.compute)
-        lay.addLayout(buttons)
-        self.add(body)
+        self.detail.buttons.addWidget(self.compute)
+
+    @property
+    def title(self) -> str:
+        return self.scenario.feature.name
 
     def set_status(self, text: str, tone: str = "") -> None:
-        """The run's last word; ``tone`` is ``good``, ``warn`` or ``bad``."""
+        """The run's last word; ``tone`` is ``good``, ``warn``, ``bad`` or ``busy`` (running or watching)."""
         self.status.setText(text)
         set_tone(self.status, tone)
+        self.dot.set_tone(tone)
 
     def set_progress(self, fraction: float | None) -> None:
         """Show the thin progress line (``None`` hides it)."""
@@ -174,48 +215,75 @@ class LabRow(kit.Group):
         self.bar.set_fraction(fraction or 0.0)
 
 
-class MonthRow(kit.Group):
-    """The all-at-once month: what it sends, then which of its alerts have fired."""
+class MonthRow(kit.Clickable):
+    """The all-at-once month: a ring with how many of its alerts fired, Run, and a chip per alert (grey waiting,
+    green fired, red failed or stopped). A tap opens the same sheet as a feature row."""
 
     compute = None  # every day of it is past, so each computes itself
+    title = "All at once"
 
     def __init__(self, scenario: Scenario) -> None:
-        super().__init__("All at once", "One run sends one month of data on the same dates and should raise every "
-                                        "alert below, the way a real month of a real person would.")
+        super().__init__("bigcard")
         self.scenario = scenario
-        self.head = kit.Row("All features at once", f"{len(scenario.feature_ids)} alerts · {scenario.days} days",
-                            icon="flask", accent=t.TEAL)
-        self.add(self.head)
-        body = QWidget()
-        lay = QVBoxLayout(body)
-        lay.setContentsMargins(16, 10, 16, 12)
-        lay.setSpacing(6)
-        lay.addWidget(label(scenario.note, "rowsub", wrap=True))
-        lay.addWidget(label(f"Covers {', '.join(scenario.feature_ids)}. BS-02 needs empty days, so it runs alone.",
-                            "small", wrap=True))
-        self.plan = label("", "rowtitle", wrap=True)
-        lay.addWidget(self.plan)
-        self.bar = kit.Bar(height=5)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(18, 18, 18, 18)
+        lay.setSpacing(16)
+        top = QHBoxLayout()
+        top.setSpacing(18)
+        self.ring = kit.CountRing(104)
+        self.ring.set_count(0, len(scenario.feature_ids))
+        top.addWidget(self.ring)
+        words = QVBoxLayout()
+        words.setSpacing(2)
+        words.addStretch(1)
+        words.addWidget(label("All at once", "mlabel"))
+        sub = QHBoxLayout()
+        sub.setSpacing(6)
+        self.dot = kit.Dot(8)
+        sub.addWidget(self.dot)
+        sub.addWidget(label(f"{scenario.days} days · {len(scenario.feature_ids)} alerts", "tilesub"), 1)
+        words.addLayout(sub)
+        self.bar = kit.Bar(height=4)
         self.bar.hide()
-        lay.addWidget(self.bar)
-        self.status = label("", "rowsub", wrap=True)
-        lay.addWidget(self.status)
-        lay.addSpacing(4)
-        buttons = QHBoxLayout()
-        buttons.setSpacing(4)
-        self.run = kit.text_button("Run", "smprimary")
+        words.addSpacing(4)
+        words.addWidget(self.bar)
+        words.addSpacing(6)
+        go = QHBoxLayout()
+        self.run = kit.text_button("Run", "go")
         self.run.setProperty("feature", scenario.feature_id)
-        self.run.setMinimumWidth(64)
-        buttons.addWidget(self.run)
-        self.check = kit.text_button("Check now", "link")
-        self.check.setProperty("feature", scenario.feature_id)
-        buttons.addWidget(self.check)
-        buttons.addStretch(1)
-        lay.addLayout(buttons)
-        self.add(body)
+        self.run.setMinimumWidth(84)
+        go.addWidget(self.run)
+        go.addStretch(1)
+        words.addLayout(go)
+        words.addStretch(1)
+        top.addLayout(words, 1)
+        lay.addLayout(top)
+        grid = QGridLayout()
+        grid.setSpacing(8)
+        self.chips: dict[str, kit.StatusChip] = {}
+        for i, fid in enumerate(scenario.feature_ids):
+            chip = kit.StatusChip(fid, BY_ID[fid].icon)
+            grid.addWidget(chip, i // 4, i % 4)
+            self.chips[fid] = chip
+        lay.addLayout(grid)
+
+        self.detail = Detail(self, f"ALL · {scenario.days} days · {len(scenario.feature_ids)} alerts", scenario.note,
+                             f"Covers {', '.join(scenario.feature_ids)}. BS-02 needs empty days, so it runs alone.",
+                             scenario.feature_id)
+        self.plan, self.status, self.check = self.detail.plan, self.detail.status, self.detail.check
 
     set_status = LabRow.set_status
     set_progress = LabRow.set_progress
+
+    def fired(self) -> set[str]:
+        return {fid for fid, chip in self.chips.items() if chip.state == "good"}
+
+    def set_fired(self, fired: set[str] | list[str], *, stopped: bool = False) -> None:
+        """Green for the alerts in; the rest red once the run failed or watching stopped, else grey."""
+        fired = set(fired)
+        for fid, chip in self.chips.items():
+            chip.set_state("good" if fid in fired else "bad" if stopped else "wait")
+        self.ring.set_count(len(fired & set(self.chips)), len(self.chips))
 
 
 class LabPage(Page):
@@ -229,13 +297,19 @@ class LabPage(Page):
         #: feature id → (run, give up at)
         self._watching: dict[str, tuple[LabRun, datetime]] = {}
 
-        self.summary = kit.Group(
-            "This hour",
-            "Each Run sends synthetic band days for unused past dates to dev, the same way the band would. The "
-            "backend computes the day itself about 2 minutes later, then the alert appears in Recovery.")
-        self.usage = kit.Row("Computes", "", "", icon="flask", accent=t.TEAL)
+        self.nav.add_right(info_button(self, "Test lab", ABOUT))
+
+        month = MonthRow(ALL_AT_ONCE)
+        month.run.clicked.connect(self._run)
+        month.check.clicked.connect(self._check)
+        month.clicked.connect(lambda: self.open_row(month))
+        self.rows[ALL_AT_ONCE.feature_id] = month
+        self.column.addWidget(month)
+
+        self.summary = kit.TitledGroup("This hour")
+        self.usage = kit.Row("Computes", "", "")
         self.summary.add(self.usage)
-        self.stale = kit.Row("Out of dates", "", icon="info", accent=t.STRESS, wrap=True)
+        self.stale = kit.Row("Out of dates", "", wrap=True)
         set_tone(self.stale.sub, "warn")
         self.stale.hide()
         self.summary.add(self.stale)
@@ -248,18 +322,15 @@ class LabPage(Page):
         self.summary.add(self.reset_row)
         self.column.addWidget(self.summary)
 
-        month = MonthRow(ALL_AT_ONCE)
-        month.run.clicked.connect(self._run)
-        month.check.clicked.connect(self._check)
-        self.rows[ALL_AT_ONCE.feature_id] = month
-        self.column.addWidget(month)
-
+        self.features = kit.TitledGroup("One at a time")
         for scenario in SCENARIOS:
             row = LabRow(scenario)
             row.run.clicked.connect(self._run)
             row.check.clicked.connect(self._check)
+            row.clicked.connect(lambda row=row: self.open_row(row))
             self.rows[scenario.feature_id] = row
-            self.column.addWidget(row)
+            self.features.add(row)
+        self.column.addWidget(self.features)
         self.column.addStretch(1)
 
         self._timer = QTimer(self)
@@ -274,8 +345,8 @@ class LabPage(Page):
             return
         used = lab.state.computes_this_hour()
         self.usage.set_value(f"{used} of {COMPUTES_PER_HOUR}")
-        self.usage.set_sub(f"{len(lab.state.touched)} dates used · {lab.time_zone}")
-        self.usage.setToolTip(f"Computes this hour: {used} of {COMPUTES_PER_HOUR}")
+        self.usage.set_sub(f"{len(lab.state.touched)} dates used")
+        self.usage.setToolTip(f"Computes this hour: {used} of {COMPUTES_PER_HOUR} · {lab.time_zone}")
         full = False
         for fid, row in self.rows.items():
             planned = lab.plan(row.scenario)
@@ -300,17 +371,43 @@ class LabPage(Page):
         last = self.ctx.lab.state.latest_run(row.scenario.feature_id) if self.ctx.lab else None
         if last is None:
             row.set_status("Not run yet.")
+            if isinstance(row, MonthRow):
+                row.set_fired(())
         elif row.scenario.covers:
             ids = row.scenario.feature_ids
             seen = f" ({', '.join(last.found)})" if last.found else ""
             row.set_status(f"Last run: {len(last.found)} of {len(ids)} alerts seen{seen}. Check now to look again.",
                            "good" if len(last.found) == len(ids) else "")
+            row.set_fired(set(last.found))
         elif last.found_alert:
             row.set_status(f"Passed · alert {last.found_alert}", "good")
         else:
             ran = datetime.fromisoformat(last.started_at).astimezone().strftime("%d %b %H:%M")
             row.set_status(f"Last run {ran}, data for {_day(date.fromisoformat(last.target))}: no alert seen yet. "
                            "Check now to look again.")
+
+    def open_row(self, row: LabRow | MonthRow) -> FitSheet:
+        """The row's sheet: its :class:`Detail` (borrowed while open) and a Run that starts it."""
+        sheet = self.row_sheet(row)
+        sheet.exec()
+        self.give_back(row, sheet)
+        return sheet
+
+    def row_sheet(self, row: LabRow | MonthRow) -> FitSheet:
+        sheet = FitSheet(self, row.title)
+        sheet.body.addWidget(row.detail)
+        row.detail.show()
+        go = kit.text_button("Run", "gobig")
+        go.setEnabled(row.run.isEnabled())
+        go.clicked.connect(lambda _=False: (sheet.accept(), row.run.click()))
+        sheet.body.addWidget(go)
+        sheet.fit()
+        return sheet
+
+    def give_back(self, row: LabRow | MonthRow, sheet: FitSheet) -> None:
+        row.detail.hide()
+        row.detail.setParent(row)
+        sheet.deleteLater()
 
     # -- running ---------------------------------------------------------------
 
@@ -332,7 +429,7 @@ class LabPage(Page):
             r.run.setEnabled(False)
         _enable_row(self.stop, True)
         row.set_progress(0.0)
-        row.set_status("Starting…")
+        row.set_status("Starting…", "busy")
         scenario = row.scenario
 
         def work(report) -> LabRun:
@@ -344,7 +441,7 @@ class LabPage(Page):
         row = self.rows.get(self._running or "")
         if row is not None:
             row.set_progress(fraction)
-            row.set_status(message)
+            row.set_status(message, "busy")
 
     def _sent(self, run: LabRun) -> None:
         row = self.rows[run.feature_id]
@@ -355,7 +452,9 @@ class LabPage(Page):
         when = "about 2 h (a timer), so leave the app open or Check now later" if row.scenario.timer_wait_minutes \
             else "a few minutes"
         row.set_status(f"Sent {run.posted_packets} minutes for {run.target}. Watching for the alert; "
-                       f"it takes {when}.")
+                       f"it takes {when}.", "busy")
+        if isinstance(row, MonthRow):
+            row.set_fired(())
         self._timer.start()
         self.refresh()
 
@@ -365,6 +464,8 @@ class LabPage(Page):
         if row is not None:
             row.set_progress(None)
             row.set_status(f"Failed: {describe_error(exc)}", "bad")
+            if isinstance(row, MonthRow):
+                row.set_fired(row.fired(), stopped=True)
         self.refresh()
 
     def _finish_run(self) -> None:
@@ -387,7 +488,7 @@ class LabPage(Page):
         if run is None:
             row.set_status("Not run yet.")
             return
-        row.set_status("Asking AWS…")
+        row.set_status("Asking AWS…", "busy")
         self.ctx.call(self._look(row.scenario, run), self._make_found(fid), self._make_lookup_failed(fid))
 
     def _look(self, scenario: Scenario, run: LabRun):
@@ -418,7 +519,7 @@ class LabPage(Page):
             if seen.alert is None:
                 watching = self._watching.get(fid)
                 until = _clock(watching[1]) if watching else None
-                tone = "" if watching or seen.computed else "warn"
+                tone = "busy" if watching else "" if seen.computed else "warn"
                 row.set_status(describe_check(seen, row.scenario.feature.rule, until), tone)
                 return
             alert = seen.alert
@@ -442,8 +543,9 @@ class LabPage(Page):
             self._watching.pop(fid, None)
             self.ctx.notify(area.ALERTS)
         watching = self._watching.get(fid)
-        tone = "good" if done else "" if watching or seen.computed else "warn"
+        tone = "good" if done else "busy" if watching else "" if seen.computed else "warn"
         row.set_status(describe_month(seen, ids, _clock(watching[1]) if watching else None), tone)
+        row.set_fired(set(fired), stopped=not done and watching is None)
 
     def _make_lookup_failed(self, fid: str):
         def failed(exc: Exception) -> None:

@@ -110,8 +110,10 @@ def session_action(ctx: AppContext, session_id: str, verb: str) -> None:
 def run_timed_session(ctx: AppContext, parent: QWidget, title: str, minutes: int, *, kind: str = "recovery",
                       note: str = "", accent: str = t.RECOVERY, breathing: bool = False,
                       then: Callable[[], None] | None = None, dialog: QWidget | None = None,
-                      after: Callable[[str], None] | None = None, night: bool | None = None) -> None:
-    """Start a Session (``mode: timer``) and open the run view over the phone; returns at once.
+                      after: Callable[[str], None] | None = None, night: bool | None = None,
+                      mode: str = "timer") -> None:
+    """Start a Session (``mode: timer`` unless Search's modes say otherwise) and open the run view over the phone;
+    returns at once. ``minutes`` 0 is open-ended (Flowtime): the clock counts up and no length is sent.
 
     When the time is up (or the person marks it done) the session is ``complete``d and ``then`` runs; End stops it
     (``stop``) and ``then`` does not run. ``dialog`` is a panel shown inside the run view (the wind-down's to-do
@@ -151,7 +153,7 @@ def run_timed_session(ctx: AppContext, parent: QWidget, title: str, minutes: int
         state["verb"] = "stop"
         settle()
 
-    start_session(ctx, kind, "timer", minutes=minutes, title=title, then=started)
+    start_session(ctx, kind, mode, minutes=minutes or None, title=title, then=started)
     if night is None:
         night = "nap" in title.lower()
     runview.start(parent, title, minutes, note=str(getattr(dialog, "note", "") or note), accent=accent, kind=kind,
@@ -163,7 +165,12 @@ def ask_checkin(ctx: AppContext, parent: QWidget, kind: str, then: Callable[[], 
     dialog = RatingDialog(parent, kind, question)
     if dialog.exec() != QDialog.DialogCode.Accepted or dialog.value is None:
         return False
-    value = dialog.value
+    return save_checkin(ctx, parent, kind, dialog.value, then)
+
+
+def save_checkin(ctx: AppContext, parent: QWidget, kind: str, value: int,
+                 then: Callable[[], None] | None = None) -> bool:
+    """A mood or connection check-in of 1-5: a tapped face on Search → Logging, or the rating sheet."""
     taken_at = now_local(ctx)
     row = {"id": _pending_id(kind), "kind": kind, kind: value, "takenAt": taken_at.isoformat()}
     ctx.store.patch("checkins", lambda old: [*(old or []), row])
@@ -406,9 +413,12 @@ def light_times(now: datetime, wake: str, days: int = 3) -> list[tuple[str, date
     return out
 
 
-def log_strength(ctx: AppContext, parent: QWidget, then: Callable[[], None] | None = None) -> bool:
-    """PB-04: a strength session logged by hand (the band can't tell lifting from sitting)."""
-    minutes = sheets.ask_minutes(parent, "Log a strength session", 30)
+def log_strength(ctx: AppContext, parent: QWidget, then: Callable[[], None] | None = None, *,
+                 minutes: int | None = None) -> bool:
+    """PB-04: a strength session logged by hand (the band can't tell lifting from sitting). Without ``minutes``, a
+    sheet asks."""
+    if minutes is None:
+        minutes = sheets.ask_minutes(parent, "Log a strength session", 30)
     if minutes is None:
         return False
     taken_at = now_local(ctx)

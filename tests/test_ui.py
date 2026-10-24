@@ -106,7 +106,12 @@ class Api:
         return [{"id": "t1", "title": "Finish report", "status": "open", "horizon": "today"}]
 
     def metrics_range(self, *a, **k):
-        return [{"date": _day(1), "status": "ok"}]
+        """Two weeks of summary days (newest yesterday), so the cards' bars have something to draw."""
+        return [{"date": _day(n), "status": "ok",
+                 "metrics": {"totalSleepMin": 330 + 6 * n, "recoveryScore": 40 + n, "stressScore": 60 - n,
+                             "restingHrBpm": 62, "activeMinutes": 20 + n, "burnoutIndexScore": 55,
+                             "avgSleepBurnoutHrs": 6.1, "lateNightsBurnout": 3, "weeklyActiveMinutes": 62}}
+                for n in range(14, 0, -1)]
 
     def metrics_day(self, day):
         return {"date": day, "status": "ok", "metrics": {"totalSleepMin": 330, "weeklyActiveMinutes": 62}}
@@ -187,10 +192,10 @@ def test_search_filters_rows(phone):
     window.show_tab(2)
     settle()
     window.search.query.setText("walk")
-    walk_rows = [window.search.sessions.body.itemAt(i).widget() for i in range(window.search.sessions.body.count())]
-    assert any(w is not None and not w.isHidden() for w in walk_rows)
+    rows = [*window.search.categories.values(), *window.search.places.values()]
+    assert any(not w.isHidden() for w in rows)
     window.search.query.setText("zzz")
-    assert all(w is None or w.property("search") is None or w.isHidden() for w in walk_rows)
+    assert all(w.isHidden() for w in rows)
 
 
 def test_profile_switch_writes_the_off_list(phone):
@@ -223,11 +228,12 @@ def test_sign_out_returns_to_sign_in(phone):
 def test_water_shows_before_the_server_answers(phone):
     window, _ctx, api = phone
     window.show_tab(2)
+    window.search.on_open("Logging")
     settle()
-    assert "500 of 2000" in window.search.water_label.text()
+    assert "500 of 2000" in window.logging.water_card.text()
     api.gate.clear()
-    window.search._water()
-    assert "750 of 2000" in window.search.water_label.text()  # drawn now, the write still in flight
+    window.logging._water()
+    assert "750 of 2000" in window.logging.water_card.text()  # drawn now, the write still in flight
     assert api.water == []
     api.gate.set()
     settle()
@@ -281,13 +287,16 @@ def test_strength_log_shows_in_history(phone, monkeypatch):
     window, _ctx, api = phone
     from aura_mobile.ui import sheets
 
-    monkeypatch.setattr(sheets, "ask_minutes", lambda *a, **k: 40)
+    monkeypatch.setattr(sheets, "ask_minutes", lambda *a, **k: 99)  # not asked: the card has its own stepper
     window.show_tab(2)
+    window.search.on_open("Logging")
     settle()
-    window.search._strength()
-    texts = [window.search.history.itemAt(i).widget().text() for i in range(window.search.history.count())]
+    window.logging.strength_minutes.setValue(40)
+    window.logging.strength_log.click()
+    page = window.logging
+    texts = [page.history.itemAt(i).widget().text() for i in range(page.history.count())]
     assert any("Strength 40 min" in x for x in texts)
-    assert "500 of 2000 ml" in window.search.water_label.text()  # strength doesn't count as water
+    assert "500 of 2000 ml" in page.water_card.text()  # strength doesn't count as water
     settle()
     assert api.logged == [("strength", {"minutes": 40})]
 

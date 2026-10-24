@@ -1,7 +1,9 @@
 """The phone: a 390×844 window with the page stack and a floating pill tab bar (Home, Recovery, Search).
 
 Each page owns its nav bar and large title. Profile and the Test lab are not tabs: they open from round buttons on
-Home's nav bar as pushed pages ("‹ Home") and close with Back or Esc. Signed out, only the sign-in page shows. A new
+Home's nav bar as pushed pages ("‹ Home") and close with Back or Esc. Search's rows push its drill pages (a metric,
+Logging, Modes → one mode's setup, Sessions); pushed pages stack, and Back names the page underneath. Home and
+Recovery cards open the same metric page (``on_metric``). Signed out, only the sign-in page shows. A new
 alert arriving while the app is open shows the HUD and flashes the taskbar (push is not set up on dev); the bedtime
 reminder and wake alarm ring locally (``ui/alarms.py``). Timers run in a full-phone view (``ui/runview.py``).
 """
@@ -31,9 +33,13 @@ from aura_mobile.ui.context import AppContext
 from aura_mobile.ui.pages.base import Page
 from aura_mobile.ui.pages.home import HomePage, open_alerts
 from aura_mobile.ui.pages.lab import LabPage
+from aura_mobile.ui.pages.logbook import LoggingPage
+from aura_mobile.ui.pages.metric import MetricPage
+from aura_mobile.ui.pages.modes import ModeSetupPage, ModesPage
 from aura_mobile.ui.pages.profile import ProfilePage
 from aura_mobile.ui.pages.recovery import RecoveryPage
 from aura_mobile.ui.pages.search import SearchPage
+from aura_mobile.ui.pages.sessions import SessionsPage
 from aura_mobile.ui.pages.signin import SignInPage
 
 #: how often the visible page asks again, so a fired alert shows without a click
@@ -133,6 +139,8 @@ class PhoneWindow(QWidget):
         self.setWindowTitle("Aura · demo phone (dev)")
         self.setFixedSize(t.PHONE_WIDTH, t.PHONE_HEIGHT)
         self._back_to = 0
+        #: pushed pages under the one showing, oldest first (Back pops one)
+        self._trail: list[Page] = []
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -146,8 +154,23 @@ class PhoneWindow(QWidget):
         self.profile = ProfilePage(ctx, on_appearance=self._set_dark)
         self.lab = LabPage(ctx)
         self.signin = SignInPage(ctx)
-        for page in (self.home, self.recovery, self.search, self.profile, self.lab, self.signin):
+        # Search's drill pages
+        self.metric = MetricPage(ctx)
+        self.logging = LoggingPage(ctx)
+        self.modes = ModesPage(ctx)
+        self.mode_setup = ModeSetupPage(ctx)
+        self.sessions = SessionsPage(ctx)
+        self.drill_pages: tuple[Page, ...] = (self.metric, self.logging, self.modes, self.mode_setup, self.sessions)
+        for page in (self.home, self.recovery, self.search, self.profile, self.lab, self.signin, *self.drill_pages):
             self.stack.addWidget(page)
+        self.search.on_metric = self.open_metric
+        self.search.on_open = self._open_place
+        self.home.on_metric = self.open_metric
+        self.recovery.on_metric = self.open_metric
+        self.home.on_open_recovery = lambda: self.show_tab(1)
+        self.metric.on_pins_changed = self.home.mark_stale
+        self.modes.on_pick = self._open_mode
+        self.mode_setup.on_started = lambda: self.show_tab(2)
         outer.addWidget(self.stack, 1)
         self.tab_pages: tuple[Page, ...] = (self.home, self.recovery, self.search)
         for page, (name, _icon) in zip(self.tab_pages[1:], TABS[1:], strict=True):
@@ -216,7 +239,7 @@ class PhoneWindow(QWidget):
     # -- navigation --------------------------------------------------------------
 
     def _overlay_open(self) -> bool:
-        return self.stack.currentWidget() in (self.profile, self.lab)
+        return self.stack.currentWidget() in (self.profile, self.lab, *self.drill_pages)
 
     def show_signed_out(self) -> None:
         self.tabbar.hide()
@@ -225,6 +248,7 @@ class PhoneWindow(QWidget):
         runview.sync(self)
 
     def show_tab(self, index: int) -> None:
+        self._trail.clear()
         if index == 0:
             self._date_heading()
         self.stack.setCurrentIndex(index)
@@ -238,11 +262,21 @@ class PhoneWindow(QWidget):
         self.show_tab(int(self.sender().property("tab")))
 
     def _open_overlay(self, page: Page) -> None:
-        current = self.stack.currentIndex()
-        if current < len(TABS):
-            self._back_to = current
-        page.nav.set_back(TABS[self._back_to][0], self._close_overlay)
+        """Push ``page``. From a tab, Back returns to that tab; from another pushed page, to that page."""
+        current = self.stack.currentWidget()
+        index = self.stack.currentIndex()
+        if index < len(TABS):
+            self._back_to = index
+            self._trail.clear()
+            back = TABS[index][0]
+        elif isinstance(current, Page) and current is not page and current is not self.signin:
+            self._trail.append(current)
+            back = current.large.text() or current.nav.title.text() or "Back"
+        else:
+            back = self._trail[-1].large.text() if self._trail else TABS[self._back_to][0]
+        page.nav.set_back(back, self._close_overlay)
         page.set_bottom_room(24)
+        page.verticalScrollBar().setValue(0)
         self.stack.setCurrentWidget(page)
         self.tabbar.hide()
         runview.sync(self)
@@ -253,13 +287,42 @@ class PhoneWindow(QWidget):
     def _open_lab(self) -> None:
         self._open_overlay(self.lab)
 
+    def open_metric(self, key: str) -> None:
+        """The metric page for a ``metrics.CARDS`` key (Search's categories, Home and Recovery cards)."""
+        self.metric.show_card(key)
+        self._open_overlay(self.metric)
+
+    def _open_place(self, name: str) -> None:
+        """One of Search's second list: Logging, Modes, Sessions or Settings."""
+        pages = {"Logging": self.logging, "Modes": self.modes, "Sessions": self.sessions}
+        if name in pages:
+            self._open_overlay(pages[name])
+        else:
+            self._open_profile()
+
+    def open_sessions(self) -> None:
+        """Search → Sessions (the mini bar of a server session opens it)."""
+        if self.stack.currentWidget() is self.sessions:
+            return
+        self.show_tab(2)
+        self._open_overlay(self.sessions)
+
+    def _open_mode(self, index: int) -> None:
+        self.mode_setup.set_mode(index)
+        self._open_overlay(self.mode_setup)
+
     def _close_overlay(self) -> None:
+        if self._trail:
+            page = self._trail.pop()
+            self.stack.setCurrentWidget(page)
+            runview.sync(self)
+            return
         self.show_tab(self._back_to)
 
     # -- session -----------------------------------------------------------------
 
     def _on_signed_in(self) -> None:
-        for page in (self.home, self.recovery, self.search, self.profile, self.lab):
+        for page in (self.home, self.recovery, self.search, self.profile, self.lab, *self.drill_pages):
             page.mark_stale()
         self.show_tab(0)
         self._seen_alerts = None

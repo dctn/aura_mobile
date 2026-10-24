@@ -388,3 +388,52 @@ def test_old_names_still_import(window):
     later(lambda: d.skip.click())
     assert d.exec() == QDialog.DialogCode.Accepted and d.elapsed_seconds == 0
     assert Card("Water", accent=t.TEAL).body is not None
+
+
+# -- round buttons, open-ended runs, the 3-2-1 -----------------------------------------------------------------
+
+
+def test_run_has_round_pause_and_stop(window):
+    view = runview.start(window, "Focus", 25)
+    assert isinstance(view.pause_button, kit.RoundButton) and view.pause_button.kind == "pause"
+    assert isinstance(view.end_button, kit.RoundButton) and view.end_button.kind == "stop"
+    view.toggle_pause()
+    assert view.pause_button.kind == "play" and view.pause_button.text() == "Resume"
+    view.toggle_pause()
+    assert view.pause_button.kind == "pause"
+
+
+def test_open_ended_run_counts_up(window, monkeypatch):
+    clock = [100.0]
+    monkeypatch.setattr(runview.time, "monotonic", lambda: clock[0])
+    view = runview.start(window, "Flowtime", 0)
+    assert view.open_ended and view.clock_seconds == 0
+    clock[0] += 65
+    view._tick()
+    assert view.clock_seconds == 65 and view.elapsed_seconds == 65 and not view.ended
+    assert view.clock.text() == runview.clock_text(65) and view.bar.isHidden()
+
+
+def test_countdown_runs_on_done_once_and_cancel_starts_nothing(window):
+    done: list[int] = []
+    view = runview.countdown(window, lambda: done.append(1), seconds=3)
+    assert window.countdown_view is view and view.ring.left == 3
+    for _ in range(3):
+        view.ring.tick()
+    assert done == [1] and window.countdown_view is None
+    view.ring.finished.emit()
+    assert done == [1]
+    other = runview.countdown(window, lambda: done.append(2))
+    other.cancel_button.click()
+    assert done == [1] and window.countdown_view is None
+
+
+def test_minibar_tap_on_a_server_session_opens_sessions(window, ctx):
+    window.ctx = ctx
+    opened: list[int] = []
+    window.open_sessions = lambda: opened.append(1)
+    ctx.store.data["active"] = {"id": "s9", "title": "Focus", "state": "running", "plannedMinutes": 25,
+                                "startedAt": "2020-01-01T00:00:00+00:00"}
+    runview.sync(window)
+    window.minibar.open()
+    assert opened == [1]

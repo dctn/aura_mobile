@@ -5,21 +5,22 @@ Saving sends the name and body details, then the goals, as two writes: one refus
 ``healthGoals`` until it is redeployed) doesn't lose the other. The band is paired with ``PUT /v1/me/settings``
 (``pairedBandId``); its last sync is this phone's own record (BS-02).
 
-This is the Settings page, pushed from the gear on every tab. Body details save as soon as one is set in its sheet.
-Every alert switch writes ``PUT /v1/alerts/settings``; switching one off is how to check a feature stays quiet (the
-Test lab's run for it should then find nothing).
+This is the Settings page, pushed from the gear on every tab, in the Figma look: short grouped rows with the value
+on the right and no footers; the few things worth explaining sit behind the ⓘ in the nav bar. Every change saves at
+once (a body detail or goal set in its sheet, a time pill when it loses focus). Every alert switch writes
+``PUT /v1/alerts/settings``; switching one off is how to check a feature stays quiet (the Test lab's run for it
+should then find nothing).
 """
 
 from __future__ import annotations
 
 import secrets
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import Any
 
 from PyQt6.QtCore import QDate, QRectF, Qt, QTime, QTimer, QUrl
 from PyQt6.QtGui import QColor, QDesktopServices, QFont, QPainter
 from PyQt6.QtWidgets import (
-    QAbstractSpinBox,
     QComboBox,
     QDateEdit,
     QDialog,
@@ -44,7 +45,7 @@ from aura_mobile.ui.widgets import label, repolish, set_shown
 EXPORT_POLL_MS = 5000
 NO_DATE = QDate(1900, 1, 1)  # the date edit's "Not set"
 
-#: the line icon on each feature's tile (Profile's alert switches, the Test lab)
+#: the line icon on each feature's tile (kept for older callers; the Figma rows use ``Feature.icon``)
 FEATURE_ICON = {
     "DX-01": "sleep", "DX-02": "alarm", "DX-03": "evening", "DX-04": "timer", "DX-05": "recover",
     "DX-06": "shield", "DX-07": "wind", "DX-09": "walk", "PB-01": "sun", "PB-02": "flame", "PB-03": "move",
@@ -52,12 +53,23 @@ FEATURE_ICON = {
     "BS-01": "me", "BS-02": "band",
 }
 
-#: the feature's group → the Alerts list it sits in (the one-feature groups join a bigger one)
+#: the feature's group → the Alerts list it sits in (the one-feature groups join a bigger one; the band's own
+#: alert sits with the band)
 ALERT_AREA = {
     "Sleep": "Sleep", "Recovery & stress": "Recovery & stress", "Burnout": "Recovery & stress",
     "Health check": "Recovery & stress", "Movement": "Movement", "Mood": "Mood & habits",
-    "Connection": "Mood & habits", "Hydration": "Mood & habits",
+    "Connection": "Mood & habits", "Hydration": "Mood & habits", "Band": "Band",
 }
+
+#: the ⓘ sheet: (glyph, line)
+ABOUT = (
+    ("me", "Body details and goals save as soon as you set them. Health Data uses them for calories, VO2max and "
+           "heart-rate zones."),
+    ("alarm", "Bedtime rings the wind-down reminder; wake time rings the alarm."),
+    ("bell", "Switch an alert off and it stops sending. Alerts land in the inbox: push is not set up on dev."),
+    ("band", "Pairing saves the band on your account. Sync sends what this phone holds."),
+    ("trash", "Delete removes the account and everything in it on dev."),
+)
 
 
 def feature_tile(feature: Feature) -> tuple[str, str]:
@@ -69,6 +81,47 @@ def set_tone(w: QWidget, tone: str) -> None:
     """Colour a ``rowsub`` line: ``good``, ``warn``, ``bad`` or plain."""
     w.setProperty("tone", tone)
     repolish(w)
+
+
+class FitSheet(layers.Sheet):
+    """A Done-only sheet for a few short lines. Put widgets in ``self.body``; :meth:`fit` closes the column."""
+
+    def __init__(self, parent: QWidget, title: str) -> None:
+        super().__init__(parent, title, done="Done", cancel=None)
+
+    def fit(self) -> None:
+        self.body.addStretch(1)
+
+
+class InfoSheet(FitSheet):
+    """The one ⓘ a screen may have: a few short lines, each with a glyph."""
+
+    def __init__(self, parent: QWidget, title: str, lines: Sequence[tuple[str, str]]) -> None:
+        super().__init__(parent, title)
+        group = kit.Group(sheet=True)
+        for icon, text in lines:
+            group.add(kit.GlyphRow(text, icon, wrap=True))
+        self.body.addWidget(group)
+        self.fit()
+
+
+def info_button(parent: QWidget, title: str, lines: Sequence[tuple[str, str]]) -> kit.IconButton:
+    """The round ⓘ that opens :class:`InfoSheet`."""
+    b = kit.IconButton("info", "round", size=20, tip="About this screen")
+
+    def show() -> None:
+        sheet = InfoSheet(parent, title, lines)
+        sheet.exec()
+        sheet.deleteLater()
+
+    b.clicked.connect(show)
+    return b
+
+
+def _hours(minutes: int) -> str:
+    """480 → "8 h", 465 → "7 h 45 m"."""
+    h, m = divmod(int(minutes), 60)
+    return f"{h} h" if not m else f"{h} h {m} m"
 
 
 class Avatar(QWidget):
@@ -147,10 +200,11 @@ class BirthDate(QDateEdit):
 
 
 class NumberSheet(layers.Sheet):
-    """One number with − and + (height, weight), big and easy to hit."""
+    """One number with − and + (height, weight, the goals), big and easy to hit. ``quick`` is the two jump sizes
+    of the chips under it."""
 
     def __init__(self, parent: QWidget, title: str, value: int, lo: int, hi: int, step: int, fmt: str,
-                 note: str = "") -> None:
+                 note: str = "", quick: tuple[int, int] = (5, 10)) -> None:
         super().__init__(parent, title, done="Save")
         self.stepper = kit.Stepper(value, lo, hi, step, fmt)
         row = QHBoxLayout()
@@ -158,11 +212,13 @@ class NumberSheet(layers.Sheet):
         row.addWidget(self.stepper)
         row.addStretch(1)
         self.body.addLayout(row)
-        quick = kit.Chips(["−10", "−5", "+5", "+10"], columns=4)
-        quick.picked.connect(lambda i: self.stepper.setValue(self.stepper.value() + (-10, -5, 5, 10)[i]))
-        for b in quick.buttons:
+        small, big = quick
+        jumps = (-big, -small, small, big)
+        quick_chips = kit.Chips([f"{'+' if j > 0 else '−'}{abs(j):,}" for j in jumps], columns=4)
+        quick_chips.picked.connect(lambda i: self.stepper.setValue(self.stepper.value() + jumps[i]))
+        for b in quick_chips.buttons:
             b.setCheckable(False)
-        self.body.addWidget(quick)
+        self.body.addWidget(quick_chips)
         if note:
             self.body.addWidget(label(note, "foot", wrap=True))
 
@@ -210,12 +266,27 @@ class BirthSheet(layers.Sheet):
         self.age.setText(f"{born.toString('d MMMM yyyy')} · age {age}")
 
 
-def _pill(w: QWidget, width: int) -> QWidget:
-    w.setProperty("class", "pill")
-    w.setFixedWidth(width)
-    if isinstance(w, QAbstractSpinBox):
-        w.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
-        w.setAlignment(Qt.AlignmentFlag.AlignCenter)
+class InboxSheet(FitSheet):
+    """The inbox's notifications; a tap on one offers read, snooze and dismiss."""
+
+    def __init__(self, page: ProfilePage) -> None:
+        super().__init__(page, "Inbox")
+        self.page = page
+        self.list = kit.Group(sheet=True)
+        self.body.addWidget(self.list)
+        self.fit()
+        self.fill()
+
+    def fill(self) -> None:
+        self.list.clear()
+        for row in self.page.inbox_rows():
+            self.list.add(row)
+
+
+def _held(w: QWidget, parent: QWidget) -> QWidget:
+    """A value holder the page keeps but never shows (the rows show its value and open its editor)."""
+    w.setParent(parent)
+    w.hide()
     return w
 
 
@@ -228,18 +299,17 @@ class ProfilePage(Page):
         self._on_appearance = on_appearance
         self._export_id: str | None = None
         self._loading_switches = False
+        self._inbox_sheet: InboxSheet | None = None
 
-        save = kit.text_button("Save", "linkbold", tip="Save your details and goals")
-        save.clicked.connect(self._save)
-        self.nav.add_right(save)
+        self.info = self.nav.add_right(info_button(self, "Settings", ABOUT))
 
-        # who you are
-        self.account = kit.Group()
+        # who you are, and the inbox
+        self.account = kit.TitledGroup()
         top = QWidget()
         lay = QHBoxLayout(top)
-        lay.setContentsMargins(16, 12, 16, 12)
+        lay.setContentsMargins(16, 14, 16, 14)
         lay.setSpacing(14)
-        self.avatar = Avatar()
+        self.avatar = Avatar(56)
         lay.addWidget(self.avatar)
         words = QVBoxLayout()
         words.setSpacing(1)
@@ -254,18 +324,20 @@ class ProfilePage(Page):
         words.addStretch(1)
         lay.addLayout(words, 1)
         self.account.add(top)
+        self.inbox_row = kit.Row("Inbox", chevron=True)
+        self.inbox_row.clicked.connect(self._open_inbox)
+        self.account.add(self.inbox_row)
         self.column.addWidget(self.account)
 
         # body details: tap a row, set it in a sheet, and it saves at once
-        self.details = kit.Group("Body details", "Tap a row to set it; it saves straight away. Health Data uses "
-                                                 "these for calories, VO2max and heart-rate zones.")
+        self.details = kit.TitledGroup("Body")
         self.name = QLineEdit()
         self.name.setPlaceholderText("Your name")
         self.name.setProperty("class", "plain")
         self.name.setAlignment(Qt.AlignmentFlag.AlignRight)
         self.name.textChanged.connect(self._name_typed)
         self.name.editingFinished.connect(self._name_done)
-        self.details.add(kit.Row("Name", icon="me", accent=t.BLUE, trailing=self.name))
+        self.details.add(kit.Row("Name", trailing=self.name))
         # The values live in these (tests and _save read them); the rows show them and open the editors.
         self.birth = BirthDate(self)
         self.birth.setDisplayFormat("d MMM yyyy")
@@ -276,7 +348,7 @@ class ProfilePage(Page):
         self.sex = ChoicePill("Sex")
         for value in person.SEX:
             self.sex.addItem("Not set" if value == "notSet" else value.capitalize(), value)
-        _pill(self.sex, 118)
+        self.sex.setProperty("class", "valuepick")
         self.sex.chosen = self._body_edited
         self.height = QSpinBox(self)
         self.height.setRange(49, 272)  # 49 reads "Not set"; the server takes 50-272
@@ -285,88 +357,86 @@ class ProfilePage(Page):
         self.weight.setRange(19, 400)  # 19 reads "Not set"; the server takes 20-400
         self.weight.setDecimals(1)
         self.weight.hide()
-        self.birth_row = kit.Row("Birth date", icon="cal", accent=t.CARDIAC, chevron=True)
+        self.birth_row = kit.Row("Birth date", chevron=True)
         self.birth_row.clicked.connect(self._edit_birth)
         self.details.add(self.birth_row)
-        self.details.add(kit.Row("Sex", icon="people", accent=t.SLEEP, trailing=self.sex))
-        self.height_row = kit.Row("Height", icon="body", accent=t.RECOVERY, chevron=True)
+        sex_row = kit.Row("Sex", trailing=self.sex, chevron=True)
+        sex_row.clicked.connect(self.sex.click)
+        self.details.add(sex_row)
+        self.height_row = kit.Row("Height", chevron=True)
         self.height_row.clicked.connect(self._edit_height)
         self.details.add(self.height_row)
-        self.weight_row = kit.Row("Weight", icon="dumbbell", accent=t.FITNESS, chevron=True)
+        self.weight_row = kit.Row("Weight", chevron=True)
         self.weight_row.clicked.connect(self._edit_weight)
         self.details.add(self.weight_row)
         self.column.addWidget(self.details)
         self._show_body()
 
-        # health goals
-        self.goals = kit.Group("Health goals", "Bedtime rings the wind-down reminder; wake time rings the alarm. "
-                                               "Save in the top right sends details and goals.")
+        # health goals: the times are pills, the amounts open a sheet
+        self.goals = kit.TitledGroup("Goals")
         self.bedtime = kit.time_pill(QTime(23, 0))
         self.wake = kit.time_pill(QTime(7, 0))
-        self.water = kit.Stepper(2000, 0, 10000, 250, "{:,} ml")
-        self.sleep_need = kit.Stepper(480, 420, 540, 15, "{} min")
-        self.steps = kit.Stepper(8000, 0, 100000, 500, "{:,}")
-        self.goals.add(kit.Row("Bedtime", "DX-01", icon="sleep", accent=t.SLEEP, trailing=self.bedtime))
-        self.goals.add(kit.Row("Wake time", "DX-02", icon="sunrise", accent=t.FOCUS, trailing=self.wake))
-        self.goals.add(kit.Row("Sleep need", icon="clock", accent=t.SLEEP, trailing=self.sleep_need))
-        self.goals.add(kit.Row("Water", "NI-04", icon="drop", accent=t.TEAL, trailing=self.water))
-        self.goals.add(kit.Row("Steps a day", icon="walk", accent=t.FITNESS, trailing=self.steps))
+        self.bedtime.editingFinished.connect(self._time_done)
+        self.wake.editingFinished.connect(self._time_done)
+        self.water = _held(kit.Stepper(2000, 0, 10000, 250, "{:,} ml"), self)
+        self.sleep_need = _held(kit.Stepper(480, 420, 540, 15, "{} min"), self)
+        self.steps = _held(kit.Stepper(8000, 0, 100000, 500, "{:,}"), self)
+        self.goals.add(kit.Row("Bedtime", trailing=self.bedtime))
+        self.goals.add(kit.Row("Wake time", trailing=self.wake))
+        self.sleep_row = kit.Row("Sleep need", chevron=True)
+        self.sleep_row.clicked.connect(lambda: self._edit_goal(self.sleep_need, "Sleep need", (15, 30)))
+        self.goals.add(self.sleep_row)
+        self.water_row = kit.Row("Water", chevron=True)
+        self.water_row.clicked.connect(lambda: self._edit_goal(self.water, "Water", (250, 500)))
+        self.goals.add(self.water_row)
+        self.steps_row = kit.Row("Steps a day", chevron=True)
+        self.steps_row.clicked.connect(lambda: self._edit_goal(self.steps, "Steps a day", (500, 1000)))
+        self.goals.add(self.steps_row)
         self.column.addWidget(self.goals)
+        self._show_goals()
 
-        # band
-        self.band = kit.Group("Band", "Pairing saves the band on your account. Sync sends what this phone holds.")
-        self.band_row = kit.Row("No band paired", icon="band", accent=t.WORKOUT)
+        # band: what's paired (tap for pair / sync) and the last sync
+        self.band = kit.TitledGroup("Band")
+        self.band_row = kit.Row("Band", value="None", chevron=True)
+        self.band_row.clicked.connect(self._band_menu)
         self.band.add(self.band_row)
-        self.pair = kit.Row("Pair a band", kind="link")
-        self.pair.clicked.connect(self._pair)
-        self.band.add(self.pair)
-        sync = kit.Row("Sync now", kind="link")
-        sync.clicked.connect(self._sync)
-        self.band.add(sync)
+        self.sync_row = kit.Row("Last sync", value="Never")
+        self.band.add(self.sync_row)
         self.column.addWidget(self.band)
 
-        # alerts, one list per area
+        # alerts, one list per area: the feature's name and glyph, a switch
         self.switches: dict[str, kit.Switch] = {}
-        lists: dict[str, kit.Group] = {}
+        lists: dict[str, kit.Group] = {"Band": self.band}
         for feature in ALERT_FEATURES:
             where = ALERT_AREA.get(feature.group, feature.group)
             if where not in lists:
-                lists[where] = kit.Group(f"{where} alerts")
+                lists[where] = kit.TitledGroup(f"{where} alerts")
                 self.column.addWidget(lists[where])
-            switch = kit.Switch(True, tip=f"{feature.id} {feature.name}")
+            switch = kit.Switch(True, tip=feature.name)
             switch.setProperty("feature", feature.id)
             switch.toggled.connect(self._switch)
-            icon, accent = feature_tile(feature)
-            lists[where].add(kit.Row(feature.name, feature.id, icon=icon, accent=accent, trailing=switch))
+            lists[where].add(kit.GlyphRow(feature.name, feature.icon, feature.accent, trailing=switch))
             self.switches[feature.id] = switch
-        list(lists.values())[-1].set_footer("Switch a feature off and it stops sending alerts.")
-
-        # inbox
-        self.inbox = kit.Group("Inbox")
-        self.column.addWidget(self.inbox)
 
         # appearance
-        appearance = kit.Group("Appearance")
-        holder = QWidget()
-        hold = QHBoxLayout(holder)
-        hold.setContentsMargins(12, 8, 12, 8)
+        appearance = kit.TitledGroup("Appearance")
         self.appearance = kit.Segmented(("Light", "Dark"))
+        self.appearance.setFixedWidth(150)
         self.appearance.changed.connect(self._appearance_picked)
-        hold.addWidget(self.appearance)
-        appearance.add(holder)
+        appearance.add(kit.Row("Theme", trailing=self.appearance))
         self.column.addWidget(appearance)
 
         # your data
-        self.data = kit.Group("Your data", "Delete removes the account and everything in it on dev.")
-        self.export_row = kit.Row("Export my data", icon="export", accent=t.BLUE, kind="link")
+        self.data = kit.TitledGroup("Your data")
+        self.export_row = kit.Row("Export my data", kind="link")
         self.export_row.clicked.connect(self._export)
         self.data.add(self.export_row)
-        delete = kit.Row("Delete account", icon="trash", accent=t.WORKOUT, kind="danger")
+        delete = kit.Row("Delete account", kind="danger")
         delete.clicked.connect(self._delete)
         self.data.add(delete)
         self.column.addWidget(self.data)
 
-        leave = kit.Group()
+        leave = kit.TitledGroup()
         sign_out = kit.Row("Sign out", kind="link")
         sign_out.title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         sign_out.clicked.connect(self._sign_out)
@@ -403,6 +473,7 @@ class ProfilePage(Page):
         self.wake.setTime(QTime.fromString(goals.get("wakeTime") or "07:00", "HH:mm"))
         self.sleep_need.setValue(int(goals.get("sleepNeedMinutes") or 480))
         self.steps.setValue(int(goals.get("stepsPerDay") or 8000))
+        self._show_goals()
         born = QDate.fromString(str(me.get("birthDate") or ""), "yyyy-MM-dd")
         self.birth.setDate(born if born.isValid() else NO_DATE)
         self.sex.setCurrentIndex(max(0, self.sex.findData(me.get("sex") or "notSet")))
@@ -427,7 +498,12 @@ class ProfilePage(Page):
         self.height_row.set_value("Not set" if h == self.height.minimum() else f"{h} cm")
         self.weight_row.set_value("Not set" if w == self.weight.minimum() else f"{w:g} kg")
 
-    # -- body detail editors -------------------------------------------------
+    def _show_goals(self) -> None:
+        self.sleep_row.set_value(_hours(self.sleep_need.value()))
+        self.water_row.set_value(f"{self.water.value():,} ml")
+        self.steps_row.set_value(f"{self.steps.value():,}")
+
+    # -- body detail and goal editors -------------------------------------------
 
     def _body_edited(self) -> None:
         self._show_body()
@@ -436,6 +512,20 @@ class ProfilePage(Page):
     def _name_done(self) -> None:
         name = self.name.text().strip()
         if name and name != str(self.ctx.store.get("me", {}).get("displayName") or ""):
+            self._save()
+
+    def _time_done(self) -> None:
+        """A time pill lost focus: save when it differs from what the account holds."""
+        goals = self.ctx.store.get("me", {}).get("healthGoals") or {}
+        held = (goals.get("bedtime") or "23:00", goals.get("wakeTime") or "07:00")
+        if (self.bedtime.time().toString("HH:mm"), self.wake.time().toString("HH:mm")) != held:
+            self._save()
+
+    def _edit_goal(self, held: kit.Stepper, title: str, quick: tuple[int, int]) -> None:
+        sheet = NumberSheet(self, title, held.value(), held.lo, held.hi, held.step, held.fmt, quick=quick)
+        if sheet.exec() == QDialog.DialogCode.Accepted:
+            held.setValue(sheet.value())
+            self._show_goals()
             self._save()
 
     def _edit_birth(self) -> None:
@@ -467,9 +557,8 @@ class ProfilePage(Page):
     def _show_band(self, me: dict) -> None:
         band = person.paired_band(me)
         last = actions.last_sync(self.ctx)
-        self.band_row.set_title(band or "No band paired")
-        self.band_row.set_sub(f"Last sync {last.strftime('%d %b %H:%M')}" if last else "Not synced from this phone yet")
-        self.pair.set_title("Unpair" if band else "Pair a band")
+        self.band_row.set_value(band or "None")
+        self.sync_row.set_value(last.strftime("%d %b %H:%M") if last else "Never")
 
     def _show_switches(self) -> None:
         off = set(self.ctx.store.get("alert_off", []))
@@ -478,16 +567,26 @@ class ProfilePage(Page):
             switch.setChecked(fid not in off)
         self._loading_switches = False
 
+    # -- inbox -----------------------------------------------------------------
+
     def _show_inbox(self) -> None:
-        self.inbox.clear()
         items = self.ctx.store.data.get("inbox")
         if items is None:
-            self.inbox.add(kit.Row(self.ctx.store.status("inbox", "Inbox"), kind="quiet", wrap=True))
-            self.inbox.set_footer("")
-            return
+            self.inbox_row.set_value("…")
+        else:
+            self.inbox_row.set_value(str(sum(1 for n in items if n.get("status") != "dismissed")))
+        if self._inbox_sheet is not None:
+            self._inbox_sheet.fill()
+
+    def inbox_rows(self) -> list[kit.Row]:
+        """One row per notification still in the inbox (the newest 10), for the inbox sheet."""
+        items = self.ctx.store.data.get("inbox")
+        if items is None:
+            return [kit.Row(self.ctx.store.status("inbox", "Inbox"), kind="quiet", wrap=True)]
         live = [n for n in items if n.get("status") != "dismissed"]
         if not live:
-            self.inbox.add(kit.Row("No notifications", kind="quiet"))
+            return [kit.Row("No notifications", kind="quiet")]
+        rows = []
         for n in live[:10]:
             unread = not n.get("readAt")
             row = kit.Row(str(n.get("title") or ""), str(n.get("body") or ""), icon="bell",
@@ -495,8 +594,19 @@ class ProfilePage(Page):
             row.setProperty("nid", n.get("id"))
             row.setProperty("unread", unread)
             row.clicked.connect(self._inbox_pick)
-            self.inbox.add(row)
-        self.inbox.set_footer("Alerts land here too (push is not set up for this demo).")
+            rows.append(row)
+        return rows
+
+    def inbox_sheet(self) -> InboxSheet:
+        """The inbox sheet, kept up to date while it is open."""
+        self._inbox_sheet = InboxSheet(self)
+        return self._inbox_sheet
+
+    def _open_inbox(self) -> None:
+        sheet = self.inbox_sheet()
+        sheet.exec()
+        self._inbox_sheet = None
+        sheet.deleteLater()
 
     # -- actions ---------------------------------------------------------------
 
@@ -532,7 +642,7 @@ class ProfilePage(Page):
             return {**old, **body, "healthGoals": {**(old.get("healthGoals") or {}), **goals}}
 
         self.ctx.store.patch("me", merged)
-        self.ctx.toast.emit("Profile saved")
+        self.ctx.toast.emit("Saved")
         api = self.ctx.api
 
         def send() -> dict:
@@ -542,6 +652,15 @@ class ProfilePage(Page):
             return api.update_profile_fresh({"healthGoals": goals}, next_version)
 
         self.ctx.write(send, area.PROFILE, self._saved)
+
+    def _band_menu(self) -> None:
+        paired = person.paired_band(self.ctx.store.get("me", {}))
+        picked = layers.ActionSheet.pick(self, paired or "Band",
+                                         ["Sync now", ("Unpair", "danger") if paired else "Pair a band"])
+        if picked == 0:
+            self._sync()
+        elif picked == 1:
+            self._pair()
 
     def _pair(self) -> None:
         me = self.ctx.store.get("me", {})
@@ -558,12 +677,14 @@ class ProfilePage(Page):
         if isinstance(body, dict) and body:
             self.ctx.store.patch("me", lambda _old: body)
 
-    def _switch(self, _checked: bool) -> None:
+    def _switch(self, checked: bool) -> None:
         if self._loading_switches:
             return
         off = [fid for fid, switch in self.switches.items() if not switch.isChecked()]
         self.ctx.store.patch("alert_off", lambda _old: off)
-        self.ctx.toast.emit(f"Alerts off: {', '.join(off)}" if off else "All alerts on")
+        changed = self.sender()
+        name = changed.toolTip() if isinstance(changed, kit.Switch) else "Alerts"
+        self.ctx.toast.emit(f"{name} {'on' if checked else 'off'}")
         self.ctx.write(lambda: self.ctx.api.set_alert_settings(off), area.PROFILE)
 
     def _inbox_pick(self) -> None:
@@ -602,7 +723,7 @@ class ProfilePage(Page):
             self._on_appearance(index == 1)
 
     def _export(self) -> None:
-        self.export_row.set_sub("Preparing your export…")
+        self.export_row.set_value("Preparing…")
         self.ctx.call(self.ctx.api.request_export, self._export_started)
 
     def _export_started(self, body: dict) -> None:
@@ -628,14 +749,16 @@ class ProfilePage(Page):
     def _show_export(self, record: dict) -> None:
         status = record.get("status")
         if status == "ready" and record.get("url"):
-            self.export_row.set_sub(f"Ready ({record.get('bytes') or 0} bytes). Opening the download link…")
+            self.export_row.set_value("Ready")
+            self.export_row.setToolTip(f"{record.get('bytes') or 0} bytes")
             QDesktopServices.openUrl(QUrl(str(record["url"])))
         elif status == "failed":
-            self.export_row.set_sub(f"Export failed: {record.get('error') or 'unknown'}")
+            self.export_row.set_value("Failed")
+            self.export_row.setToolTip(f"Export failed: {record.get('error') or 'unknown'}")
         else:
             parts = record.get("parts") or {}
             done = sum(1 for v in parts.values() if v == "done")
-            self.export_row.set_sub(f"Preparing… {done}/{len(parts) or '?'} parts")
+            self.export_row.set_value(f"{done}/{len(parts) or '?'} parts")
 
     def delete_alert(self) -> layers.Alert:
         """The red confirm: Delete only works once DELETE is typed."""

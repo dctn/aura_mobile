@@ -179,6 +179,42 @@ QPushButton[class="icon"] {{ background: {c['fill']}; border-radius: 16px; min-w
 QPushButton[class="mode"] {{ background: {c['fill']}; color: {c['label']}; border-radius: 16px; padding: 7px 12px; }}
 QPushButton[class="mode"]:checked {{ background: {c['accent']}; color: white; }}
 
+/* the Figma look: alert pills, metric cards, the day strip, start pill */
+QFrame[class="pill"] {{ background: {c['pill']}; border-radius: {t.R_PILL}px; border: none; }}
+QFrame[class="pill"]:hover {{ background: {c['pill']}; }}
+QFrame[class="pill"] QLabel {{ background: transparent; color: {c['pill_ink']}; }}
+QFrame[class="pill"] QLabel[class="pillreason"] {{ color: {c['pill_ink2']}; font-size: {t.SUB}px; }}
+QLabel[class="pilltitle"] {{ font-size: {t.ROW}px; font-weight: 600; }}
+QPushButton[class="go"] {{ background: {c['go']}; color: {c['go_ink']}; border-radius: 17px; padding: 7px 16px;
+    font-weight: 700; font-size: {t.SUB + 1}px; min-height: 20px; }}
+QPushButton[class="go"]:hover {{ background: {c['go']}; color: #000000; }}
+QPushButton[class="go"]:disabled {{ background: {c['fill2']}; color: {c['label3']}; }}
+QFrame[class="mcard"], QFrame[class="bigcard"] {{ background: {c['card']}; border-radius: {t.R_BIG}px; border: none; }}
+QFrame[class="mcard"]:hover, QFrame[class="bigcard"]:hover {{ background: {c['card2']}; }}
+QFrame[class="softpill"] {{ background: {c['card']}; border-radius: 22px; border: none; }}
+QLabel[class="mlabel"] {{ font-size: {t.ROW}px; font-weight: 600; }}
+QLabel[class="mwhen"] {{ font-size: {t.SUB}px; color: {c['label2']}; }}
+QLabel[class="mbig"] {{ font-size: 34px; font-weight: 700; }}
+QLabel[class="munit"] {{ font-size: {t.ROW}px; font-weight: 600; color: {c['label2']}; padding-bottom: 6px; }}
+QLabel[class="section"] {{ font-size: 22px; font-weight: 700; }}
+QLabel[class="tilename"] {{ font-size: {t.ROW}px; font-weight: 600; }}
+QLabel[class="tilesub"] {{ font-size: {t.SUB}px; color: {c['label2']}; }}
+QPushButton[class="start"] {{ background: {c['pill']}; color: {c['pill_ink']}; border-radius: 30px;
+    min-height: 60px; max-height: 60px; padding: 0 24px 0 70px; font-size: 18px; font-weight: 600;
+    text-align: left; }}
+QPushButton[class="start"]:hover {{ background: {c['pill']}; color: {c['go']}; }}
+QPushButton[class="start"]:disabled {{ background: {c['fill2']}; color: {c['label3']}; }}
+
+/* Search's drill pages: the metric hero number, the trend card, the countdown's cancel */
+QLabel[class="hero"] {{ font-size: 52px; font-weight: 700; }}
+QLabel[class="heroavg"] {{ font-size: {t.ROW}px; font-weight: 600; }}
+QLabel[class="trendtitle"] {{ font-size: 19px; font-weight: 700; }}
+QLabel[class="trendbig"] {{ font-size: 30px; font-weight: 700; }}
+QLabel[class="facepick"] {{ font-size: {t.SUB}px; color: {c['label2']}; }}
+QPushButton[class="logbtn"] {{ background: {c['fill']}; color: {c['accent']}; border-radius: 17px; padding: 7px 14px;
+    font-weight: 600; font-size: {t.SUB + 1}px; min-height: 20px; }}
+QPushButton[class="logbtn"]:hover {{ background: {c['fill2']}; }}
+
 /* inputs */
 QLineEdit, QSpinBox, QDoubleSpinBox, QTimeEdit, QDateEdit, QComboBox, QPlainTextEdit {{ background: {c['fill']};
     border: none; border-radius: 9px; padding: 6px 10px; min-height: 20px; selection-background-color: {c['accent']}; }}
@@ -200,5 +236,23 @@ QScrollBar::add-line, QScrollBar::sub-line, QScrollBar::add-page, QScrollBar::su
     height: 0; background: none; }}
 QProgressBar {{ background: {c['fill']}; border: none; border-radius: 3px; max-height: 6px; text-align: center; }}
 QProgressBar::chunk {{ background: {c['accent']}; border-radius: 3px; }}
+
+/* the Figma look: settings lists, sign-in, the Test lab */
+QLabel[class="grouptitle"] {{ font-size: 17px; font-weight: 700; }}
+QFrame[class="biglist"] {{ background: {c['card']}; border-radius: 20px; border: none; }}
+QLabel[class="brand"] {{ font-size: 40px; font-weight: 800; }}
+QLabel[class="hint"] {{ font-size: {t.SUB}px; color: {c['label2']}; }}
+QLabel[class="codetag"] {{ font-size: {t.SMALL}px; font-weight: 600; color: {c['label3']}; }}
+QFrame[class="field"] {{ background: {c['card']}; border-radius: {t.R_BIG}px; border: none; }}
+QPushButton[class="gobig"] {{ background: {c['go']}; color: {c['go_ink']}; border-radius: 26px; min-height: 40px;
+    font-size: {t.TITLE + 1}px; font-weight: 700; }}
+QPushButton[class="gobig"]:hover {{ background: {c['go']}; color: #000000; }}
+QPushButton[class="gobig"]:disabled {{ background: {c['fill2']}; color: {c['label3']}; }}
+QPushButton[class="run"] {{ background: {c['fill']}; color: {c['label']}; border-radius: 14px; padding: 4px 14px;
+    min-height: 20px; font-size: {t.SUB}px; font-weight: 600; }}
+QPushButton[class="run"]:disabled {{ color: {c['label3']}; }}
+QPushButton[class="valuepick"] {{ background: transparent; color: {c['label2']}; font-weight: 400; padding: 0;
+    font-size: {t.ROW}px; text-align: right; }}
+QPushButton[class="valuepick"]:hover {{ background: transparent; color: {c['label']}; }}
 {_tints(p)}
 """

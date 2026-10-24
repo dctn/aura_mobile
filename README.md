@@ -36,57 +36,61 @@ Local state lives in `%APPDATA%\AuraMobileDemo`:
 
 ## Screens
 
-![Home](docs/screenshots/1-home.png) ![Recovery](docs/screenshots/2-recovery.png) ![Search](docs/screenshots/3-search.png)
+![Home](docs/screenshots/01-home.png) ![Recovery](docs/screenshots/02-recovery.png) ![Search](docs/screenshots/03-search.png)
 
-The look follows the old "Aura Clarus Mobile" iPhone prototype: grouped lists with coloured icon tiles, large
-titles that shrink into the nav bar when you scroll, a floating tab bar, bottom sheets, iOS alerts and action sheets,
-and full-phone timers. Light and dark both work (Profile → Appearance). The design system is in `ui/tokens.py`
-(colours, sizes), `ui/theme.py` (the stylesheet), `ui/icons.py` (line icons), `ui/kit.py` (rows, groups, switch,
-segmented control, stepper, chips, chart cards, rings, mode tiles, coach card, nav bar) and `ui/layers.py` (Sheet,
-Alert, ActionSheet, the HUD pill).
+The look (24 Oct redesign) follows the old Figma "AURA CLARUS ANR APP" (exports in `../figma/`): simple and visual,
+almost no text. An alert is a **black pill** with its icon, name, a two-word reason ("Short night") and one green
+button ("Nap"); under it a **metric card** with the big number and 14 day-bars. Explanations live behind ⓘ, never in
+footers; feature codes show only in the Test lab. Light and dark both work (Settings → Appearance). The design system
+is in `ui/tokens.py` (colours, sizes), `ui/theme.py` (the stylesheet), `ui/icons.py` (line icons), `ui/kit.py`
+(ActionPill, MetricCard, DayStrip, CategoryRow, StartPill, CountdownRing, RoundButton, IconTile, plus rows, groups,
+switch, segmented control, stepper, nav bar) and `ui/layers.py` (Sheet, Alert, ActionSheet, the HUD pill). The short
+copy per feature (`reason`, `verb`, `metric`, `icon`) is in `core/features.py`; the metric cards (label, unit, colour)
+in `core/metrics.py` `CARDS`.
 
 There are three tabs, following the sketch:
 
-- **Home:**
-  - The notification (coach card) shows the top open alert with its action button, **Not now** and ⓘ. Tapping the
-    card opens a sheet with check-in, the alert's quick action, breathe / move, and water logging.
-  - **Finish your profile · N missing** while body details are unset (BS-01); it opens Profile.
-  - Calendar card for the next 7 days, with **+ Event**.
-  - Tasks card: tick to complete, or type to add.
-  - **Movement this week**: `weeklyActiveMinutes` against 150 (DX-09).
-  - Pins: metrics from the latest computed day (**Edit** to choose them), plus the last band sync with **Reconnect**
-    (BS-02); it warns after 24 h.
-- **Recovery:**
-  - *What to do*: a card per open alert, with its action button, **Done**, and ⓘ (what the feature is).
-  - Seven recovery presets as tiles. Each starts a Session and opens the full-phone timer (below).
-- **Search:**
-  - A filter field over the whole page.
-  - **Logging**: water in glasses and ml against your goal, mood and connection check-ins, **Strength** (PB-04),
-    **Sleep check** (DX-03), and this week's history.
-  - **Modes**: Timer, Flowtime, Walk, Meeting.
-  - **Sessions**: the running session (pause, resume, stop, complete) and the last week's sessions; a completed
-    recovery session has **Stress change** (DX-07).
+- **Home:** the 5-day strip; **Today**: up to 3 alert pills, each over its metric card (tap the pill for ⓘ, the
+  button runs the action, + opens check-in / breathe / move / water); **Burnout**: the risk pill and Avg sleep, Late
+  nights and Recovery cards (tap a card for its detail page); tasks as pills; this week's events; **Movement**
+  (`weeklyActiveMinutes` against 150, DX-09); pins; **Finish your profile** while body details are missing (BS-01);
+  the band's last sync with **Reconnect** (BS-02).
+- **Recovery:** every open alert as a pill with a ✓ (Done) over its metric card, then the recovery presets as icon
+  tiles. Each preset starts a Session in the full-phone timer.
+- **Search:** a filter field, the health categories (Sleep, Heart, Stress, Recovery, Movement, Breathing, Burnout,
+  Body) with their newest value, then:
+  - a category opens its **detail page**: big number, Avg, 2 Weeks / 1 Month / 2 Months, the bars, the trend against
+    last week, **Pin to Home**;
+  - **Logging**: water in glasses against your goal, mood and connection as five faces, **Strength** (PB-04),
+    **Sleep check** (DX-03), this week's history;
+  - **Modes**: Timer, Flowtime, Walk, Meeting → a setup page with the big **Start** pill and Length → 3-2-1 → the timer;
+  - **Sessions**: the running session (pause, stop, done) and the week's sessions; a completed recovery session has
+    **Stress change** (DX-07);
+  - **Settings**.
 
-Timers (presets, the nap, slow breathing, move break, wind-down) open a full-phone view: a big clock, End and
-Pause, a breathing circle for slow breathing, a black night view for the nap, and the list for tomorrow during the
-wind-down. **Hide** shrinks it to a bar above the tabs; tap the bar to open it again. A finished timer completes the
-Session; **End** stops it (or **Mark as done**). The bar also shows a session the server says is running.
+![Metric](docs/screenshots/04-metric.png) ![Logging](docs/screenshots/05-logging.png) ![Mode setup](docs/screenshots/07-mode-setup.png)
 
-![Timer](docs/screenshots/7-run.png) ![Mini bar](docs/screenshots/8-minibar.png) ![Sheet](docs/screenshots/9-quick-sheet.png)
+Timers (presets, the nap, slow breathing, move break, wind-down, modes) open a full-phone view: a big clock, round
+pause and red stop buttons, a breathing circle for slow breathing, a black night view for the nap, and the list for
+tomorrow during the wind-down. **Hide** shrinks it to a bar above the tabs; tap the bar to open it again. A finished
+timer completes the Session; stop ends it. The bar also shows a session the server says is running.
+
+![Countdown](docs/screenshots/08-countdown.png) ![Timer](docs/screenshots/09-run.png) ![Settings](docs/screenshots/10-settings.png)
 
 **Settings** opens from the gear on every tab's nav bar; the **Test lab** from the flask on Home. Both close with **‹ Back** (or Esc):
 
-- **Settings** (gear, BS-01): name and body details (tap Birth date, Height or Weight for a sheet; Sex is a pick; each saves at once), health goals (saved as a second write, so a refused goal
-  doesn't lose the body details), the band (pair, sync, last sync), the 17 alert switches, the inbox (read, dismiss,
-  snooze), export, delete account, dark mode and sign out.
-- **Test lab** (flask button): one row per alert feature. **Run** sends the scenario's band days; the row then
-  watches for 12 min and says what AWS did at every look: "AWS hasn't computed 21 Oct yet", or "AWS computed
-  21 Oct at 21:05: sleepLatencyMin = 39 (rule: > 30 on 4+ nights). No alert yet", until **Passed**. **Check now**
-  looks again at any time.
+- **Settings** (gear, BS-01): name and body details (each row opens a sheet and saves at once), goals (saved as a
+  second write, so a refused goal doesn't lose the body details), the band (pair, sync, last sync), the 17 alert
+  switches by name, the inbox (one row that opens a sheet: read, dismiss, snooze), export, delete account, dark mode
+  and sign out.
+- **Test lab** (flask button): the month ring "x / 16" with **Run** and a chip per alert (grey waiting, green fired,
+  red failed), then one line per feature with a status dot and **Run**. Tap a row for its sheet: the scenario, the
+  rule and what AWS did at every look ("AWS computed 21 Oct at 21:05: sleepLatencyMin = 39 (rule: > 30 on 4+
+  nights). No alert yet", until **Passed**), with **Check now**.
 
 ## Test lab
 
-![Test lab](docs/screenshots/5-lab.png)
+![Test lab](docs/screenshots/11-lab.png)
 
 **Run** sends that feature's synthetic band days, one packet a minute, the same as the band. It always uses **past,
 unused** dates: a day that was computed before keeps its result, and each feature can raise only one alert per day.
@@ -105,6 +109,9 @@ and shows **Passed** when the alert appears, and the alert shows on Recovery and
 
 ## Per-feature test guide
 
+The pill's green button says the short verb (`Feature.verb`, e.g. **Bedtime**, **Breathe**); the bold step below
+is what it does.
+
 | Feature | Lab run sends | Then, in the app |
 |---|---|---|
 | DX-01 Sleep-debt payback (derived) | 14 short nights (5 h 45 m) | **Set an earlier bedtime**: moves the bedtime goal 30 min earlier. The phone reminds you 30 min before bed (local alarm, while the app is open) |
@@ -118,11 +125,11 @@ and shows **Passed** when the alert appears, and the alert shows on Recovery and
 | PB-01 Body-clock reset (derived) | The sleep window jumps from 23:00 to 01:00–03:00 | **Plan morning light**: 3 mornings of 15-min outdoor light 30 min after your wake time (07:30–09:30), and **Dim screens** at 21:00 |
 | PB-02 Burnout early warning (derived) | 3 weeks of short sleep, high HR and heavy load, ending on a Monday | **Plan a recovery day**: event tomorrow, then a mood check |
 | PB-03 Sitting breaker (direct) | One unbroken 95-min desk bout | **Move for 3 min**: timer |
-| PB-04 Fitness keeper (derived) | A fit week that fades into 3 sedentary weeks | **Plan 3 sessions**: 18:00 events on days +1, +3 and +5. Search → **Strength** logs a session by hand |
+| PB-04 Fitness keeper (derived) | A fit week that fades into 3 sedentary weeks | **Plan 3 sessions**: 18:00 events on days +1, +3 and +5. Search → Logging → **Strength** logs a session by hand |
 | PB-05 Health-check flag (derived) | 10 nights with 15 SpO2 dips each | **Book a check-up**: adds a 'Book a doctor visit' task |
 | NI-02 Mood check + help (direct) | 3 low mood check-ins, then a band day | **Check in on mood**: help options (Tele-MANAS 14416, iCall, 112) when the mood is 2 or lower or low most of the week; can add 'Reach out to someone' to tasks |
 | NI-03 Connection nudge (direct) | A day on the 1st or 15th with no connection check-ins | **Log connection**: plan a call today (task) and/or a meal this week (event), then the connection check-in |
-| NI-04 Hydration reminder (direct) | A final day that books the hydration timer | Fires **about 2 h later** if today's water is behind the goal. Don't log water until it arrives. **Log a glass**; Search shows glasses and ml |
+| NI-04 Hydration reminder (direct) | A final day that books the hydration timer | Fires **about 2 h later** if today's water is behind the goal. Don't log water until it arrives. **Drink** logs a glass; Search → Logging shows glasses and ml |
 | BS-01 User identity & data | (no lab run) | Profile: name and body details (birth date, sex, height, weight), goals, alert switches, export, delete. Home shows **Finish your profile** while details are missing |
 | BS-02 Band connection & sync (direct) | Computes an empty day after another empty day (1 compute) | **Reconnect the band**: sends what the band kept since the last sync (30 min to 12 h). Profile → Band pairs one (`pairedBandId` setting) and shows the last sync; Home warns after 24 h |
 

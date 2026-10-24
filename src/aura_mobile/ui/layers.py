@@ -160,6 +160,7 @@ class Sheet(Layer):
         self.body = QVBoxLayout(inner)
         self.body.setContentsMargins(t.GUTTER, 8, t.GUTTER, 16)
         self.body.setSpacing(16)
+        self.body.setAlignment(Qt.AlignmentFlag.AlignTop)  # short content stays at the top of a taller sheet
         self.scroll.setWidget(inner)
         outer.addWidget(self.scroll, 1)
         self.footer_button: QPushButton | None = None
@@ -187,7 +188,9 @@ class Sheet(Layer):
             return most
         self.body.activate()
         inner = self.scroll.widget()
-        want = inner.sizeHint().height() + 6 + 42 + (90 if self.footer_button else 18) + 6
+        # wrapped labels only know their height at a width, so measure at the sheet's own
+        h = inner.heightForWidth(max(1, self.width())) if inner.hasHeightForWidth() else -1
+        want = max(h, inner.sizeHint().height()) + 6 + 42 + (90 if self.footer_button else 18) + 6
         return max(220, min(most, want))
 
     def place(self) -> None:

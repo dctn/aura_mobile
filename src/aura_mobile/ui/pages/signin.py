@@ -1,5 +1,8 @@
 """Sign in: email, then the emailed code. A new email signs up on the way (a 6-digit code instead of 8).
 
+The screen is the Figma minimum: the brand, one field and one green pill per step; the SES sandbox and the
+two-codes case are explained behind the ⓘ.
+
 After the code: keep the tokens, grant the health-data consent the band needs (``PUT /v1/me/consent``), register
 this phone with Notification (no push token, so alerts reach the inbox), then open the app.
 """
@@ -11,12 +14,13 @@ import uuid
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont
-from PyQt6.QtWidgets import QHBoxLayout, QLineEdit, QStackedWidget, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QFrame, QHBoxLayout, QLineEdit, QStackedWidget, QVBoxLayout, QWidget
 
 from aura_mobile.services.auth import AuthStep, Tokens
 from aura_mobile.ui import kit, prefs
 from aura_mobile.ui import tokens as t
 from aura_mobile.ui.context import AppContext, describe_error
+from aura_mobile.ui.pages.profile import info_button
 from aura_mobile.ui.widgets import label
 
 
@@ -30,19 +34,31 @@ def device_id() -> str:
     return made
 
 
-def _field_row(field: QLineEdit, icon: str) -> QWidget:
-    """A grouped-list row holding one field, with a grey icon in front."""
-    row = QWidget()
-    row.setMinimumHeight(t.ROW_MIN + 6)
-    lay = QHBoxLayout(row)
-    lay.setContentsMargins(16, 6, 16, 6)
+#: the ⓘ sheet: what the short screen leaves out
+ABOUT = (
+    ("me", "New here? The same step creates the account."),
+    ("bell", "Dev email is in the SES sandbox: the code only reaches verified addresses."),
+    ("lock", "An existing account gets an 8-digit code. One that still needs confirming may get a 6-digit one "
+             "too: either works."),
+)
+
+
+def _field(field: QLineEdit, icon: str) -> QFrame:
+    """A white radius-24 card holding one field, with a grey icon in front."""
+    card = QFrame()
+    card.setProperty("class", "field")
+    card.setMinimumHeight(56)
+    lay = QHBoxLayout(card)
+    lay.setContentsMargins(18, 6, 18, 6)
     lay.setSpacing(10)
     lay.addWidget(kit.Glyph(icon, 20, "label3"))
     lay.addWidget(field, 1)
-    return row
+    return card
 
 
 class SignInPage(QWidget):
+    """The brand, one field and one green pill: email → Send code, then the code → Sign in."""
+
     def __init__(self, ctx: AppContext) -> None:
         super().__init__()
         self.setObjectName("page")
@@ -50,21 +66,27 @@ class SignInPage(QWidget):
         self._step: AuthStep | None = None
 
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(t.GUTTER, 96, t.GUTTER, 28)
+        outer.setContentsMargins(t.GUTTER, 20, t.GUTTER, 28)
         outer.setSpacing(0)
-        brand = QHBoxLayout()
-        brand.setContentsMargins(4, 0, 0, 0)
-        brand.addWidget(kit.Tile("heart", t.SLEEP, 56))
-        brand.addStretch(1)
-        outer.addLayout(brand)
-        outer.addSpacing(18)
-        title = label("Aura", "largetitle")
-        title.setContentsMargins(4, 0, 0, 0)
+        top = QHBoxLayout()
+        top.addStretch(1)
+        self.info = info_button(self, "Signing in", ABOUT)
+        top.addWidget(self.info)
+        outer.addLayout(top)
+        outer.addSpacing(64)
+        mark = QHBoxLayout()
+        mark.addStretch(1)
+        mark.addWidget(kit.Disc("heart", "sleep", 72))
+        mark.addStretch(1)
+        outer.addLayout(mark)
+        outer.addSpacing(14)
+        title = label("Aura", "brand")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         outer.addWidget(title)
-        sub = label("Demo phone for the dev backend (us-west-1).", "subtitle", wrap=True)
-        sub.setContentsMargins(4, 2, 0, 0)
+        sub = label("Demo phone", "subtitle")
+        sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
         outer.addWidget(sub)
-        outer.addSpacing(32)
+        outer.addSpacing(36)
 
         self.steps = QStackedWidget()
         outer.addWidget(self.steps)
@@ -72,17 +94,13 @@ class SignInPage(QWidget):
         email_page = QWidget()
         lay = QVBoxLayout(email_page)
         lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(18)
+        lay.setSpacing(14)
         self.email = QLineEdit()
         self.email.setProperty("class", "plain")
         self.email.setPlaceholderText("you@example.com")
         self.email.returnPressed.connect(self._send)
-        email_group = kit.Group(
-            "Email", "New here? The same step creates the account. Dev email is in the SES sandbox, so the code "
-                     "only reaches verified addresses.")
-        email_group.add(_field_row(self.email, "me"))
-        lay.addWidget(email_group)
-        self.send = kit.text_button("Send code", "primary")
+        lay.addWidget(_field(self.email, "me"))
+        self.send = kit.text_button("Send code", "gobig")
         self.send.clicked.connect(self._send)
         lay.addWidget(self.send)
         lay.addStretch(1)
@@ -91,7 +109,7 @@ class SignInPage(QWidget):
         code_page = QWidget()
         lay = QVBoxLayout(code_page)
         lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(18)
+        lay.setSpacing(14)
         self.code = QLineEdit()
         self.code.setProperty("class", "code")
         self.code.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -99,18 +117,17 @@ class SignInPage(QWidget):
         font.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 6)
         self.code.setFont(font)
         self.code.returnPressed.connect(self._verify)
-        self.code_group = kit.Group("Code")
-        self.code_group.add(_field_row(self.code, "lock"))
-        self.sent_to = self.code_group.foot
-        self.sent_to.show()
-        lay.addWidget(self.code_group)
-        self.verify = kit.text_button("Sign in", "primary")
+        lay.addWidget(_field(self.code, "lock"))
+        self.sent_to = label("", "hint", wrap=True)
+        self.sent_to.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lay.addWidget(self.sent_to)
+        self.verify = kit.text_button("Sign in", "gobig")
         self.verify.clicked.connect(self._verify)
         lay.addWidget(self.verify)
         links = QHBoxLayout()
-        resend = kit.text_button("Send a new code", "link")
+        resend = kit.text_button("Resend", "link")
         resend.clicked.connect(self._resend)
-        back = kit.text_button("Use another email", "link")
+        back = kit.text_button("Change email", "link")
         back.clicked.connect(self._back)
         links.addWidget(resend)
         links.addStretch(1)
@@ -120,6 +137,7 @@ class SignInPage(QWidget):
         self.steps.addWidget(code_page)
 
         self.error = label("", "bad", wrap=True)
+        self.error.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.error.setContentsMargins(16, 10, 16, 0)
         outer.addWidget(self.error)
         outer.addStretch(1)
@@ -155,9 +173,8 @@ class SignInPage(QWidget):
     def _code_sent(self, step: AuthStep) -> None:
         self._step = step
         self._busy(False)
-        if step.also_confirm:
-            self.sent_to.setText(f"We sent a code to {step.destination}: 8 digits for an existing account, "
-                                 "6 digits if the account still needs confirming.")
+        if step.also_confirm:  # 8 or 6 digits: the ⓘ explains
+            self.sent_to.setText(f"We sent a code to {step.destination}.")
         else:
             what = "confirmation" if step.is_new_account else "sign-in"
             article = "an" if step.code_length == 8 else "a"

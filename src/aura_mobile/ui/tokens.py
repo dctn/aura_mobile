@@ -34,6 +34,9 @@ R_CARD = 14
 R_LIST = 12
 R_TILE = 7
 R_SHEET = 14
+#: the Figma look: big cards, the black alert pills, the start pill
+R_BIG = 24
+R_PILL = 32
 
 ROW_MIN = 44
 NAV_H = 44
@@ -50,6 +53,9 @@ RECOVERY = "#34C759"
 BLUE = "#007AFF"
 TEAL = "#5AC8FA"
 FOCUS = "#FFCC00"
+CYAN = "#32ADE6"  # sleep hours
+PURPLE = "#AF52DE"  # late nights
+MINT = "#00C7BE"  # breathing
 
 ACCENTS = {
     "fitness": FITNESS,
@@ -61,6 +67,9 @@ ACCENTS = {
     "blue": BLUE,
     "teal": TEAL,
     "focus": FOCUS,
+    "cyan": CYAN,
+    "purple": PURPLE,
+    "mint": MINT,
 }
 
 # the nap / night run view, the same in both themes
@@ -97,6 +106,13 @@ class Palette:
     scrim_strong: str
     grabber: str
     shadow: str
+    #: the green verb button ("Breathe", "Nap") and the text on it
+    go: str
+    go_ink: str
+    #: the near-black alert pill and day strip, with their white and grey text
+    pill: str
+    pill_ink: str
+    pill_ink2: str
 
     def tint(self, name: str) -> str:
         """A feature's accent; plain blue features follow the theme's accent."""
@@ -114,6 +130,7 @@ LIGHT = Palette(
     good="#34C759", warn="#FF9500", bad="#FF3B30",
     scrim="rgba(0,0,0,0.28)", scrim_strong="rgba(0,0,0,0.42)", grabber="rgba(60,60,67,0.30)",
     shadow="rgba(0,0,0,0.16)",
+    go="#1ED760", go_ink="#0B1F12", pill="#121212", pill_ink="#FFFFFF", pill_ink2="rgba(255,255,255,0.60)",
 )
 DARK = Palette(
     dark=True, bg="#000000", card="#1C1C1E", card2="#2C2C2E", sheet="#1C1C1E",
@@ -125,6 +142,7 @@ DARK = Palette(
     good="#30D158", warn="#FF9F0A", bad="#FF453A",
     scrim="rgba(0,0,0,0.50)", scrim_strong="rgba(0,0,0,0.66)", grabber="rgba(235,235,245,0.30)",
     shadow="rgba(0,0,0,0.50)",
+    go="#1ED760", go_ink="#0B1F12", pill="#2C2C2E", pill_ink="#FFFFFF", pill_ink2="rgba(255,255,255,0.60)",
 )
 
 _current = LIGHT

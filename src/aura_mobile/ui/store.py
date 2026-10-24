@@ -38,8 +38,12 @@ def _today(api: Any) -> date:
     return datetime.now(ZoneInfo(api.time_zone)).date()
 
 
+#: the Home cards' bars: one per day
+METRIC_DAYS = 14
+
+
 def _metrics(api: Any, today: date) -> dict[str, Any]:
-    days = api.metrics_range((today - timedelta(days=10)).isoformat(), today.isoformat())
+    days = api.metrics_range((today - timedelta(days=METRIC_DAYS - 1)).isoformat(), today.isoformat())
     ok = [d for d in days if d.get("status") == "ok"]
     newest = max(ok, key=lambda d: str(d.get("date"))) if ok else None
     latest = api.metrics_day(str(newest["date"])) if newest is not None else None
