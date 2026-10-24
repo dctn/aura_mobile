@@ -5,6 +5,7 @@ import { useState, type ReactNode } from 'react';
 import type { Nav } from '../app/nav';
 import { FaceScale, Group, Icon, Row, Segmented, SheetFrame, Switch } from '../kit/kit';
 import { tone } from '../lib/catalog';
+import { TimePill } from '../calendar/ItemSheet';
 import { addDays, clock, localParts, weekday } from '../lib/agenda';
 import type { Json } from '../lib/types';
 import './recovery.css';
@@ -37,12 +38,16 @@ function FooterButton({ label, accent, onClick, disabled }: { label: string; acc
 
 // -- one time of day ---------------------------------------------------------------------------------------------
 
+const hhmm = (minute: number) => `${String(Math.floor(minute / 60)).padStart(2, '0')}:${String(minute % 60).padStart(2, '0')}`;
+
+/** The wake time on the same 24-hour pill as the calendar (the browser's time field would follow its locale). */
 function TimeSheet({ footer, initial, onSave, close }: { footer: string; initial: string; onSave: (hhmm: string) => void; close: () => void }) {
-  const [value, setValue] = useState(/^\d{2}:\d{2}/.test(initial) ? initial.slice(0, 5) : '07:00');
+  const [minute, setMinute] = useState(/^\d{2}:\d{2}/.test(initial) ? Number(initial.slice(0, 2)) * 60 + Number(initial.slice(3, 5)) : 7 * 60);
+  const value = hhmm(minute);
   return (
     <SheetFrame title="Wake time" onCancel={close} action="Save" actionDisabled={!value} onAction={() => { close(); onSave(value); }}>
       <Group footer={footer}>
-        <Row title="Wake up at" icon="alarm" accent="focus" trailing={<input className="timepill" type="time" value={value} onChange={(e) => setValue(e.target.value)} aria-label="Wake up at" />} />
+        <Row title="Wake up at" icon="alarm" accent="focus" trailing={<TimePill value={minute} onChange={setMinute} />} />
       </Group>
     </SheetFrame>
   );
@@ -239,30 +244,35 @@ export function openConnection(nav: Nav, today: string, onSubmit: (plan: Connect
   nav.openSheet({ tall: true, render: (close) => <ConnectionSheet today={today} onSubmit={onSubmit} close={close} /> });
 }
 
-// -- DX-03: the list for tomorrow, after the wind-down ------------------------------------------------------------
+// -- DX-03: the list for tomorrow, under the wind-down's clock ----------------------------------------------------
 
-function ToDoSheet({ onSave, close }: { onSave: (items: string[]) => void; close: () => void }) {
-  const [text, setText] = useState('');
-  const items = todoItems(text);
+/** The box the wind-down reads when its ten minutes are done (sheets.py WindDownDialog). */
+function WindDownPanel({ list }: { list: { text: string } }) {
+  const [text, setText] = useState(list.text);
   return (
-    <SheetFrame title="Wind-down" onCancel={close} cancel="Skip" action="Add" actionDisabled={!items.length} onAction={() => { close(); onSave(items); }}>
-      <Intro>Dim the lights. Write down what is on your mind for tomorrow.</Intro>
-      <Group heading="For tomorrow" footer="One thing a line; they go on your task list for the week.">
-        <div className="rc-todo">
-          <textarea className="field plain" rows={5} placeholder={'Reply to Ana\nBook the dentist'} value={text} onChange={(e) => setText(e.target.value)} aria-label="For tomorrow" autoFocus />
-        </div>
-      </Group>
-    </SheetFrame>
+    <Group heading="For tomorrow" footer="One thing a line; they go on your task list for the week.">
+      <div className="rc-todo">
+        <textarea
+          className="field plain"
+          rows={4}
+          placeholder={'Reply to Ana\nBook the dentist'}
+          value={text}
+          onChange={(e) => {
+            list.text = e.target.value;
+            setText(e.target.value);
+          }}
+          aria-label="For tomorrow"
+        />
+      </div>
+    </Group>
   );
 }
+
+export const windDownPanel = (list: { text: string }): ReactNode => <WindDownPanel list={list} />;
 
 /** The lines of the to-do box, trimmed, empty ones dropped, at most 10. */
 export function todoItems(text: string): string[] {
   return text.split('\n').map((l) => l.trim()).filter(Boolean).slice(0, 10);
-}
-
-export function openToDo(nav: Nav, onSave: (items: string[]) => void): void {
-  nav.openSheet({ render: (close) => <ToDoSheet onSave={onSave} close={close} /> });
 }
 
 // -- DX-03: the sleep check (Insomnia Severity Index) -------------------------------------------------------------

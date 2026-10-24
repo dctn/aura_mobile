@@ -20,7 +20,7 @@ export function Recovery() {
 
   const startPreset = (p: Preset) => {
     if (p.title === 'Wind-down') {
-      windDown(aura, nav, p.accent); // the full DX-03 run: the list for tomorrow is saved after it
+      windDown(aura, nav, p.accent); // the full DX-03 run, with the list for tomorrow under the clock
       return;
     }
     timedRun(aura, nav, { title: p.title, minutes: p.minutes, kind: p.kind, accent: p.accent, note: p.note, breathing: p.title === 'Slow breathing' });

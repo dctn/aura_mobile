@@ -4,11 +4,13 @@
 // profile" while body details are missing (BS-01) and the band line (BS-02). Every change stays in this browser.
 
 import { useEffect, useRef, useState, type RefObject } from 'react';
+import { featureFor } from '../lib/catalog';
+import { askCheckin, logWater, performAlert, timedRun } from '../lib/actions';
 import { useAura } from '../app/store';
 import { useNav } from '../app/nav';
 import * as m from '../lib/metrics';
 import type { Json } from '../lib/types';
-import { ActionPill, Icon, IconTile, MetricCard, Page, Ring, Row, Section, SettingsButton, SheetFrame, TileGrid } from '../kit/kit';
+import { ActionPill, Group, Icon, IconTile, MetricCard, Page, Ring, Row, Section, SettingsButton, SheetFrame, TileGrid } from '../kit/kit';
 import { AlertCard, openAlerts } from './shared';
 import { CalendarCard } from '../calendar/CalendarCard';
 import {
@@ -72,6 +74,52 @@ function PinsSheet({ fields, chosen, close }: { fields: string[]; chosen: string
   );
 }
 
+/** "+" (and All clear): the top alert's verb, a check-in, a short breather or move, and water. The step runs once the
+ *  sheet has closed, so a timer or a check-in opens over the phone, not over the sheet. */
+function QuickSheet({ top, close }: { top: Json | null; close: () => void }) {
+  const aura = useAura();
+  const nav = useNav();
+  const f = top ? featureFor(top) : null;
+  const then = (step: () => void) => {
+    close();
+    window.setTimeout(step, 0);
+  };
+  const ml = aura.data.logs
+    .filter((l) => l.type === 'water' && String(l.date ?? String(l.takenAt ?? '').slice(0, 10)) === aura.today)
+    .reduce((n, l) => n + (Number((l.data as Json | undefined)?.ml) || 0), 0);
+  return (
+    <SheetFrame title="Quick" action="Done" onAction={close}>
+      {top && f && (
+        <button className="btn primary wide" style={{ background: `var(--${f.accent})` }} onClick={() => then(() => performAlert(aura, nav, top))}>
+          {f.verb}
+        </button>
+      )}
+      <Group heading="Check in">
+        <Row title="Mood" icon="bubble" accent="sleep" chevron onClick={() => then(() => askCheckin(aura, nav, 'mood'))} />
+        <Row title="Connection" icon="people" accent="teal" chevron onClick={() => then(() => askCheckin(aura, nav, 'connection'))} />
+      </Group>
+      <Group heading="Quick">
+        <Row title="Breathe" value="5 min" icon="wind" accent="stress" chevron onClick={() => then(() => timedRun(aura, nav, { title: 'Slow breathing', minutes: 5, accent: 'stress', breathing: true }))} />
+        <Row title="Move" value="3 min" icon="walk" accent="fitness" chevron onClick={() => then(() => timedRun(aura, nav, { title: 'Move break', minutes: 3, kind: 'walk', accent: 'fitness' }))} />
+      </Group>
+      <Group heading="Water">
+        <Row
+          title={`${ml} ml today`}
+          icon="drop"
+          accent="blue"
+          trailing={
+            <span style={{ display: 'flex', gap: 6 }}>
+              {[250, 500].map((n) => (
+                <button key={n} className="chip" title={`Log ${n} ml of water`} onClick={() => logWater(aura, nav, n)}>{`+${n} ml`}</button>
+              ))}
+            </span>
+          }
+        />
+      </Group>
+    </SheetFrame>
+  );
+}
+
 /** A metric card for one CARDS entry, shown even with no values ("—"). */
 function cardFor(key: string, days: m.MetricDay[], today: string) {
   let c = m.CARDS[key];
@@ -101,8 +149,19 @@ export function Home() {
 
   // -- today's alerts
   const alerts = openAlerts(data.alerts, data.alertOff);
-  const shown = alerts.slice(0, SHOW_ALERTS);
+  // "Not now" hides the pills until an alert arrives that wasn't open then
+  const snoozed = new Set(aura.local.snoozed ?? []);
+  const fresh = alerts.some((a) => !snoozed.has(String(a.id)));
+  const live = alerts.length && !fresh ? [] : alerts;
+  const shown = live.slice(0, SHOW_ALERTS);
   const toRecovery = () => nav.setTab('recovery');
+  const notNow = () => aura.edit.snooze(alerts.map((a) => String(a.id)));
+  const quick = () => nav.openSheet({ tall: true, render: (close) => <QuickSheet top={live[0] ?? null} close={close} /> });
+  const { snooze } = aura.edit;
+  const stale = Boolean(aura.local.snoozed?.length) && fresh;
+  useEffect(() => {
+    if (stale) snooze(null); // something new came: forget the old snooze
+  }, [stale, snooze]);
 
   // -- movement
   const minutes = weeklyMinutes(latest);
@@ -122,8 +181,11 @@ export function Home() {
   const band = hasBand || aura.local.lastSync ? syncText(last, now, zone) : { text: 'No band data', stale: true };
   const reconnect = () => {
     const sent = backfillMinutes(last, new Date());
-    aura.edit.synced(new Date().toISOString());
-    nav.showToast(`Band reconnected · ${sent} minutes synced`);
+    nav.showToast(`Band reconnecting… sending ${sent} minutes`);
+    window.setTimeout(() => {
+      aura.edit.synced(new Date().toISOString());
+      nav.showToast(`Band reconnected · ${sent} minutes synced`);
+    }, 1400);
   };
 
   return (
@@ -135,17 +197,17 @@ export function Home() {
           title="Today"
           trailing={
             <span className="home-trail">
-              {alerts.length > SHOW_ALERTS && <button className="link" onClick={toRecovery}>See all</button>}
-              <button className="home-plus" aria-label="Open Recovery" title="Open Recovery" onClick={toRecovery}>
+              {(alerts.length > SHOW_ALERTS || (alerts.length > 0 && !live.length)) && <button className="link" onClick={toRecovery}>See all</button>}
+              <button className="home-plus" aria-label="Quick: check in, breathe or log water" title="Check in, breathe or log water" onClick={quick}>
                 <Icon name="plus" size={22} stroke={2} />
               </button>
             </span>
           }
         />
         {shown.length ? (
-          shown.map((a, i) => <AlertCard key={String(a.id ?? i)} alert={a} />)
+          shown.map((a, i) => <AlertCard key={String(a.id ?? i)} alert={a} onLater={notNow} />)
         ) : (
-          <ActionPill icon="check" title="All clear" reason="Nothing to do" accent="go" onOpen={toRecovery} />
+          <ActionPill icon="check" title="All clear" reason={alerts.length ? `${alerts.length} in Recovery` : 'Nothing to do'} accent="go" onOpen={quick} />
         )}
       </div>
 

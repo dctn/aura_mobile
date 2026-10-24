@@ -67,7 +67,7 @@ export function App() {
           </header>
           <main className="stage">
             <Hero />
-            <section className="device-col" aria-label="The Aura app, working">
+            <section className="device-col" id="app" aria-label="The Aura app, working">
               <DemoChip />
               <div className="device">
                 <Phone />
@@ -77,6 +77,7 @@ export function App() {
           <Story />
           <footer className="foot-note">
             A demo of the Aura Clarus mobile app against its dev backend. Everyone sees the same demo person, Asha; nothing you do here is sent anywhere.
+            <a className="chiplink to-app" href="#app">Back to the app ↑</a>
           </footer>
         </div>
       </NavProvider>

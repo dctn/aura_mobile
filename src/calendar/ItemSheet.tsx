@@ -46,7 +46,7 @@ function FormRow({ title, icon, tone, children }: { title: string; icon?: string
 }
 
 /** A grey 24-hour time pill ("15:00"), five-minute steps; the browser's own time field would follow its locale. */
-function TimePill({ value, onChange }: { value: number; onChange: (minute: number) => void }) {
+export function TimePill({ value, onChange }: { value: number; onChange: (minute: number) => void }) {
   const h = Math.floor(value / 60);
   const m = value % 60;
   const minutes = [...new Set([...Array.from({ length: 12 }, (_, i) => i * 5), m])].sort((a, b) => a - b);

@@ -78,6 +78,9 @@ On the calendar you can drag a block to a new time (15-minute steps), stretch it
 day in the grid, or drag a to-do into the hours. Hold at the hours' side edge to flip the day, or on ‹ › to flip
 the week. Touch needs a short hold first, so a swipe still scrolls.
 
+The bedtime reminder and wake alarm ring (a toast and a short tone) only while the page is open, like the PC app.
+A session running on another device would show in Sessions, but the demo account never has one.
+
 Home and Recovery list one alert per feature (its newest). The app lists every open day, but the demo's month was
 sent all at once, which would leave about 95 rows.
 

@@ -24,6 +24,8 @@ export interface Edit {
   pins(fields: string[]): void;
   theme(theme: L.Theme): void;
   synced(at: string): void;
+  /** "Not now" on Home: hide these alerts' pills (null shows them again). */
+  snooze(ids: string[] | null): void;
   reset(): void;
 }
 
@@ -140,6 +142,7 @@ export function AuraProvider({ children }: { children: ReactNode }) {
     pins: (fields) => update((s) => ({ ...s, pins: fields })),
     theme: (theme) => update((s) => ({ ...s, theme })),
     synced: (at) => update((s) => ({ ...s, lastSync: at })),
+    snooze: (ids) => update((s) => ({ ...s, snoozed: ids })),
     reset: () => update((s) => ({ ...L.EMPTY, theme: s.theme })),
   }), [update]);
 

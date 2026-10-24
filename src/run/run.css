@@ -53,6 +53,7 @@
 }
 .rv-note { max-width: 300px; margin-top: 6px; font-size: var(--t-row); color: var(--label2); }
 .runview.night .rv-note { color: var(--night-2); }
+.rv-panel { align-self: stretch; margin-top: 26px; text-align: left; }
 .rv-line {
   align-self: stretch;
   height: 4px;

@@ -236,6 +236,7 @@ function RunBody({ run }: { run: Run }) {
             <span style={{ width: `${C.progress(clock, now) * 100}%` }} />
           </div>
         )}
+        {run.panel && <div className="rv-panel">{run.panel}</div>}
       </div>
       <div className="rv-buttons">
         <button className="rv-round pause" onClick={togglePause} aria-label={paused ? 'Resume' : 'Pause'} title={paused ? 'Resume' : 'Pause'}>

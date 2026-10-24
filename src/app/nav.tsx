@@ -31,6 +31,8 @@ export interface Run {
   breathing?: boolean;
   /** Dark screen (a nap). */
   night?: boolean;
+  /** Drawn under the clock while it runs (the wind-down's list for tomorrow). */
+  panel?: ReactNode;
   /** Called once: true when the time ran out or Done was pressed, false when it was stopped early. */
   onEnd?: (completed: boolean, seconds: number) => void;
 }

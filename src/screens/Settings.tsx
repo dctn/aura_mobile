@@ -7,19 +7,20 @@ import type { ReactNode } from 'react';
 import { useAura } from '../app/store';
 import { useNav } from '../app/nav';
 import { FEATURES } from '../lib/catalog';
+import { reconnectBand } from '../lib/actions';
 import { changeCount, type Theme } from '../lib/local';
 import type { Json } from '../lib/types';
 import { Group, Icon, Page, RoundButton, Row, Segmented, SheetFrame, Switch } from '../kit/kit';
 import { SEX, age, alertAreas, hours, inboxRows, missing, sexText, switchAlert } from '../search/logic';
 import { BirthSheet, ChoiceSheet, NumberSheet, TextSheet, TimeSheet, TitledGroup, dateText, useBackLabel } from '../search/parts';
-import { isoIn, whenText } from '../search/when';
+import { whenText } from '../search/when';
 import '../search/search.css';
 
 const ABOUT: [string, string][] = [
   ['me', 'Body details and goals save as soon as you set them, in this browser only.'],
-  ['alarm', 'Bedtime rings the wind-down reminder; wake time rings the alarm.'],
+  ['alarm', 'While this page is open, bedtime rings the wind-down reminder 30 minutes early and wake time rings the alarm.'],
   ['bell', 'Switch an alert off and Home stops showing it.'],
-  ['band', 'The band and its data come from the shared demo account; Sync now only records the time here.'],
+  ['band', 'The band and its data come from the shared demo account; Sync now and pairing only change things here.'],
   ['trash', 'Reset my changes forgets everything you changed; the shared demo data stays as it is.'],
 ];
 
@@ -45,6 +46,21 @@ export function Settings() {
   const settings = (me.settings as Json | undefined) ?? {};
   const band = settings.pairedBandId ? String(settings.pairedBandId) : null;
   const changes = changeCount(aura.local);
+  const bandMenu = () => {
+    const pair = () => {
+      const next = band ? null : `aura-band-${Math.floor(Math.random() * 0x1000000).toString(16).padStart(6, '0')}`;
+      aura.edit.me({ settings: { ...settings, pairedBandId: next } });
+      nav.showToast(next ? `Paired ${next}` : 'Band unpaired');
+    };
+    nav.showAlert({
+      title: band ?? 'Band',
+      buttons: [
+        { label: 'Sync now', onPress: () => reconnectBand(aura, nav) },
+        band ? { label: 'Unpair', role: 'destructive' as const, onPress: pair } : { label: 'Pair a band', onPress: pair },
+        { label: 'Cancel', role: 'cancel' as const },
+      ],
+    });
+  };
 
   const saveMe = (fields: Json) => {
     aura.edit.me(fields);
@@ -165,15 +181,12 @@ export function Settings() {
       </TitledGroup>
 
       <TitledGroup title="Band">
-        <Row title="Band" value={band ?? 'None'} />
+        <Row title="Band" value={band ?? 'None'} chevron onClick={bandMenu} />
         <Row title="Last sync" value={aura.local.lastSync ? whenText(aura.local.lastSync, aura.today, aura.zone) : 'Never'} />
         <Row
           title="Sync now"
           look="link"
-          onClick={() => {
-            aura.edit.synced(isoIn(aura.zone, new Date()));
-            nav.showToast('Band synced');
-          }}
+          onClick={() => reconnectBand(aura, nav)}
         />
         {AREAS.filter((a) => a.area === 'Band').flatMap((a) => a.features).map((f) => (
           <Row key={f.id} title={f.name} icon={f.icon} accent={f.accent} trailing={<AlertSwitch id={f.id} name={f.name} off={off} />} />

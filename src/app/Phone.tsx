@@ -1,7 +1,12 @@
 // The phone (ui/shell.py): the tab's root page, the pages pushed over it, the floating pill tab bar, and the layers on
 // top: a sheet, an alert, a toast, the 3-2-1 countdown and the full-phone run view.
 
+import { useEffect, useRef } from 'react';
 import { useNav, type Page, type Tab } from './nav';
+import { useAura } from './store';
+import { CHECK_MS, beep, due, newAlerts } from '../lib/alarms';
+import { healthGoals, nowOf } from '../lib/actions';
+import { openAlerts } from '../screens/shared';
 import { Icon } from '../kit/kit';
 import { Home } from '../screens/Home';
 import { Recovery } from '../screens/Recovery';
@@ -90,8 +95,57 @@ function Layers() {
   );
 }
 
+/** The phone's own bells (ui/alarms.py, shell.py): the bedtime and wake alarms while the page is open, "New alert"
+ *  when a refresh brings one, and Esc closing the alert, the sheet or the page on top. */
+function useBells() {
+  const aura = useAura();
+  const nav = useNav();
+  const latest = useRef({ aura, nav });
+  latest.current = { aura, nav };
+  const ring = (text: string) => {
+    latest.current.nav.showToast(text);
+    beep();
+  };
+
+  useEffect(() => {
+    const fired = new Set<string>();
+    const check = () => {
+      const { aura: a } = latest.current;
+      const now = nowOf(a);
+      for (const text of due(now.day, now.minute, healthGoals(a), fired)) ring(text);
+    };
+    check();
+    const id = window.setInterval(check, CHECK_MS);
+    return () => window.clearInterval(id);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const seen = useRef<Set<string> | null>(null);
+  const loaded = !aura.status.loading;
+  const open = openAlerts(aura.data.alerts, aura.data.alertOff);
+  const key = open.map((a) => String(a.id)).join(',');
+  useEffect(() => {
+    if (!loaded) return;
+    const next = newAlerts(open, seen.current);
+    seen.current = next.seen;
+    if (next.message) ring(next.message);
+  }, [key, loaded]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const { nav: n } = latest.current;
+      if (e.key !== 'Escape' || document.body.classList.contains('cal-dragging') || n.run || n.counting) return;
+      if (n.alert) n.closeAlert();
+      else if (n.sheet) n.closeSheet();
+      else if (n.stack.length) n.back();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+}
+
 export function Phone() {
   const nav = useNav();
+  useBells();
   const top = nav.stack.at(-1);
   const live = useLiveRun();
   return (

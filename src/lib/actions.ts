@@ -4,6 +4,7 @@
 // As in the app, a cancelled sheet leaves the alert open; a timed action marks it done when the time is up (or the
 // run is marked done), not when it is ended early.
 
+import type { ReactNode } from 'react';
 import type { Aura } from '../app/store';
 import type { Nav, Run } from '../app/nav';
 import { featureFor } from './catalog';
@@ -258,6 +259,8 @@ export interface TimedRun {
   night?: boolean;
   /** 3-2-1 first (Search's modes). */
   countdown?: boolean;
+  /** Drawn under the clock while it runs. */
+  panel?: ReactNode;
   /** The time ran out or the run was marked done (after the session is recorded). */
   onComplete?: () => void;
 }
@@ -296,6 +299,7 @@ export function timedRun(aura: Aura, nav: Nav, spec: TimedRun): boolean {
     note: spec.note,
     breathing: spec.breathing,
     night: spec.night ?? spec.title.toLowerCase().includes('nap'),
+    panel: spec.panel,
     onEnd: (completed, seconds) => {
       aura.edit.add('sessions', sessionRow(aura.zone, aura.today, spec, completed, seconds, startedMs, Date.now()));
       if (completed) spec.onComplete?.();
@@ -305,29 +309,30 @@ export function timedRun(aura: Aura, nav: Nav, spec: TimedRun): boolean {
   return true;
 }
 
-/** DX-03: ten quiet minutes, then what is on your mind goes on the week's task list. After 3 weeks of it, the sleep
- *  check is offered. End early saves nothing. */
+/** DX-03: ten quiet minutes with the list for tomorrow under the clock; when they are done what is on it goes on the
+ *  week's task list, and after 3 weeks of it the sleep check is offered. End early saves nothing. */
 export function windDown(aura: Aura, nav: Nav, accent: string, then?: () => void): boolean {
+  const list = { text: '' };
   return timedRun(aura, nav, {
     title: 'Wind-down',
     minutes: 10,
     accent,
     note: 'Dim the lights. Write down what is on your mind for tomorrow.',
+    panel: S.windDownPanel(list),
     onComplete: () => {
       then?.();
-      S.openToDo(nav, (items) => {
-        addTasks(aura, nav, items, 'week');
-        if (alertWeeks(aura.data.alerts, 'DX-03') >= 3) {
-          nav.showAlert({
-            title: 'Sleep check',
-            body: 'Trouble falling asleep has come up for 3 weeks now. A 2-minute sleep check shows how much it affects you.',
-            buttons: [
-              { label: 'Not now', role: 'cancel' },
-              { label: 'Take the sleep check', role: 'default', onPress: () => sleepCheck(aura, nav) },
-            ],
-          });
-        }
-      });
+      const items = S.todoItems(list.text);
+      if (items.length) addTasks(aura, nav, items, 'week');
+      if (alertWeeks(aura.data.alerts, 'DX-03') >= 3) {
+        nav.showAlert({
+          title: 'Sleep check',
+          body: 'Trouble falling asleep has come up for 3 weeks now. A 2-minute sleep check shows how much it affects you.',
+          buttons: [
+            { label: 'Not now', role: 'cancel' },
+            { label: 'Take the sleep check', role: 'default', onPress: () => sleepCheck(aura, nav) },
+          ],
+        });
+      }
     },
   });
 }

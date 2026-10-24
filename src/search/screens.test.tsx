@@ -23,7 +23,18 @@ let toasts: string[] = [];
 function Toasts() {
   const nav = useNav();
   if (nav.toast && toasts.at(-1) !== nav.toast) toasts.push(nav.toast);
-  return nav.sheet ? <div data-sheet>{nav.sheet.render(nav.closeSheet)}</div> : null;
+  return (
+    <>
+      {nav.sheet && <div data-sheet>{nav.sheet.render(nav.closeSheet)}</div>}
+      {nav.alert && (
+        <div data-alert>
+          {(nav.alert.buttons ?? []).map((b) => (
+            <button key={b.label} onClick={() => { nav.closeAlert(); b.onPress?.(); }}>{b.label}</button>
+          ))}
+        </div>
+      )}
+    </>
+  );
 }
 
 function Ready({ children }: { children: React.ReactNode }) {
@@ -125,12 +136,21 @@ describe('screens', () => {
     expect(text()).toContain('2,250 ml');
   });
 
-  it('Inbox lists newest first and marks one read', async () => {
+  it('Inbox: a tap asks, then marks one read, snoozes one or dismisses one', async () => {
     await show(<Inbox />);
     const before = Number(/(\d+) unread/.exec(text())?.[1]);
     expect(before).toBeGreaterThan(0);
+    expect(host.querySelectorAll('button.sx-note').length).toBeLessThanOrEqual(10);
     await click(host.querySelector('button.sx-note.unread') ?? undefined);
+    await click(button('Mark as read'));
     expect(text()).toContain(`${before - 1} unread`);
     expect(Object.values(loadLocal().lists.inbox?.changed ?? {})[0]).toHaveProperty('readAt');
+    await click(host.querySelector('button.sx-note') ?? undefined);
+    await click(button('Dismiss'));
+    await click(host.querySelector('button.sx-note') ?? undefined);
+    await click(button('Snooze 15 min'));
+    const changed = Object.values(loadLocal().lists.inbox?.changed ?? {});
+    expect(changed.some((c) => c.status === 'dismissed')).toBe(true);
+    expect(changed.some((c) => typeof c.snoozedUntil === 'string')).toBe(true);
   });
 });

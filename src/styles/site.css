@@ -61,7 +61,7 @@
 .demochip .dot.live { background: var(--good); box-shadow: 0 0 0 3px color-mix(in srgb, var(--good) 25%, transparent); }
 .demochip .dot.off { background: var(--warn); }
 .chiplink { color: var(--accent); font-weight: 600; }
-.chip-about { display: none; }
+.chip-about, .to-app { display: none; }
 
 .hero h1 {
   margin: 0;
@@ -113,6 +113,10 @@
   .demochip > span:not(.dot) { overflow: hidden; text-overflow: ellipsis; }
   .demochip .chip-note, .demochip .sep:has(+ .chip-note) { display: none; }
   .chip-about { display: inline; margin-left: auto; padding-left: 10px; }
+  .to-app { display: block; margin-top: 14px; }
+
+  /* the app scrolls on its own: reaching the end of a screen doesn't drag the page into the story */
+  .device .page, .device .sheet-body { overscroll-behavior-y: contain; }
 
   .device {
     width: 100%;

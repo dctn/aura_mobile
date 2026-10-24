@@ -319,8 +319,10 @@ export function switchAlert(off: string[], id: string, on: boolean): string[] {
 const stamp = (n: Json) => String(n.arrivedAt ?? n.createdAt ?? n.sendAt ?? '');
 
 /** Notifications still in the inbox, newest first. */
-export function inboxRows(inbox: Json[]): Json[] {
-  return inbox.filter((n) => n.status !== 'dismissed').sort((a, b) => new Date(stamp(b)).getTime() - new Date(stamp(a)).getTime() || stamp(b).localeCompare(stamp(a)));
+/** The inbox, newest first, less dismissed rows and rows snoozed until later than `nowMs`. */
+export function inboxRows(inbox: Json[], nowMs: number = Date.now()): Json[] {
+  const waiting = (n: Json) => typeof n.snoozedUntil === 'string' && new Date(n.snoozedUntil).getTime() > nowMs;
+  return inbox.filter((n) => n.status !== 'dismissed' && !waiting(n)).sort((a, b) => new Date(stamp(b)).getTime() - new Date(stamp(a)).getTime() || stamp(b).localeCompare(stamp(a)));
 }
 
 export const inboxTime = stamp;

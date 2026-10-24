@@ -26,6 +26,8 @@ export interface LocalState {
   theme: Theme;
   /** When the visitor last pressed Reconnect (BS-02). */
   lastSync: string | null;
+  /** The alerts open when "Not now" was pressed: Home hides its pills until one that isn't here arrives. */
+  snoozed?: string[] | null;
 }
 
 export const EMPTY: LocalState = { v: 1, lists: {}, me: {}, alertOff: null, pins: null, theme: 'system', lastSync: null };

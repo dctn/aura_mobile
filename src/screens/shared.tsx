@@ -39,8 +39,9 @@ export function cardProps(c: m.Card, days: m.MetricDay[], today: string, accent?
   };
 }
 
-/** ⓘ on an alert pill: the feature's icon and name, what the alert says, what to do, and its one-verb button. */
-export function AlertSheet({ alert, close }: { alert: Json; close: () => void }) {
+/** ⓘ on an alert pill: the feature's icon and name, what the alert says, what to do, and its one-verb button. With
+ *  `onLater` (Home), a "Not now" link hides today's alerts until a new one comes. */
+export function AlertSheet({ alert, close, onLater }: { alert: Json; close: () => void; onLater?: () => void }) {
   const aura = useAura();
   const nav = useNav();
   const f = featureFor(alert);
@@ -60,12 +61,17 @@ export function AlertSheet({ alert, close }: { alert: Json; close: () => void })
           {f.verb}
         </button>
       )}
+      {onLater && (
+        <button className="link" style={{ alignSelf: 'center' }} title="Hide today's alerts until a new one comes" onClick={() => { close(); onLater(); }}>
+          Not now
+        </button>
+      )}
     </SheetFrame>
   );
 }
 
 /** One thing to do: the alert pill (icon, name, reason, check, green verb) over the card of the metric it reads. */
-export function AlertCard({ alert, withCard = true }: { alert: Json; withCard?: boolean }) {
+export function AlertCard({ alert, withCard = true, onLater }: { alert: Json; withCard?: boolean; onLater?: () => void }) {
   const aura = useAura();
   const nav = useNav();
   const f = featureFor(alert);
@@ -78,7 +84,7 @@ export function AlertCard({ alert, withCard = true }: { alert: Json; withCard?: 
         reason={f?.reason}
         verb={f?.verb ?? 'Open'}
         accent={f?.accent}
-        onOpen={() => nav.openSheet({ render: (close) => <AlertSheet alert={alert} close={close} /> })}
+        onOpen={() => nav.openSheet({ render: (close) => <AlertSheet alert={alert} close={close} onLater={onLater} /> })}
         onVerb={() => performAlert(aura, nav, alert)}
         onDone={() => markDone(aura, nav, alert)}
       />
