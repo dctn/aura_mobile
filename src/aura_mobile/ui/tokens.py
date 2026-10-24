@@ -109,7 +109,7 @@ class Palette:
     #: the green verb button ("Breathe", "Nap") and the text on it
     go: str
     go_ink: str
-    #: the near-black alert pill and day strip, with their white and grey text
+    #: the near-black alert pill, with its white and grey text
     pill: str
     pill_ink: str
     pill_ink2: str

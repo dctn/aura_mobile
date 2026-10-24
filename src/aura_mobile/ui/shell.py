@@ -360,6 +360,9 @@ class PhoneWindow(QWidget):
         if self.ctx.session.is_signed_in and not self.isMinimized():
             self.ctx.notify(area.ALERTS)
             self.ctx.notify(area.INBOX)
+            # tasks and events added on another device (the PC) show on the Home calendar within a minute
+            self.ctx.notify(area.TASKS)
+            self.ctx.notify(area.CALENDAR)
 
     def _set_dark(self, dark: bool) -> None:
         prefs.save({"dark": dark})

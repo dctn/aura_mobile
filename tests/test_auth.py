@@ -91,3 +91,36 @@ def test_hidden_unconfirmed_account_resends_confirmation(config):
     step = c.start("pending@example.com")
     assert step.kind == "confirm_sign_up"
     assert calls == ["InitiateAuth", "SignUp", "ResendConfirmationCode"]
+
+
+def _jwt(claims: dict) -> str:
+    import base64
+
+    body = base64.urlsafe_b64encode(json.dumps(claims).encode()).decode().rstrip("=")
+    return f"h.{body}.s"
+
+
+def test_password_sign_in_is_one_user_auth_call(config):
+    seen: list[dict] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        seen.append(json.loads(request.content))
+        return ok({"AuthenticationResult": {"AccessToken": _jwt({"exp": 4102444800}), "IdToken": _jwt(
+            {"sub": "demo-sub", "email": "Demo@Example.com"}), "RefreshToken": "r", "ExpiresIn": 3600}})
+
+    tokens = CognitoClient(config, transport=httpx.MockTransport(handle)).sign_in_password(" Demo@Example.com ", "pw")
+    assert seen == [{"AuthFlow": "USER_AUTH", "ClientId": config.client_id, "AuthParameters": {
+        "USERNAME": "demo@example.com", "PREFERRED_CHALLENGE": "PASSWORD", "PASSWORD": "pw"}}]
+    assert tokens.sub == "demo-sub" and tokens.refresh_token == "r"
+
+
+def test_wrong_password_is_a_cognito_error(config):
+    from aura_mobile.services.auth import CognitoError
+
+    c, _calls = client(config, {"InitiateAuth": [refused("NotAuthorizedException", "Incorrect username or password.")]})
+    try:
+        c.sign_in_password("demo@example.com", "bad")
+    except CognitoError as exc:
+        assert "NotAuthorized" in exc.code
+    else:
+        raise AssertionError("expected a CognitoError")

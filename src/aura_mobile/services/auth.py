@@ -407,6 +407,20 @@ class CognitoClient:
         except _Refused as refused:
             raise refused.public() from None
 
+    def sign_in_password(self, email: str, password: str) -> Tokens:
+        """USER_AUTH with the PASSWORD first factor, in one call: for the shared demo account (demo_website), which
+        has no inbox to receive a code. The app's own sign-in never uses it."""
+        try:
+            result = self._call("InitiateAuth", {
+                "AuthFlow": "USER_AUTH",
+                "ClientId": self.config.client_id,
+                "AuthParameters": {"USERNAME": email.strip().lower(), "PREFERRED_CHALLENGE": "PASSWORD",
+                                   "PASSWORD": password},
+            })
+        except _Refused as refused:
+            raise refused.public() from None
+        return self._tokens(result, "PASSWORD")
+
     def refresh(self, refresh_token: str) -> Tokens:
         """``refresh(_:)`` — REFRESH_TOKEN_AUTH. The refresh token is not rotated, so it is kept.
 

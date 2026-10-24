@@ -1,5 +1,9 @@
-"""Home in the Figma look: the day strip, today's alert pills with their 14-day cards, Burnout, Tasks, Events,
-this week's movement, the user's pins, then "Finish your profile" and the band line.
+"""Home in the Figma look: the calendar (a week or the month, then the chosen day's timeline and to-do list, where
+tasks and events are added, edited, ticked and deleted), today's alert pills with their 14-day cards, Burnout, this
+week's movement, the user's pins, then "Finish your profile" and the band line.
+
+Tasks and events come from Task and Calendar, so ones added on another device signed in to the same backend show
+here on the next load (the shell reloads both every minute).
 
 Each open alert is a black pill (icon, name, two-word reason, one green verb) over a card of the metric it reads.
 Tapping a pill opens its ⓘ sheet; the verb does the action. Movement is ``weeklyActiveMinutes`` against 150 (DX-09).
@@ -14,16 +18,17 @@ from collections.abc import Callable
 from datetime import date, datetime, time, timedelta
 from typing import Any
 
-from PyQt6.QtCore import QRectF, Qt, QTime, pyqtSignal
-from PyQt6.QtGui import QFont, QPainter, QPen
-from PyQt6.QtWidgets import QAbstractButton, QDialog, QFrame, QHBoxLayout, QLineEdit, QVBoxLayout, QWidget
+from PyQt6.QtCore import QRectF, Qt, QTimer
+from PyQt6.QtGui import QFont, QPainter
+from PyQt6.QtWidgets import QDialog, QFrame, QHBoxLayout, QVBoxLayout, QWidget
 
+from aura_mobile.core import agenda
 from aura_mobile.core import metrics as m
 from aura_mobile.core import profile as person
 from aura_mobile.core.features import feature_for_alert
-from aura_mobile.ui import actions, icons, kit, layers, prefs
-from aura_mobile.ui import context as area
+from aura_mobile.ui import actions, kit, layers, prefs
 from aura_mobile.ui import tokens as t
+from aura_mobile.ui.calview import CalendarCard, ItemSheet, TaskRow, day_title, task_sub
 from aura_mobile.ui.context import AppContext
 from aura_mobile.ui.pages.base import Page
 from aura_mobile.ui.widgets import clear_layout, label, set_shown
@@ -36,8 +41,10 @@ WEEKLY_ACTIVE_TARGET = 150
 SYNC_WARN_AFTER = timedelta(hours=24)
 #: alert pills on Home; the rest wait in Recovery
 SHOW_ALERTS = 3
-SHOW_EVENTS = 3
-SHOW_TASKS = 5
+#: the calendar card takes about this much of the page when Home opens; the alerts show below it
+CALENDAR_SHARE = 0.6
+#: open tasks without a time listed under the hours; the rest (and the done ones) wait behind "Show all"
+SHOW_TODO = 2
 MAX_PINS = 6
 
 #: a pinned metric's tile: (icon, accent name)
@@ -73,31 +80,6 @@ def open_alerts(alerts: list[dict]) -> list[dict]:
     return live
 
 
-def clock(value: Any, tz) -> str:
-    try:
-        return datetime.fromisoformat(str(value)).astimezone(tz).strftime("%H:%M")
-    except ValueError:
-        return ""
-
-
-def day_word(day: str, today: date) -> str:
-    """"Today", "Yesterday", "Tomorrow" or "Fri 24"."""
-    try:
-        d = date.fromisoformat(day[:10])
-    except ValueError:
-        return ""
-    return {0: "Today", -1: "Yesterday", 1: "Tomorrow"}.get((d - today).days, f"{d:%a} {d.day}")
-
-
-def duration_text(minutes: int) -> str:
-    if minutes <= 0:
-        return ""
-    if minutes < 60:
-        return f"{minutes} min"
-    h, rest = divmod(minutes, 60)
-    return f"{h} h {rest} min" if rest else f"{h} h"
-
-
 def burnout_risk(days: list[dict], latest: dict, today: date) -> str:
     """The risk word: the server's ``burnoutIndexRisk`` when it sends one, else the newest score bucketed."""
     word = (latest.get("metrics") or {}).get("burnoutIndexRisk")
@@ -130,31 +112,6 @@ def fit(pill: kit.ActionPill) -> kit.ActionPill:
 # -- small widgets ----------------------------------------------------------------------------------------------
 
 
-class CheckMark(QAbstractButton):
-    """The round check in front of a task: an outline, or filled green with a dark tick."""
-
-    def __init__(self, tip: str = "Mark done") -> None:
-        super().__init__()
-        self.setCheckable(True)
-        self.setFixedSize(29, 29)
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setToolTip(tip)
-
-    def paintEvent(self, _event) -> None:
-        p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        r = QRectF(3.5, 3.5, 22, 22)
-        if self.isChecked():
-            p.setPen(Qt.PenStyle.NoPen)
-            p.setBrush(kit.colour("go"))
-            p.drawEllipse(r)
-            p.drawPixmap(7, 7, icons.pixmap("check", kit.colour("go_ink"), 15, stroke=2.6))
-        else:
-            p.setPen(QPen(kit.colour("label3"), 1.6))
-            p.setBrush(Qt.BrushStyle.NoBrush)
-            p.drawEllipse(r)
-
-
 class PercentRing(kit.Ring):
     """The movement ring with the percentage in the middle."""
 
@@ -168,56 +125,6 @@ class PercentRing(kit.Ring):
         p.setFont(font)
         p.setPen(kit.colour("label"))
         p.drawText(QRectF(self.rect()), Qt.AlignmentFlag.AlignCenter, f"{round(self.fraction * 100)}%")
-
-
-class FieldRow(QFrame):
-    """A rounded pill holding a text field, with a leading + and an Add button once something is typed."""
-
-    submitted = pyqtSignal()
-
-    def __init__(self, placeholder: str, icon: str = "plus") -> None:
-        super().__init__()
-        self.setProperty("class", "softpill")
-        self.setMinimumHeight(48)
-        lay = QHBoxLayout(self)
-        lay.setContentsMargins(14, 4, 8, 4)
-        lay.setSpacing(10)
-        holder = QWidget()
-        holder.setFixedSize(29, 29)
-        mark = kit.Glyph(icon, 22, "label3", stroke=2.0)
-        mark.setParent(holder)
-        mark.move(3, 3)
-        lay.addWidget(holder)
-        self.edit = QLineEdit()
-        self.edit.setProperty("class", "plain")
-        self.edit.setPlaceholderText(placeholder)
-        self.edit.returnPressed.connect(self.submitted)
-        lay.addWidget(self.edit, 1)
-        self.add = kit.text_button("Add", "go")
-        self.add.clicked.connect(self.submitted)
-        self.add.hide()
-        lay.addWidget(self.add)
-        self.edit.textChanged.connect(lambda text: self.add.setVisible(bool(text.strip())))
-
-
-class TaskPill(kit.Clickable):
-    """One open task: the check and the title in a rounded pill. A tap anywhere ticks it."""
-
-    def __init__(self, title: str, task_id: Any) -> None:
-        super().__init__("softpill")
-        self.setMinimumHeight(48)
-        lay = QHBoxLayout(self)
-        lay.setContentsMargins(14, 4, 16, 4)
-        lay.setSpacing(10)
-        self.check = CheckMark()
-        self.check.setProperty("task_id", task_id)
-        lay.addWidget(self.check)
-        self.title = label(title, "rowtitle-strong")
-        lay.addWidget(self.title, 1)
-        self.clicked.connect(self.check.toggle)
-
-    def text(self) -> str:
-        return self.title.text()
 
 
 class BandLine(QFrame):
@@ -403,40 +310,6 @@ class AlertSheet(layers.Sheet):
         self.reject()
 
 
-class EventDialog(layers.Sheet):
-    """A new event today: title, start, length."""
-
-    def __init__(self, parent: QWidget) -> None:
-        super().__init__(parent, "New event", done="Add", cancel="Cancel")
-        form = kit.Group(sheet=True)
-        self.event_title = QLineEdit()
-        self.event_title.setProperty("class", "plain")
-        self.event_title.setPlaceholderText("Title")
-        self.event_title.textChanged.connect(lambda text: self.done_button.setEnabled(bool(text.strip())))
-        self.event_title.returnPressed.connect(self.accept)
-        title_row = QFrame()
-        title_row.setProperty("class", "row")
-        title_row.setMinimumHeight(t.ROW_MIN)
-        lay = QHBoxLayout(title_row)
-        lay.setContentsMargins(16, 4, 16, 4)
-        lay.addWidget(self.event_title)
-        form.add(title_row)
-        self.body.addWidget(form)
-
-        when = kit.Group(sheet=True)
-        now = datetime.now()
-        self.start = kit.time_pill(QTime((now.hour + 1) % 24, 0))
-        when.add(kit.Row("Starts today", trailing=self.start))
-        self.minutes = kit.Stepper(30, 5, 480, 5, "{} min")
-        when.add(kit.Row("Length", trailing=self.minutes))
-        self.body.addWidget(when)
-        self.done_button.setEnabled(False)
-
-    def accept(self) -> None:
-        if self.event_title.text().strip():
-            super().accept()
-
-
 class PinsDialog(layers.Sheet):
     """Choose up to six metrics for the Home tiles."""
 
@@ -492,9 +365,26 @@ class HomePage(Page):
         self.on_open_recovery: Callable[[], None] | None = None
         self.on_metric: Callable[[str], None] | None = None
 
-        # 1. the day strip
-        self.days = kit.DayStrip()
-        self.column.addWidget(self.days)
+        # 1. the calendar: tasks and events, added and edited right here
+        self.cal_month = False
+        self.cal_day = self.cal_anchor = self._today()
+        #: what the chosen day shows, by key ("task:<id>" / "event:<id>")
+        self._items: dict[str, agenda.Item] = {}
+        #: the whole to-do list is open ("Show all"); a new day starts folded
+        self._todo_all = False
+        self.cal = CalendarCard()
+        self.cal.grid.picked.connect(self._pick_day)
+        self.cal.prev.clicked.connect(lambda: self._step(-1))
+        self.cal.next.clicked.connect(lambda: self._step(1))
+        self.cal.today.clicked.connect(self._go_today)
+        self.cal.mode.changed.connect(self._set_mode)
+        self.cal.add.clicked.connect(lambda: self._add())
+        self.cal.timeline.slot_clicked.connect(self._add)
+        self.cal.timeline.item_clicked.connect(self._open_item)
+        self.cal.quick.submitted.connect(self._quick_add)
+        self.cal.more.clicked.connect(self._toggle_todo)
+        self.task_input = self.cal.quick.edit
+        self.column.addWidget(self.cal)
 
         # 2. today: up to three alert pills, each over its metric card
         quick = kit.IconButton("plus", "iconbtn", size=20, tip="Check in, breathe or log water")
@@ -548,31 +438,14 @@ class HomePage(Page):
             burn.append(card)
         self.column.addWidget(stack(*burn))
 
-        # 4. tasks
-        self.tasks = QWidget()
-        self.task_rows = QVBoxLayout(self.tasks)
-        self.task_rows.setContentsMargins(0, 0, 0, 0)
-        self.task_rows.setSpacing(8)
-        self.add_row = FieldRow("Add a task")
-        self.add_row.submitted.connect(self._add_task)
-        self.task_input = self.add_row.edit
-        self.task_rows.addWidget(self.add_row)
-        self.column.addWidget(stack(kit.section("Tasks"), self.tasks))
-
-        # 5. events
-        add_event = kit.IconButton("plus", "iconbtn", size=20, tip="New event")
-        add_event.clicked.connect(self._add_event)
-        self.calendar = kit.Group()
-        self.column.addWidget(stack(kit.section("Events", add_event), self.calendar))
-
-        # 6. movement (DX-09)
+        # 4. movement (DX-09)
         self.movement = MovementCard()
         self.movement.clicked.connect(lambda: self._metric("movement"))
         self.movement_label = self.movement.big
         self.ring = self.movement.ring
         self.column.addWidget(self.movement)
 
-        # 7. the user's pins
+        # 5. the user's pins
         edit = kit.text_button("Edit", "link", tip="Choose the metrics on these tiles")
         edit.clicked.connect(self._edit_pins)
         self.pins = QWidget()
@@ -580,7 +453,7 @@ class HomePage(Page):
         self.pin_box.setContentsMargins(0, 0, 0, 0)
         self.column.addWidget(stack(kit.section("Pins", edit), self.pins))
 
-        # 8. profile gaps (BS-01) and 9. the band (BS-02)
+        # 6. profile gaps (BS-01) and 7. the band (BS-02)
         self.finish = fit(kit.ActionPill("me", "Finish your profile", "", "Fix", accent="blue"))
         self.finish.act.connect(self._finish_profile)
         self.finish.clicked.connect(self._finish_profile)
@@ -593,13 +466,10 @@ class HomePage(Page):
     # -- loading ---------------------------------------------------------------
 
     def render(self, names: set[str]) -> None:
-        self.days.set_today(self._today())
+        if names & {"events", "tasks"}:
+            self._show_agenda()
         if names & {"alerts", "metrics"}:
             self._show_alerts()
-        if "events" in names:
-            self._show_calendar()
-        if "tasks" in names:
-            self._show_tasks()
         if "metrics" in names:
             self._show_burnout()
             self._show_pins()
@@ -658,57 +528,96 @@ class HomePage(Page):
             card.name.setText(m.CARDS[key].label)
             card.setProperty("metric", c.key)
 
-    def _show_calendar(self) -> None:
-        group = self.calendar
-        group.clear()
+    # -- the calendar ----------------------------------------------------------
+
+    def _tz(self):
+        return actions.now_local(self.ctx).tzinfo
+
+    def _show_agenda(self) -> None:
+        cal, today, tz = self.cal, self._today(), self._tz()
         events = self.ctx.store.data.get("events")
-        if events is None:
-            group.add(kit.Row(self.ctx.store.status("events", "Events"), kind="quiet"))
-            return
-        tz = actions.now_local(self.ctx).tzinfo
-        today = self._today()
-        events = sorted(events, key=lambda e: str(e.get("start")))
-        if not events:
-            group.add(kit.Row("Nothing planned", kind="quiet"))
-        for event in events[:SHOW_EVENTS]:
-            day = str(event.get("date") or str(event.get("start"))[:10])
-            try:
-                length = int((datetime.fromisoformat(str(event.get("end")))
-                              - datetime.fromisoformat(str(event.get("start")))).total_seconds() // 60)
-            except (TypeError, ValueError):
-                length = 0
-            sub = " · ".join(x for x in (day_word(day, today), duration_text(length)) if x)
-            row = kit.Row(str(event.get("title") or "Event"), sub, clock(event.get("start"), tz))
-            row.setProperty("event_id", event.get("id"))
-            group.add(row)
-
-    def _clear_tasks(self) -> None:
-        rows = self.task_rows
-        for i in reversed(range(rows.count())):
-            w = rows.itemAt(i).widget()
-            if w is not None and w is not self.add_row:
-                rows.takeAt(i)
-                w.hide()
-                w.deleteLater()
-
-    def _add_task_row(self, row: QWidget) -> None:
-        self.task_rows.insertWidget(self.task_rows.count() - 1, row)
-
-    def _show_tasks(self) -> None:
-        self._clear_tasks()
         tasks = self.ctx.store.data.get("tasks")
-        if tasks is None:
-            note = label(self.ctx.store.status("tasks", "Tasks"), "foot")
-            note.setContentsMargins(16, 0, 16, 0)
-            self._add_task_row(note)
-            return
-        open_tasks = [x for x in tasks if x.get("status") != "completed"]
-        order = {"today": 0, "week": 1, "month": 2}
-        open_tasks.sort(key=lambda x: order.get(str(x.get("horizon")), 3))
-        for task in open_tasks[:SHOW_TASKS]:
-            row = TaskPill(str(task.get("title") or "Task"), task.get("id"))
-            row.check.toggled.connect(self._complete_task)
-            self._add_task_row(row)
+        cal.month.setText(f"{self.cal_anchor:%b %Y}")
+        set_shown(cal.today, self.cal_day != today)
+        cal.grid.set_state(anchor=self.cal_anchor, selected=self.cal_day, today=today, month_mode=self.cal_month,
+                           marks=agenda.marks(events or [], tasks or [], tz, today))
+        day = agenda.day_items(self.cal_day, events or [], tasks or [], tz, today)
+        self._items = {i.key: i for i in [*day.timed, *day.todo]}
+        cal.day_title.setText(day_title(self.cal_day, today))
+        waiting = [self.ctx.store.status(k, w) for k, w in (("events", "Events"), ("tasks", "Tasks"))
+                   if self.ctx.store.data.get(k) is None]
+        if waiting:
+            cal.day_count.setText(" · ".join(waiting))
+        else:
+            cal.day_count.setText({0: "Nothing yet", 1: "1 item"}.get(day.count, f"{day.count} items"))
+        now = actions.now_local(self.ctx) if self.cal_day == today else None
+        cal.hours.show_day(self.cal_day, day.timed, now)
+        cal.clear_todo()
+        short = [i for i in day.todo if not i.done][:SHOW_TODO]
+        foldable = len(short) < len(day.todo)
+        for item in day.todo if self._todo_all else short:
+            row = TaskRow(item, task_sub(item, self.cal_day, today, tz))
+            row.check.toggled.connect(lambda done, i=item: self._tick(i, done))
+            row.clicked.connect(lambda k=item.key: self._open_item(k))
+            cal.todo.addWidget(row)
+        set_shown(cal.todo_head, bool(day.todo))
+        cal.more.setText("Show less" if self._todo_all else f"Show all {len(day.todo)}")
+        set_shown(cal.more, foldable)
+        cal.quick.edit.setPlaceholderText("Add a task for today" if self.cal_day == today
+                                          else f"Add a task for {day_title(self.cal_day, today)}")
+        # new rows show on the next turn of the event loop; measure the card after that
+        QTimer.singleShot(0, self._fit_calendar)
+
+    def _fit_calendar(self) -> None:
+        """About 60% of the screen for the card; the hours box inside it scrolls."""
+        if self.height() > 0:
+            self.cal.fit_to(int(self.height() * CALENDAR_SHARE))
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._fit_calendar()
+
+    def _toggle_todo(self) -> None:
+        self._todo_all = not self._todo_all
+        self._show_agenda()
+
+    def _fetch_span(self) -> None:
+        """Ask for the events of what the grid shows (the store keeps a 62-day span and skips one it has)."""
+        days = self.cal.grid.days()
+        self.ctx.store.show_span(days[0], days[-1])
+
+    def _pick_day(self, day: date) -> None:
+        self._todo_all = self._todo_all and day == self.cal_day
+        self.cal_day = day
+        if not self.cal_month or (day.year, day.month) != (self.cal_anchor.year, self.cal_anchor.month):
+            self.cal_anchor = day
+        self._show_agenda()
+        self._fetch_span()
+
+    def _step(self, n: int) -> None:
+        """‹ › move a week (or a month); the chosen day moves with it."""
+        if self.cal_month:
+            self.cal_anchor = agenda.add_months(self.cal_anchor, n)
+            today = self._today()
+            same = (today.year, today.month) == (self.cal_anchor.year, self.cal_anchor.month)
+            self.cal_day = today if same else self.cal_anchor.replace(day=1)
+            self.cal_anchor = self.cal_day
+        else:
+            self.cal_day += timedelta(days=7 * n)
+            self.cal_anchor = self.cal_day
+        self._show_agenda()
+        self._fetch_span()
+
+    def _go_today(self) -> None:
+        self.cal_day = self.cal_anchor = self._today()
+        self._show_agenda()
+        self._fetch_span()
+
+    def _set_mode(self, index: int) -> None:
+        self.cal_month = index == 1
+        self.cal_anchor = self.cal_day
+        self._show_agenda()
+        self._fetch_span()
 
     def _show_pins(self) -> None:
         clear_layout(self.pin_box)
@@ -817,33 +726,78 @@ class HomePage(Page):
         elif accepted and sheet.act:
             actions.perform(self.ctx, self, alert)
 
-    def _add_event(self) -> None:
-        dialog = EventDialog(self)
-        if dialog.exec() != QDialog.DialogCode.Accepted or not dialog.event_title.text().strip():
+    def _add(self, minute: int | None = None) -> None:
+        """The + Add sheet for the chosen day; tapping an empty hour fills in that time."""
+        today, tz = self._today(), self._tz()
+        at = time(minute // 60, minute % 60) if minute is not None else None
+        sheet = ItemSheet(self, today=today, day=self.cal_day, at=at)
+        if sheet.exec() != QDialog.DialogCode.Accepted:
             return
-        now = actions.now_local(self.ctx)
-        qt = dialog.start.time()
-        start = datetime.combine(now.date(), time(qt.hour(), qt.minute()), tzinfo=now.tzinfo)
-        actions.add_events(self.ctx, [(dialog.event_title.text().strip(), start, dialog.minutes.value())])
+        kind, title, day, when, minutes = sheet.values()
+        if not title:
+            return
+        if kind == "event":
+            assert day is not None and when is not None
+            actions.add_events(self.ctx, [(title, datetime.combine(day, when, tzinfo=tz), minutes)])
+        else:
+            actions.add_task(self.ctx, title, day, when, minutes if when else None)
+            self.ctx.toast.emit("Task added")
 
-    def _add_task(self) -> None:
+    def _quick_add(self) -> None:
         title = self.task_input.text().strip()
         if not title:
             return
         self.task_input.clear()
-        draft = {"id": f"pending-{datetime.now().timestamp()}", "title": title, "status": "open", "horizon": "today"}
-        self.ctx.store.patch("tasks", lambda tasks: [*(tasks or []), draft])
-        self.ctx.write(lambda: self.ctx.api.create_task(title, horizon="today"), area.TASKS)
+        day = None if self.cal_day == self._today() else self.cal_day
+        actions.add_task(self.ctx, title, day)
 
-    def _complete_task(self, checked: bool) -> None:
-        if not checked:
+    def _tick(self, item: agenda.Item, done: bool) -> None:
+        if not self._saved(item):
             return
-        task_id = str(self.sender().property("task_id") or "")
-        if task_id.startswith("pending-"):
-            return  # not saved yet; it gets its real id on the confirming reload
-        self.ctx.store.patch("tasks", lambda tasks: [
-            {**x, "status": "completed"} if x.get("id") == task_id else x for x in (tasks or [])])
-        self.ctx.write(lambda: self.ctx.api.complete_task(task_id), area.TASKS)
+        actions.set_task_done(self.ctx, item.raw, done)
+
+    def _saved(self, item: agenda.Item) -> bool:
+        """An event added a moment ago has no server id until the confirming reload."""
+        if item.id.startswith("pending-"):
+            self.ctx.toast.emit("Still saving, try again in a moment")
+            return False
+        return True
+
+    def _open_item(self, key: str) -> None:
+        """Edit a task or an event: title, day, time, length; Done / Not done; Delete."""
+        item = self._items.get(key)
+        if item is None or not self._saved(item):
+            return
+        today, tz = self._today(), self._tz()
+        task = item.kind == "task"
+        if task:  # a done task is edited on its own day, not the day it was ticked
+            day, at = agenda.task_when({**item.raw, "status": "pending"}, tz)
+        else:
+            day, at = (item.start.date() if item.start else None), item.start
+        sheet = ItemSheet(self, today=today, day=day or self.cal_day, kind=item.kind, item=item,
+                          at=time(at.hour, at.minute) if at else None, minutes=item.minutes, dated=day is not None,
+                          locked=task and bool(item.raw.get("blockId") or item.raw.get("scheduledAt")))
+        if sheet.exec() != QDialog.DialogCode.Accepted:
+            return
+        if sheet.deleted:
+            (actions.delete_task if task else actions.delete_event)(self.ctx, item.raw)
+            return
+        if sheet.toggle_done:
+            actions.set_task_done(self.ctx, item.raw, not item.done)
+            return
+        _kind, title, new_day, when, minutes = sheet.values()
+        if not task:
+            assert new_day is not None and when is not None
+            actions.edit_event(self.ctx, item.raw, title, datetime.combine(new_day, when, tzinfo=tz), minutes)
+            return
+        changes: dict[str, Any] = {"title": title}
+        if not sheet.locked:
+            changes.update(actions.task_fields(new_day, when, tz))
+            if when is not None:
+                changes["estimateMinutes"] = minutes
+            changes["horizon"] = agenda.horizon_for(new_day, today)
+        if any(item.raw.get(k) != v for k, v in changes.items()):
+            actions.edit_task(self.ctx, item.raw, changes)
 
     def _edit_pins(self) -> None:
         values = ((self.ctx.store.get("metrics", {})).get("latest") or {}).get("metrics") or {}

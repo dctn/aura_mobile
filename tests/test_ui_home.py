@@ -1,8 +1,10 @@
 
 """The shell (floating tab bar, pushed pages, theme) and Home (alert pills and cards, Burnout, quick sheet,
-events, tasks, pins, the band line)."""
+the calendar with its task and event editor, pins, the band line)."""
 
 from __future__ import annotations
+
+from datetime import timedelta
 
 import pytest
 from PyQt6.QtCore import QEvent, Qt
@@ -171,38 +173,231 @@ def test_quick_sheet_logs_water_and_runs_steps_after_closing(phone, monkeypatch)
     assert ran == ["mood"]
 
 
-def test_new_event_sheet_adds_to_the_calendar(phone, monkeypatch):
-    window, ctx, _api = phone
-    from aura_mobile.ui.pages.home import EventDialog
+# -- the calendar ----------------------------------------------------------------------------------------------
 
-    ctx.api.create_event = lambda *a, **k: {}
+
+def _sheet(monkeypatch, fill):
+    """Run ``fill(sheet)`` instead of showing the add / edit sheet; it returns the dialog code."""
+    from aura_mobile.ui.calview import ItemSheet
+
+    monkeypatch.setattr(ItemSheet, "exec", fill)
+
+
+def _todo(home) -> list[str]:
+    return [r.text() for r in home.cal.task_rows()]
+
+
+def test_calendar_shows_today_events_on_the_timeline_and_tasks_below(phone):
+    window, _ctx, _api = phone
+    home = window.home
+    assert home.cal.day_title.text() == "Today"
+    assert sorted(i.title for i in home.cal.timeline.items) == ["Gym · legs", "Lunch with Ana"]
+    assert _todo(home) == ["Finish report"]
+    assert home.cal.task_rows()[0].sub.text() == "Anytime · Today"
+    assert home.cal.grid.marks[TODAY] == {"event", "task"}
+    assert home.cal.day_count.text() == "3 items"
+    assert not home.cal.grid.month_mode
+    assert home.cal.grid.height() == home.cal.grid.HEAD + home.cal.grid.CELL
+
+
+def test_add_button_adds_a_task_at_a_time(phone, monkeypatch):
+    window, ctx, api = phone
 
     def fill(self):
         assert not self.done_button.isEnabled()
-        self.event_title.setText("Dentist")
+        self.title_edit.setText("Call the bank")
         assert self.done_button.isEnabled()
+        assert self.has_day.isChecked() and self.has_time.isChecked()  # an hour was tapped
         return QDialog.DialogCode.Accepted
 
-    monkeypatch.setattr(EventDialog, "exec", fill)
-    window.home._add_event()
-    assert any(e.get("title") == "Dentist" for e in ctx.store.data["events"])
-    rows = [window.home.calendar.rows.itemAt(i).widget() for i in range(window.home.calendar.count())]
-    assert any("Dentist" in r.text() for r in rows if r is not None)
+    _sheet(monkeypatch, fill)
+    window.home.cal.timeline.slot_clicked.emit(9 * 60 + 30)
+    task = next(x for x in ctx.store.data["tasks"] if x["title"] == "Call the bank")
+    assert task["hasTime"] is True and "T09:30:00" in task["dueAt"] and task["horizon"] == "today"
+    assert "Call the bank" in [i.title for i in window.home.cal.timeline.items]  # on screen before the server
     settle()
+    assert [w[0] for w in api.cal_writes] == ["create_task"]
+    assert api.cal_writes[0][1] == task["id"]  # the id chosen here is the one the server keeps
+    assert "Call the bank" in [i.title for i in window.home.cal.timeline.items]
 
 
-def test_checking_a_task_completes_it(phone):
-    window, ctx, _api = phone
-    from aura_mobile.ui.pages.home import CheckMark
+def test_add_sheet_can_add_an_event_instead(phone, monkeypatch):
+    window, ctx, api = phone
 
-    done: list[str] = []
-    ctx.api.complete_task = lambda task_id: done.append(task_id) or {}
-    checks = window.home.tasks.findChildren(CheckMark)
-    assert len(checks) == 1
-    checks[0].setChecked(True)
+    def fill(self):
+        self.kinds.buttons[1].click()
+        assert self.kind == "event"
+        assert self.date_row.isVisibleTo(self) and self.time_row.isVisibleTo(self)
+        assert not self.day_switch_row.isVisibleTo(self)
+        self.title_edit.setText("Dentist")
+        return QDialog.DialogCode.Accepted
+
+    _sheet(monkeypatch, fill)
+    window.home._add()
+    assert any(e.get("title") == "Dentist" for e in ctx.store.data["events"])
+    settle()
+    assert [w[0] for w in api.cal_writes] == ["create_event"]
+    assert "Dentist" in [i.title for i in window.home.cal.timeline.items]
+
+
+def test_quick_add_puts_the_task_on_the_chosen_day(phone):
+    window, ctx, api = phone
+    home = window.home
+    home.task_input.setText("Water plants")
+    home._quick_add()
+    assert "Water plants" in _todo(home)
+    soon = TODAY + timedelta(days=2)
+    home._pick_day(soon)
+    assert home.task_input.placeholderText().startswith("Add a task for")
+    home.task_input.setText("Buy gift")
+    home._quick_add()
+    assert _todo(home) == ["Buy gift"]
+    gift = next(x for x in ctx.store.data["tasks"] if x["title"] == "Buy gift")
+    assert gift["dueAt"].startswith(soon.isoformat()) and gift["hasTime"] is False and gift["horizon"] == "week"
+    settle()
+    assert [w[0] for w in api.cal_writes] == ["create_task", "create_task"]
+
+
+def test_ticking_a_task_completes_it_and_it_stays_as_done(phone):
+    window, ctx, api = phone
+    row = window.home.cal.task_rows()[0]
+    row.check.setChecked(True)
     assert all(x["status"] == "completed" for x in ctx.store.data["tasks"] if x["id"] == "t1")
     settle()
-    assert done == ["t1"]
+    assert api.cal_writes == [("complete_task", "t1", {})]
+    assert window.home.cal.task_rows() == []  # a done task folds away
+    more = window.home.cal.more
+    assert more.isVisibleTo(window.home) and more.text() == "Show all 1"
+    more.click()
+    done = window.home.cal.task_rows()[0]
+    assert done.check.isChecked() and done.sub.text() == "Done" and more.text() == "Show less"
+    assert "task" not in window.home.cal.grid.marks.get(TODAY, set())
+
+
+def test_calendar_takes_about_60_percent_and_hours_open_at_the_first_item(phone):
+    window, ctx, _api = phone
+    from aura_mobile.ui.pages.home import CALENDAR_SHARE
+
+    home, cal = window.home, window.home.cal
+    settle()
+    assert abs(cal.height() - home.height() * CALENDAR_SHARE) < 20
+    assert cal.hours.height() < cal.timeline.height()  # the hours scroll inside the card
+    bar = cal.hours.verticalScrollBar()
+    first = min(i.start for i in cal.timeline.items)
+    top_hour = cal.timeline.minutes_at(bar.value() + cal.timeline.HOUR) // 60
+    assert top_hour <= first.hour + 1 and bar.value() > 0  # not stuck at midnight
+    assert not cal.hours.empty.isVisibleTo(cal.hours)
+
+    bar.setValue(0)
+    ctx.notify("tasks")  # the minute poll: the user's place stays
+    settle()
+    assert bar.value() == 0
+
+    home._pick_day(TODAY + timedelta(days=3))  # nothing that day
+    settle()
+    hint = cal.hours.empty
+    assert hint.isVisibleTo(cal.hours) and hint.text().startswith("Nothing planned")
+    box = cal.hours.viewport().geometry()
+    assert abs(hint.geometry().center().y() - box.center().y()) <= 2
+    assert hint.geometry().left() > cal.timeline.GUTTER
+
+
+def test_editing_a_task_moves_it_to_another_day(phone, monkeypatch):
+    window, _ctx, api = phone
+    later = TODAY + timedelta(days=10)
+
+    def fill(self):
+        assert self.title_edit.text() == "Finish report" and not self.kinds.isVisibleTo(self)
+        assert not self.has_day.isChecked()
+        self.has_day.setChecked(True)
+        self.date.set_day(later)
+        self.title_edit.setText("Finish the report")
+        return QDialog.DialogCode.Accepted
+
+    _sheet(monkeypatch, fill)
+    window.home._open_item("task:t1")
+    assert _todo(window.home) == []
+    window.home._pick_day(later)
+    assert _todo(window.home) == ["Finish the report"]
+    settle()
+    verb, task_id, changes = api.cal_writes[0]
+    assert (verb, task_id) == ("update_task", "t1")
+    assert changes["title"] == "Finish the report" and changes["horizon"] == "month"
+    assert changes["dueAt"].startswith(later.isoformat()) and changes["hasTime"] is False
+
+
+def test_task_sheet_marks_done_and_deletes(phone, monkeypatch):
+    window, ctx, api = phone
+    monkeypatch.setattr(layers.Alert, "ask", staticmethod(lambda *a, **k: True))
+    _sheet(monkeypatch, lambda self: self._toggle_done() or QDialog.DialogCode.Accepted)
+    window.home._open_item("task:t1")
+    settle()
+    assert api.cal_writes[-1][0] == "complete_task"
+    _sheet(monkeypatch, lambda self: self._delete() or QDialog.DialogCode.Accepted)
+    window.home._open_item("task:t1")
+    assert not any(x["id"] == "t1" for x in ctx.store.data["tasks"])
+    settle()
+    assert api.cal_writes[-1] == ("delete_task", "t1", {})
+    assert _todo(window.home) == []
+
+
+def test_editing_an_event_changes_its_time_and_delete_asks_first(phone, monkeypatch):
+    window, ctx, api = phone
+    from PyQt6.QtCore import QTime
+
+    def fill(self):
+        assert self.kind == "event" and self.title_edit.text() == "Lunch with Ana"
+        assert self.time.time() == QTime(13, 0) and self.length.value() == 60
+        self.time.setTime(QTime(14, 0))
+        return QDialog.DialogCode.Accepted
+
+    _sheet(monkeypatch, fill)
+    window.home._open_item("event:e-lunch")
+    lunch = next(e for e in ctx.store.data["events"] if e["id"] == "e-lunch")
+    assert "T14:00:00" in lunch["start"] and "T15:00:00" in lunch["end"]
+    settle()
+    assert api.cal_writes[0][:2] == ("update_event", "e-lunch")
+
+    asked: list[str] = []
+    monkeypatch.setattr(layers.Alert, "ask", staticmethod(lambda _p, title, *a, **k: asked.append(title) or False))
+    _sheet(monkeypatch, lambda self: self._delete() or QDialog.DialogCode.Rejected)
+    window.home._open_item("event:e-lunch")
+    assert asked == ["Delete this event?"]
+    assert any(e["id"] == "e-lunch" for e in ctx.store.data["events"])  # said no: kept
+
+
+def test_week_month_and_today(phone):
+    window, ctx, _api = phone
+    from aura_mobile.core import agenda
+
+    home = window.home
+    home._set_mode(1)
+    rows = len(agenda.month_grid(TODAY)) // 7
+    assert home.cal.grid.month_mode and home.cal.grid.height() == home.cal.grid.HEAD + rows * home.cal.grid.CELL
+    home._step(1)
+    nxt = agenda.add_months(TODAY, 1)
+    assert home.cal_day == nxt.replace(day=1) and home.cal.month.text() == f"{nxt:%b %Y}"
+    assert home.cal.today.isVisibleTo(home)
+    first, last = ctx.store.span
+    assert first <= home.cal.grid.days()[0] and home.cal.grid.days()[-1] <= last
+    home._go_today()
+    assert home.cal_day == TODAY and home.cal.day_title.text() == "Today"
+    assert not home.cal.today.isVisibleTo(home)
+    home._set_mode(0)
+    home._step(-1)
+    assert home.cal_day == TODAY - timedelta(days=7)
+    settle()
+
+
+def test_grid_and_timeline_map_taps(phone):
+    window, _ctx, _api = phone
+    grid, line = window.home.cal.grid, window.home.cal.timeline
+    week = grid.days()
+    assert grid.date_at(grid.width() / 7 * 2.5, grid.HEAD + 5) == week[2]
+    assert grid.date_at(10, 5) is None  # the weekday letters
+    y = line.PAD + (9 - line.first) * line.HOUR + line.HOUR * 0.6
+    assert line.minutes_at(y) == 9 * 60 + 30
+    assert {item.key for item, _rect in line.blocks()} == {"event:e-gym", "event:e-lunch"}
 
 
 def test_pins_sheet_keeps_at_most_six(phone):

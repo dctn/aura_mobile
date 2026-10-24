@@ -241,6 +241,9 @@ class ServiceClient:
     def put(self, service: str, path: str, json: Any = None, **kw: Any) -> Any:
         return self.request(service, "PUT", path, json=json, **kw).body
 
+    def patch(self, service: str, path: str, json: Any = None, **kw: Any) -> Any:
+        return self.request(service, "PATCH", path, json=json, **kw).body
+
     def delete(self, service: str, path: str, **kw: Any) -> Any:
         return self.request(service, "DELETE", path, **kw).body
 

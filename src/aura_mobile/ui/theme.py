@@ -179,7 +179,7 @@ QPushButton[class="icon"] {{ background: {c['fill']}; border-radius: 16px; min-w
 QPushButton[class="mode"] {{ background: {c['fill']}; color: {c['label']}; border-radius: 16px; padding: 7px 12px; }}
 QPushButton[class="mode"]:checked {{ background: {c['accent']}; color: white; }}
 
-/* the Figma look: alert pills, metric cards, the day strip, start pill */
+/* the Figma look: alert pills, metric cards, start pill */
 QFrame[class="pill"] {{ background: {c['pill']}; border-radius: {t.R_PILL}px; border: none; }}
 QFrame[class="pill"]:hover {{ background: {c['pill']}; }}
 QFrame[class="pill"] QLabel {{ background: transparent; color: {c['pill_ink']}; }}
@@ -204,6 +204,20 @@ QPushButton[class="start"] {{ background: {c['pill']}; color: {c['pill_ink']}; b
     text-align: left; }}
 QPushButton[class="start"]:hover {{ background: {c['pill']}; color: {c['go']}; }}
 QPushButton[class="start"]:disabled {{ background: {c['fill2']}; color: {c['label3']}; }}
+
+/* the Home calendar: the card, the month, the chosen day, the to-do rows */
+QFrame[class="calcard"] {{ background: {c['card']}; border-radius: {t.R_BIG}px; border: none; }}
+QFrame[class="hair"] {{ background: {c['sep']}; border: none; }}
+QScrollArea[class="hours"], QScrollArea[class="hours"] > QWidget > QWidget {{ background: transparent; }}
+QLabel[class="calempty"] {{ background: {c['card']}; color: {c['label2']}; border: 1px solid {c['sep']};
+    border-radius: 14px; padding: 6px 14px; font-size: {t.SUB}px; }}
+QLabel[class="calmonth"] {{ font-size: 22px; font-weight: 700; }}
+QLabel[class="calday"] {{ font-size: 17px; font-weight: 700; }}
+QLabel[class="calsub"] {{ font-size: {t.SUB}px; font-weight: 600; color: {c['label2']}; }}
+QFrame[class="taskrow"] {{ background: {c['fill']}; border-radius: 16px; border: none; }}
+QFrame[class="taskrow"]:hover {{ background: {c['fill2']}; }}
+QFrame[class="taskrow"] QLabel {{ background: transparent; }}
+QLabel[class="taskdone"] {{ font-size: {t.ROW}px; color: {c['label3']}; text-decoration: line-through; }}
 
 /* Search's drill pages: the metric hero number, the trend card, the countdown's cancel */
 QLabel[class="hero"] {{ font-size: 52px; font-weight: 700; }}

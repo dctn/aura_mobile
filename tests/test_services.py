@@ -150,3 +150,33 @@ def test_at_most_six_calls_open_at_once(make_api):
         list(pool.map(lambda _i: api.client.get("task", "/v1/tasks"), range(20)))
     assert len(seen) == 20
     assert state["most"] == MAX_IN_FLIGHT == 6
+
+
+def test_task_edit_sends_if_match_and_rereads_a_stale_version(make_api):
+    answers = iter([reply(412, {"error": {"code": "stale", "message": "changed"}}),
+                    reply(200, {"task": {"id": "t1", "version": 5}}),
+                    reply(200, {"task": {"id": "t1", "version": 6}})])
+    api, seen = make_api(lambda r: next(answers))
+    api.update_task("t1", {"title": "New", "dueAt": None}, version=3)
+    assert [r.method for r in seen] == ["PATCH", "GET", "PATCH"]
+    assert seen[0].headers["If-Match"] == '"v3"' and seen[2].headers["If-Match"] == '"v5"'
+    assert body_of(seen[0]) == {"title": "New", "dueAt": None}  # None clears the field
+
+
+def test_task_create_keeps_the_client_id_and_drops_empty_fields(make_api):
+    api, seen = make_api(lambda r: reply(201, {"task": {}}))
+    api.create_task("Call", horizon="week", task_id="task-1", dueAt="2026-10-27T00:00:00+05:30", hasTime=False,
+                    estimateMinutes=None)
+    assert body_of(seen[0]) == {"id": "task-1", "title": "Call", "horizon": "week",
+                                "dueAt": "2026-10-27T00:00:00+05:30", "hasTime": False}
+    api.delete_task("task-1")
+    api.complete_task("task-1")
+    assert [(r.method, r.url.path) for r in seen[1:]] == [("DELETE", "/v1/tasks/task-1"),
+                                                         ("POST", "/v1/tasks/task-1/complete")]
+
+
+def test_event_edit_without_a_version_reads_it_first(make_api):
+    answers = iter([reply(200, {"event": {"id": "e1", "version": 2}}), reply(200, {"event": {}})])
+    api, seen = make_api(lambda r: next(answers))
+    api.update_event("e1", {"title": "Lunch"})
+    assert [r.method for r in seen] == ["GET", "PATCH"] and seen[1].headers["If-Match"] == '"v2"'

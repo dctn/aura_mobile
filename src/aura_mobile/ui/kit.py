@@ -832,57 +832,6 @@ class MetricCard(Clickable):
         return " ".join(x for x in (self.name.text(), self.big.text(), self.unit.text()) if x)
 
 
-class DayStrip(QWidget):
-    """The black strip of five days, today in the middle as a green circle. Display only."""
-
-    def __init__(self, today=None, days: int = 5) -> None:
-        super().__init__()
-        self.setFixedHeight(64)
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.count = days
-        self.today = today
-
-    def set_today(self, today) -> None:
-        self.today = today
-        self.update()
-
-    def days(self) -> list:
-        from datetime import date, timedelta
-
-        today = self.today or date.today()
-        half = self.count // 2
-        return [today + timedelta(days=i - half) for i in range(self.count)]
-
-    def paintEvent(self, _event) -> None:
-        p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        pal = t.current()
-        p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(t.qcolor(pal.pill))
-        p.drawRoundedRect(QRectF(self.rect()), t.R_BIG, t.R_BIG)
-        days = self.days()
-        slot = self.width() / len(days)
-        font = p.font()
-        for i, d in enumerate(days):
-            cell = QRectF(i * slot, 0, slot, self.height())
-            is_today = i == len(days) // 2
-            if is_today:
-                side = 46
-                p.setPen(Qt.PenStyle.NoPen)
-                p.setBrush(t.qcolor(pal.go))
-                p.drawEllipse(QRectF(cell.center().x() - side / 2, cell.center().y() - side / 2, side, side))
-            font.setPixelSize(t.SMALL)
-            font.setBold(False)
-            p.setFont(font)
-            p.setPen(t.qcolor(pal.go_ink if is_today else pal.pill_ink2))
-            p.drawText(QRectF(cell.left(), cell.top() + 12, slot, 14), Qt.AlignmentFlag.AlignCenter, d.strftime("%a"))
-            font.setPixelSize(t.ROW + 1)
-            font.setBold(True)
-            p.setFont(font)
-            p.setPen(t.qcolor(pal.go_ink if is_today else pal.pill_ink))
-            p.drawText(QRectF(cell.left(), cell.top() + 28, slot, 22), Qt.AlignmentFlag.AlignCenter, str(d.day))
-
-
 class CategoryRow(Row):
     """A Search category: a coloured glyph (no tile), one word and a chevron."""
 

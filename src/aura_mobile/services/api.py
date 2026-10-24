@@ -253,6 +253,15 @@ class AuraApi:
     def delete_event(self, event_id: str) -> Any:
         return self.client.delete(CALENDAR, f"/v1/calendar/events/{_p(event_id)}")
 
+    def event(self, event_id: str) -> dict:
+        body = self.client.get(CALENDAR, f"/v1/calendar/events/{_p(event_id)}")
+        return body.get("event", body) if isinstance(body, dict) else {}
+
+    def update_event(self, event_id: str, changes: Mapping[str, Any], version: int | None = None) -> dict:
+        """``PATCH /v1/calendar/events/{id}`` (title, start, end, …); a stale version is re-read once."""
+        return self._patch_fresh(CALENDAR, f"/v1/calendar/events/{_p(event_id)}", changes, version,
+                                 lambda: self.event(event_id))
+
     def events(self, start: str, end: str) -> list[dict]:
         """``GET /v1/calendar/events?from&to``: at most 62 days, repeating events expanded, paged."""
         out: list[dict] = []
@@ -276,11 +285,41 @@ class AuraApi:
             if not cursor:
                 return out
 
-    def create_task(self, title: str, *, horizon: str = "today") -> dict:
-        return self.client.post(TASK, "/v1/tasks", {"id": new_id("task"), "title": title, "horizon": horizon})
+    def create_task(self, title: str, *, horizon: str = "today", task_id: str | None = None, **fields: Any) -> dict:
+        """``fields``: ``dueAt`` + ``hasTime`` (a day, or a time on it), ``estimateMinutes``, ``notes``; None is left
+        out. ``task_id`` lets the screen show the task under the id the server will keep."""
+        body: dict[str, Any] = {"id": task_id or new_id("task"), "title": title, "horizon": horizon}
+        body.update({k: v for k, v in fields.items() if v is not None})
+        return self.client.post(TASK, "/v1/tasks", body)
+
+    def task(self, task_id: str) -> dict:
+        body = self.client.get(TASK, f"/v1/tasks/{_p(task_id)}")
+        return body.get("task", body) if isinstance(body, dict) else {}
+
+    def update_task(self, task_id: str, changes: Mapping[str, Any], version: int | None = None) -> dict:
+        """``PATCH /v1/tasks/{id}``: fields sent are set, None clears. A stale version is re-read once."""
+        return self._patch_fresh(TASK, f"/v1/tasks/{_p(task_id)}", changes, version, lambda: self.task(task_id))
+
+    def delete_task(self, task_id: str) -> Any:
+        return self.client.delete(TASK, f"/v1/tasks/{_p(task_id)}")
 
     def complete_task(self, task_id: str) -> dict:
         return self.client.post(TASK, f"/v1/tasks/{_p(task_id)}/complete", {})
+
+    def _patch_fresh(self, service: str, path: str, changes: Mapping[str, Any], version: int | None,
+                     read: Any) -> dict:
+        """PATCH with If-Match ``version`` (or a freshly read one); on 409/412 read again and retry once."""
+        for attempt in range(2):
+            if version is None:
+                version = int(read().get("version") or 0)
+            try:
+                return self.client.patch(service, path, dict(changes), headers={"If-Match": if_match(version)})
+            except ApiError as exc:
+                if attempt == 0 and exc.status in (409, 412):
+                    version = None
+                    continue
+                raise
+        raise AssertionError("unreachable")
 
     # -- Session -----------------------------------------------------------------------------------
 

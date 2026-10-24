@@ -65,14 +65,6 @@ def test_metric_card_draws_fourteen_tracks(host):
     assert card.when.text() == "14 days"
 
 
-def test_day_strip_centres_today(host):
-    w, lay = host
-    strip = kit.DayStrip(date(2026, 10, 24))
-    lay.addWidget(strip)
-    _render(w)
-    assert [d.day for d in strip.days()] == [22, 23, 24, 25, 26]
-
-
 def test_countdown_counts_to_zero_and_finishes(host):
     w, lay = host
     ring = kit.CountdownRing(120)

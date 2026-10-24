@@ -129,3 +129,28 @@ def test_ensure_skips_fresh_parts(monkeypatch):
     assert asked == []
     store.ensure(["alerts"], max_age=0)
     assert len(asked) == 1
+
+
+def test_show_span_loads_a_new_range_only_once_and_caps_it():
+    from datetime import date
+
+    asked: list[tuple[str, str]] = []
+
+    class Api(SlowApi):
+        def events(self, start, end):
+            asked.append((str(start)[:10], str(end)[:10]))
+            return []
+
+    _app()
+    store = Store(Api())
+    first = store_module.default_span(date.today())
+    store.show_span(first[0], first[0])  # inside the default span: nothing to load
+    settle()
+    assert asked == []
+    store.show_span(date(2030, 1, 1), date(2030, 6, 1))
+    settle()
+    assert store.span == (date(2030, 1, 1), date(2030, 3, 3))  # 62 days at most
+    assert len(asked) == 1 and asked[0][0] == "2030-01-01"
+    store.show_span(date(2030, 1, 5), date(2030, 2, 1))
+    settle()
+    assert len(asked) == 1

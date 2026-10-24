@@ -50,6 +50,15 @@ def _metrics(api: Any, today: date) -> dict[str, Any]:
     return {"days": days, "latest": latest}
 
 
+#: the calendar reads at most this many days per call (the server's limit is 62)
+EVENT_SPAN_MAX = 62
+
+
+def default_span(today: date) -> tuple[date, date]:
+    """The events loaded before the calendar asks for a month: last week to five weeks ahead."""
+    return today - timedelta(days=7), today + timedelta(days=35)
+
+
 def _week(today: date) -> tuple[str, str]:
     return (today - timedelta(days=7)).isoformat(), today.isoformat()
 
@@ -58,7 +67,7 @@ def _week(today: date) -> tuple[str, str]:
 FETCHERS: dict[str, Callable[[Any, date], Any]] = {
     "alerts": lambda api, d: api.alerts((d - timedelta(days=ALERT_LOOKBACK_DAYS)).isoformat(), d.isoformat()),
     "inbox": lambda api, d: api.notifications(limit=30),
-    "events": lambda api, d: api.events(d.isoformat(), (d + timedelta(days=7)).isoformat()),
+    "events": lambda api, d: api.events(*(x.isoformat() for x in default_span(d))),
     "tasks": lambda api, d: api.tasks(),
     "metrics": _metrics,
     "checkins": lambda api, d: api.checkins(*_week(d)),
@@ -75,12 +84,15 @@ def _message(exc: BaseException) -> str:
     return str(getattr(exc, "message", "") or f"{exc.__class__.__name__}: {exc}")
 
 
-def fetch_all(api: Any, parts: Iterable[str]) -> dict[str, tuple[bool, Any]]:
-    """Fetch every part at once. Each answer is ``(True, value)`` or ``(False, message)``; one failure stays local."""
+def fetch_all(api: Any, parts: Iterable[str], span: tuple[date, date] | None = None) -> dict[str, tuple[bool, Any]]:
+    """Fetch every part at once. Each answer is ``(True, value)`` or ``(False, message)``; one failure stays local.
+    ``span`` is the days of events the calendar is showing (default: :func:`default_span`)."""
     today = _today(api)
 
     def one(part: str) -> tuple[bool, Any]:
         try:
+            if part == "events" and span is not None:
+                return True, api.events(span[0].isoformat(), span[1].isoformat())
             return True, FETCHERS[part](api, today)
         except Exception as exc:  # shown on the page that needs it
             log.info("Loading %s failed: %r", part, exc)
@@ -104,6 +116,8 @@ class Store(QObject):
         self._loaded_at: dict[str, float] = {}
         self._loading: set[str] = set()
         self._epoch = 0
+        #: the days of events loaded (None: :func:`default_span`); the calendar moves it with :meth:`show_span`
+        self.span: tuple[date, date] | None = None
 
     def get(self, part: str, default: Any = None) -> Any:
         value = self.data.get(part)
@@ -122,9 +136,10 @@ class Store(QObject):
         epoch = self._epoch
         self._loading.update(wanted)
         api = self.api
+        span = self.span
 
         def work() -> dict[str, tuple[bool, Any]]:
-            return fetch_all(api, wanted)
+            return fetch_all(api, wanted, span)
 
         def done(results: dict[str, tuple[bool, Any]]) -> None:
             self._apply(results, started, epoch)
@@ -137,6 +152,17 @@ class Store(QObject):
         self.load([p for p in parts
                    if p not in self._loading and now - self._loaded_at.get(p, -math.inf) > max_age])
 
+    def show_span(self, first: date, last: date) -> None:
+        """The calendar shows ``first``..``last``: load those days' events unless they are already held."""
+        held = self.span or default_span(_today(self.api))
+        if held[0] <= first and last <= held[1]:
+            return
+        if (last - first).days >= EVENT_SPAN_MAX:
+            last = first + timedelta(days=EVENT_SPAN_MAX - 1)
+        self.span = (first, last)
+        self._gen["events"] = self._gen.get("events", 0) + 1  # a load of the old span landing late is dropped
+        self.load(["events"])
+
     def patch(self, part: str, change: Callable[[Any], Any]) -> None:
         """Change the cached part now and redraw; loads already under way for it are dropped when they land."""
         self.data[part] = change(self.data.get(part))
@@ -145,6 +171,7 @@ class Store(QObject):
 
     def clear(self) -> None:
         self._epoch += 1
+        self.span = None
         self.data.clear()
         self.errors.clear()
         self._loaded_at.clear()

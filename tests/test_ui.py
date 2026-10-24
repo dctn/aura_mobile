@@ -53,6 +53,16 @@ class Api:
         self.logged: list[tuple[str, dict]] = []
         self.new_alerts: list[dict] = []
         self.consent_checks: list[str] = []
+        #: what Task and Calendar hold; writes change them, so a reload shows the write (as on the server)
+        self.task_rows: list[dict] = [{"id": "t1", "title": "Finish report", "status": "open", "horizon": "today",
+                                       "version": 1}]
+        self.event_rows: list[dict] = [
+            {"id": "e-gym", "title": "Gym · legs", "date": TODAY.isoformat(), "kind": "focus",
+             "start": f"{TODAY}T18:00:00+05:30", "end": f"{TODAY}T19:00:00+05:30", "version": 1},
+            {"id": "e-lunch", "title": "Lunch with Ana", "date": TODAY.isoformat(), "kind": "meeting",
+             "start": f"{TODAY}T13:00:00+05:30", "end": f"{TODAY}T14:00:00+05:30", "version": 1}]
+        #: every task / event write, in order: (verb, id, body)
+        self.cal_writes: list[tuple[str, str, dict]] = []
         #: writes wait for this, so a test can look at the screen before the server answers
         self.gate = threading.Event()
         self.gate.set()
@@ -84,10 +94,26 @@ class Api:
         return [{"id": "n1", "title": "Short night", "body": "Take a nap", "status": "sent"}]
 
     def events(self, start, end):
-        return [{"id": "e-gym", "title": "Gym · legs", "date": TODAY.isoformat(),
-                 "start": f"{TODAY}T18:00:00+05:30", "end": f"{TODAY}T19:00:00+05:30"},
-                {"id": "e-lunch", "title": "Lunch with Ana", "date": TODAY.isoformat(),
-                 "start": f"{TODAY}T13:00:00+05:30", "end": f"{TODAY}T14:00:00+05:30"}]
+        return [dict(e) for e in self.event_rows]
+
+    def create_event(self, title, start, end, **k):
+        row = {"id": f"e-{len(self.event_rows) + 1}", "title": title, "start": start.isoformat(),
+               "end": end.isoformat(), "version": 1}
+        self.event_rows.append(row)
+        self.cal_writes.append(("create_event", row["id"], dict(row)))
+        return row
+
+    def update_event(self, event_id, changes, version=None):
+        self.cal_writes.append(("update_event", event_id, dict(changes)))
+        for e in self.event_rows:
+            if e["id"] == event_id:
+                e.update(changes, version=e.get("version", 1) + 1)
+        return {}
+
+    def delete_event(self, event_id):
+        self.cal_writes.append(("delete_event", event_id, {}))
+        self.event_rows = [e for e in self.event_rows if e["id"] != event_id]
+        return {}
 
     def move_event(self, event_id, *, to="tomorrow"):
         self.moved.append(event_id)
@@ -103,7 +129,33 @@ class Api:
         return {}
 
     def tasks(self, *a, **k):
-        return [{"id": "t1", "title": "Finish report", "status": "open", "horizon": "today"}]
+        return [dict(x) for x in self.task_rows]
+
+    def create_task(self, title, *, horizon="today", task_id=None, **fields):
+        row = {"id": task_id or f"t{len(self.task_rows) + 1}", "title": title, "status": "pending",
+               "horizon": horizon, "version": 1, **fields}
+        self.task_rows.append(row)
+        self.cal_writes.append(("create_task", row["id"], dict(row)))
+        return row
+
+    def update_task(self, task_id, changes, version=None):
+        self.cal_writes.append(("update_task", task_id, dict(changes)))
+        for x in self.task_rows:
+            if x["id"] == task_id:
+                x.update(changes, version=x.get("version", 1) + 1)
+        return {}
+
+    def complete_task(self, task_id):
+        self.cal_writes.append(("complete_task", task_id, {}))
+        for x in self.task_rows:
+            if x["id"] == task_id:
+                x.update(status="completed", completedAt=f"{TODAY}T10:00:00+05:30")
+        return {}
+
+    def delete_task(self, task_id):
+        self.cal_writes.append(("delete_task", task_id, {}))
+        self.task_rows = [x for x in self.task_rows if x["id"] != task_id]
+        return {}
 
     def metrics_range(self, *a, **k):
         """Two weeks of summary days (newest yesterday), so the cards' bars have something to draw."""

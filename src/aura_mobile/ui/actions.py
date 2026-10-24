@@ -8,13 +8,15 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, time, timedelta, tzinfo
 from zoneinfo import ZoneInfo
 
 from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import QDialog, QWidget
 
+from aura_mobile.core.agenda import horizon_for
 from aura_mobile.core.features import Action, feature_for_alert
+from aura_mobile.services.api import new_id
 from aura_mobile.services.sim.band import live_packets
 from aura_mobile.ui import context as area
 from aura_mobile.ui import prefs, runview, sheets
@@ -217,6 +219,91 @@ def add_events(ctx: AppContext, events: list[tuple[str, datetime, int]],
 
     ctx.write(send, area.CALENDAR, _after(then))
     return True
+
+
+# -- tasks and events (the Home calendar) ---------------------------------------------------------------
+#
+# Tasks and events live in Task and Calendar, so one added here shows on any device signed in to the same backend
+# at its next load, and one added there shows here. Every write patches the store first.
+
+
+def task_fields(day: date | None, at: time | None, tz: tzinfo | None) -> dict:
+    """A task's day and time as the PC's editor writes them: ``dueAt`` plus ``hasTime`` (False: only the day
+    counts). No day clears both, and ``plannedFor``, so the task is "Anytime" again."""
+    if day is None:
+        return {"dueAt": None, "hasTime": False, "plannedFor": None}
+    return {"dueAt": datetime.combine(day, at or time(0, 0), tzinfo=tz).isoformat(), "hasTime": at is not None,
+            "plannedFor": None}
+
+
+def add_task(ctx: AppContext, title: str, day: date | None, at: time | None = None, minutes: int | None = None) -> str:
+    """A new task on ``day`` (at ``at``); the id is chosen here, so the row on screen is the one the server keeps."""
+    now = now_local(ctx)
+    task_id = new_id("task")
+    fields = {k: v for k, v in task_fields(day, at, now.tzinfo).items() if v is not None}
+    if minutes:
+        fields["estimateMinutes"] = minutes
+    horizon = horizon_for(day, now.date())
+    draft = {"id": task_id, "title": title, "status": "pending", "horizon": horizon, **fields}
+    ctx.store.patch("tasks", lambda old: [*(old or []), draft])
+    ctx.write(lambda: ctx.api.create_task(title, horizon=horizon, task_id=task_id, **fields), area.TASKS)
+    return task_id
+
+
+def _replace(rows: list | None, row_id: str, change: Callable[[dict], dict | None]) -> list:
+    out = []
+    for x in rows or []:
+        if str(x.get("id")) == row_id:
+            x = change(x)
+            if x is None:
+                continue
+        out.append(x)
+    return out
+
+
+def edit_task(ctx: AppContext, task: dict, changes: dict) -> None:
+    task_id = str(task.get("id"))
+    ctx.store.patch("tasks", lambda old: _replace(old, task_id, lambda x: {**x, **changes}))
+    version = task.get("version")
+    ctx.write(lambda: ctx.api.update_task(task_id, changes, version if isinstance(version, int) else None),
+              area.TASKS)
+
+
+def set_task_done(ctx: AppContext, task: dict, done: bool) -> None:
+    """Done is Task's complete (once, idempotent); reopening sets the status back to pending."""
+    task_id = str(task.get("id"))
+    stamp = now_local(ctx).isoformat() if done else None
+    ctx.store.patch("tasks", lambda old: _replace(
+        old, task_id, lambda x: {**x, "status": "completed" if done else "pending", "completedAt": stamp}))
+    if done:
+        ctx.write(lambda: ctx.api.complete_task(task_id), area.TASKS)
+    else:
+        version = task.get("version")
+        ctx.write(lambda: ctx.api.update_task(task_id, {"status": "pending"},
+                                              version if isinstance(version, int) else None), area.TASKS)
+
+
+def delete_task(ctx: AppContext, task: dict) -> None:
+    task_id = str(task.get("id"))
+    ctx.store.patch("tasks", lambda old: _replace(old, task_id, lambda _x: None))
+    ctx.toast.emit("Task deleted")
+    ctx.write(lambda: ctx.api.delete_task(task_id), area.TASKS)
+
+
+def edit_event(ctx: AppContext, event: dict, title: str, start: datetime, minutes: int) -> None:
+    event_id = str(event.get("id"))
+    changes = {"title": title, "start": start.isoformat(), "end": (start + timedelta(minutes=minutes)).isoformat()}
+    ctx.store.patch("events", lambda old: _replace(old, event_id, lambda x: {**x, **changes}))
+    version = event.get("version")
+    ctx.write(lambda: ctx.api.update_event(event_id, changes, version if isinstance(version, int) else None),
+              area.CALENDAR)
+
+
+def delete_event(ctx: AppContext, event: dict) -> None:
+    event_id = str(event.get("id"))
+    ctx.store.patch("events", lambda old: _replace(old, event_id, lambda _x: None))
+    ctx.toast.emit("Event deleted")
+    ctx.write(lambda: ctx.api.delete_event(event_id), area.CALENDAR)
 
 
 def last_sync(ctx: AppContext) -> datetime | None:

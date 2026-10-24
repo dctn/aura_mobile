@@ -43,16 +43,16 @@ almost no text. An alert is a **black pill** with its icon, name, a two-word rea
 button ("Nap"); under it a **metric card** with the big number and 14 day-bars. Explanations live behind ⓘ, never in
 footers; feature codes show only in the Test lab. Light and dark both work (Settings → Appearance). The design system
 is in `ui/tokens.py` (colours, sizes), `ui/theme.py` (the stylesheet), `ui/icons.py` (line icons), `ui/kit.py`
-(ActionPill, MetricCard, DayStrip, CategoryRow, StartPill, CountdownRing, RoundButton, IconTile, plus rows, groups,
+(ActionPill, MetricCard, CategoryRow, StartPill, CountdownRing, RoundButton, IconTile, plus rows, groups,
 switch, segmented control, stepper, nav bar) and `ui/layers.py` (Sheet, Alert, ActionSheet, the HUD pill). The short
 copy per feature (`reason`, `verb`, `metric`, `icon`) is in `core/features.py`; the metric cards (label, unit, colour)
 in `core/metrics.py` `CARDS`.
 
 There are three tabs, following the sketch:
 
-- **Home:** the 5-day strip; **Today**: up to 3 alert pills, each over its metric card (tap the pill for ⓘ, the
-  button runs the action, + opens check-in / breathe / move / water); **Burnout**: the risk pill and Avg sleep, Late
-  nights and Recovery cards (tap a card for its detail page); tasks as pills; this week's events; **Movement**
+- **Home:** the **calendar** first (see below); **Today**: up to 3 alert pills, each over its metric card (tap the
+  pill for ⓘ, the button runs the action, + opens check-in / breathe / move / water); **Burnout**: the risk pill and
+  Avg sleep, Late nights and Recovery cards (tap a card for its detail page); **Movement**
   (`weeklyActiveMinutes` against 150, DX-09); pins; **Finish your profile** while body details are missing (BS-01);
   the band's last sync with **Reconnect** (BS-02).
 - **Recovery:** every open alert as a pill with a ✓ (Done) over its metric card, then the recovery presets as icon
@@ -67,6 +67,32 @@ There are three tabs, following the sketch:
   - **Sessions**: the running session (pause, stop, done) and the week's sessions; a completed recovery session has
     **Stress change** (DX-07);
   - **Settings**.
+
+### The Home calendar (tasks and events)
+
+![Calendar](docs/screenshots/01-home.png) ![Month](docs/screenshots/12-calendar-month.png) ![Add](docs/screenshots/13-add-sheet.png) ![Edit](docs/screenshots/14-edit-task.png)
+
+Like the PC app's Calendar day view (`ui/calview.py`, data rules in `core/agenda.py`):
+- The card takes about 60% of the Home screen; the alerts start below it.
+- **Week | Month** and ‹ › sit next to the month name; tap a day to show it. **Today** (next to **+ Add**) appears
+  when another day is shown. A blue dot means open tasks, an orange dot events.
+- The day as a scrolling 24-hour timeline inside the card: events and timed tasks as coloured blocks (desk work
+  amber, meetings green, recovery purple, tasks blue), side by side when they overlap, and the red line at now. It
+  opens at the first item not yet over (else an hour before now, else 08:00) and keeps your place on the minute
+  reload. An empty day shows a centred "Nothing planned · tap an hour to add" pill.
+- Below it, **To do**: the day's tasks without a time, each with a round check. Two open ones show; the rest and
+  the done ones are behind **Show all N**.
+- **+ Add** (or tap an empty hour) opens the sheet: **Task | Event**, title, Date, Time, Length. The field at the
+  bottom adds a task to the shown day in one line.
+- Tap any block or task to edit it: title, day, time, length, **Mark done / Mark not done**, **Delete** (asks
+  first). A task placed by a calendar block keeps its time; only the title changes here.
+- Writes go to Task (`POST/PATCH/DELETE /v1/tasks`, `…/complete`) and Calendar (`PATCH/DELETE
+  /v1/calendar/events/{id}`) with `If-Match` versions; a stale version is re-read once. A task's day is its block
+  (`scheduledAt`), else `dueAt` (`hasTime` says if the time counts), else `plannedFor`; an open task with none shows
+  on today as "Anytime"; a done task shows on the day it was done.
+- **Sync:** the app reloads tasks and events every minute, so a task added on another device
+  signed in to the **same backend** shows here within a minute. The Windows app still talks to the old eu-north-1
+  backend-v2, so PC ↔ phone sync needs the Windows app moved to the new backend first.
 
 ![Metric](docs/screenshots/04-metric.png) ![Logging](docs/screenshots/05-logging.png) ![Mode setup](docs/screenshots/07-mode-setup.png)
 
@@ -152,7 +178,7 @@ the lab. The row should time out with no alert. Turn it back on and run again: i
 ## Develop
 
 ```
-uv run pytest        # 181 tests: config, HTTP rules, routes, simulator, lab runner, store, feature steps, offscreen UI
+uv run pytest        # 234 tests: config, HTTP rules, routes, simulator, lab runner, store, calendar, feature steps, offscreen UI
 uv run ruff check src tests scripts
 ```
 
