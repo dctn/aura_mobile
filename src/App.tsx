@@ -29,7 +29,7 @@ function DemoChip() {
       <span className={`dot ${status.offline ? 'off' : status.source === 'live' ? 'live' : ''}`} />
       <span>{source}</span>
       <span className="sep">·</span>
-      <span>Changes stay on this device</span>
+      <span className="chip-note">Changes stay on this device</span>
       {changes > 0 && (
         <>
           <span className="sep">·</span>
@@ -38,6 +38,7 @@ function DemoChip() {
           </button>
         </>
       )}
+      <a className="chiplink chip-about" href="#about">About ↓</a>
     </div>
   );
 }
@@ -57,25 +58,27 @@ export function App() {
   return (
     <AuraProvider>
       <NavProvider>
-        <header className="topbar">
-          <span className="brand">Aura Clarus</span>
-          <span className="tag">phone demo</span>
-          <span className="grow" />
-          <ThemeToggle />
-        </header>
-        <main className="stage">
-          <Hero />
-          <section className="device-col" aria-label="The Aura app, working">
-            <DemoChip />
-            <div className="device">
-              <Phone />
-            </div>
-          </section>
-        </main>
-        <Story />
-        <footer className="foot-note">
-          A demo of the Aura Clarus mobile app against its dev backend. Everyone sees the same demo person, Asha; nothing you do here is sent anywhere.
-        </footer>
+        <div className="site">
+          <header className="topbar" id="about">
+            <span className="brand">Aura Clarus</span>
+            <span className="tag">phone demo</span>
+            <span className="grow" />
+            <ThemeToggle />
+          </header>
+          <main className="stage">
+            <Hero />
+            <section className="device-col" aria-label="The Aura app, working">
+              <DemoChip />
+              <div className="device">
+                <Phone />
+              </div>
+            </section>
+          </main>
+          <Story />
+          <footer className="foot-note">
+            A demo of the Aura Clarus mobile app against its dev backend. Everyone sees the same demo person, Asha; nothing you do here is sent anywhere.
+          </footer>
+        </div>
       </NavProvider>
     </AuraProvider>
   );

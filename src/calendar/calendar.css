@@ -11,8 +11,13 @@
 }
 
 .cal-head { display: flex; align-items: center; gap: 6px; }
-.cal-month { flex: 1; min-width: 0; font-size: 22px; font-weight: 700; white-space: nowrap; }
+.cal-month { flex: 1; min-width: 0; font-size: 22px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .cal-mode { width: 132px; flex: none; }
+/* small phones: the month, Week / Month and the arrows share about 330 px */
+@media (max-width: 374px) {
+  .cal-month { font-size: 19px; }
+  .cal-mode { width: 116px; }
+}
 
 /* -- the days ------------------------------------------------------------------------------------------------- */
 

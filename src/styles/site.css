@@ -61,6 +61,7 @@
 .demochip .dot.live { background: var(--good); box-shadow: 0 0 0 3px color-mix(in srgb, var(--good) 25%, transparent); }
 .demochip .dot.off { background: var(--warn); }
 .chiplink { color: var(--accent); font-weight: 600; }
+.chip-about { display: none; }
 
 .hero h1 {
   margin: 0;
@@ -85,13 +86,43 @@
   .hero { text-align: left; }
 }
 
-/* At phone width the phone is the page: no bezel, the full screen. */
+/* At phone width the phone is the page: the app fills the screen under a one-line status, with no bezel and no
+   page scrolling around it. The intro and the story follow below ("About ↓", or scroll past the end of a screen). */
 @media (max-width: 480px) {
-  .topbar { padding: 12px 16px 0; }
-  .stage { padding: 12px 0 32px; gap: 18px; }
-  .hero { padding: 0 16px; }
-  .device { width: 100vw; height: min(100svh, 900px); min-height: 640px; padding: 0; border-radius: 0; box-shadow: none; background: none; }
+  .site { display: flex; flex-direction: column; }
+  .stage { display: contents; }
+  .device-col { order: -1; gap: 0; }
+  .topbar { order: 1; padding: 20px 16px 0; scroll-margin-top: 8px; }
+  .hero { order: 2; padding: 8px 16px 8px; }
+  .story { order: 3; padding: 16px 16px 32px; }
+  .foot-note { order: 4; padding: 20px 16px 40px; }
+
+  .demochip {
+    width: 100%;
+    max-width: none;
+    height: 36px;
+    flex-wrap: nowrap;
+    justify-content: flex-start;
+    padding: 0 16px;
+    border: 0;
+    border-bottom: 1px solid var(--page-line);
+    border-radius: 0;
+    font-size: 12px;
+    white-space: nowrap;
+  }
+  .demochip > span:not(.dot) { overflow: hidden; text-overflow: ellipsis; }
+  .demochip .chip-note, .demochip .sep:has(+ .chip-note) { display: none; }
+  .chip-about { display: inline; margin-left: auto; padding-left: 10px; }
+
+  .device {
+    width: 100%;
+    height: calc(100vh - 36px);
+    height: calc(100svh - 36px);
+    min-height: 520px;
+    padding: 0;
+    border-radius: 0;
+    box-shadow: none;
+    background: none;
+  }
   .device > .screen { border-radius: 0; }
-  .demochip { margin: 0 16px; }
-  .story { padding: 16px 16px 32px; }
 }
