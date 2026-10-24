@@ -218,6 +218,8 @@ QFrame[class="taskrow"] {{ background: {c['fill']}; border-radius: 16px; border:
 QFrame[class="taskrow"]:hover {{ background: {c['fill2']}; }}
 QFrame[class="taskrow"] QLabel {{ background: transparent; }}
 QLabel[class="taskdone"] {{ font-size: {t.ROW}px; color: {c['label3']}; text-decoration: line-through; }}
+QLabel[class="dragchip"] {{ background: {c['card']}; color: {c['label']}; border: 1px solid {c['sep']};
+    border-radius: 12px; padding: 6px 10px; font-size: {t.SMALL}px; }}
 
 /* Search's drill pages: the metric hero number, the trend card, the countdown's cancel */
 QLabel[class="hero"] {{ font-size: 52px; font-weight: 700; }}

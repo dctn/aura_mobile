@@ -23,6 +23,7 @@ from PyQt6.QtGui import QFont, QPainter
 from PyQt6.QtWidgets import QDialog, QFrame, QHBoxLayout, QVBoxLayout, QWidget
 
 from aura_mobile.core import agenda
+from aura_mobile.core import drag as dg
 from aura_mobile.core import metrics as m
 from aura_mobile.core import profile as person
 from aura_mobile.core.features import feature_for_alert
@@ -383,6 +384,9 @@ class HomePage(Page):
         self.cal.timeline.item_clicked.connect(self._open_item)
         self.cal.quick.submitted.connect(self._quick_add)
         self.cal.more.clicked.connect(self._toggle_todo)
+        self.cal.drag.dropped.connect(self._drop)
+        self.cal.drag.step_day.connect(self._drag_day)
+        self.cal.drag.flip.connect(self._step)
         self.task_input = self.cal.quick.edit
         self.column.addWidget(self.cal)
 
@@ -559,6 +563,7 @@ class HomePage(Page):
             row = TaskRow(item, task_sub(item, self.cal_day, today, tz))
             row.check.toggled.connect(lambda done, i=item: self._tick(i, done))
             row.clicked.connect(lambda k=item.key: self._open_item(k))
+            cal.drag.watch(row)
             cal.todo.addWidget(row)
         set_shown(cal.todo_head, bool(day.todo))
         cal.more.setText("Show less" if self._todo_all else f"Show all {len(day.todo)}")
@@ -798,6 +803,25 @@ class HomePage(Page):
             changes["horizon"] = agenda.horizon_for(new_day, today)
         if any(item.raw.get(k) != v for k, v in changes.items()):
             actions.edit_task(self.ctx, item.raw, changes)
+
+    def _drag_day(self, n: int) -> None:
+        """A drag held at the hours' edge shows the next day without moving the hours under the pointer."""
+        place = self.cal.hours.verticalScrollBar().value()
+        self._pick_day(self.cal_day + timedelta(days=n))
+        self.cal.hours.scroll_to(place)
+
+    def _drop(self, item: agenda.Item, day: date, target: dg.Target) -> None:
+        """A drag let go over the hours or a day: the same write as the editor's, then show where it went."""
+        if dg.same(item, day, target) or not self._saved(item):
+            return
+        today, tz = self._today(), self._tz()
+        if item.kind == "event":
+            actions.edit_event(self.ctx, item.raw, item.title, dg.event_start(target, tz), target.minutes)
+        else:
+            actions.edit_task(self.ctx, item.raw, dg.task_changes(target, tz, today))
+        self.ctx.toast.emit(f"{item.title} · {dg.target_text(target)}")
+        if target.day != self.cal_day:
+            self._pick_day(target.day)
 
     def _edit_pins(self) -> None:
         values = ((self.ctx.store.get("metrics", {})).get("latest") or {}).get("metrics") or {}

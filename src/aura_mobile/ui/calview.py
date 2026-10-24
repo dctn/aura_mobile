@@ -2,8 +2,10 @@
 
 - :class:`DayGrid`: a week (or the month) of days. Tap a day to show it. Dots mark days with events or open tasks.
 - :class:`DayTimeline`: the chosen day as an hour gutter with coloured blocks, events and timed tasks side by side
-  when they overlap, and the red line at now. Tap a block to edit it, an empty hour to add a task there.
-- :class:`TaskRow`: a task without a time: the round check, the title, what list it is on. Tap to edit.
+  when they overlap, and the red line at now. Tap a block to edit it, an empty hour to add a task there. Drag a block
+  to move it (or its bottom edge to change its length); :mod:`aura_mobile.ui.caldrag` does the dragging.
+- :class:`TaskRow`: a task without a time: the round check, the title, what list it is on. Tap to edit, drag into
+  the hours or onto a day.
 - :class:`ItemSheet`: add or edit a task or an event (title, day, time, length; done and delete when editing).
 
 Colours follow the PC: desk work amber, meetings green, recovery purple, tasks blue.
@@ -11,6 +13,7 @@ Colours follow the PC: desk work amber, meetings green, recovery purple, tasks b
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date, datetime, time, timedelta
 
 from PyQt6.QtCore import QRectF, Qt, QTime, pyqtSignal
@@ -27,9 +30,11 @@ from PyQt6.QtWidgets import (
 )
 
 from aura_mobile.core import agenda
+from aura_mobile.core import drag as dg
 from aura_mobile.core.agenda import Item
 from aura_mobile.ui import icons, kit, layers
 from aura_mobile.ui import tokens as t
+from aura_mobile.ui.caldrag import CalDrag
 from aura_mobile.ui.widgets import label, set_shown
 
 WEEKDAYS = "MTWTFSS"
@@ -80,6 +85,8 @@ class DayGrid(QWidget):
         self.anchor = self.selected = self.today = date.today()
         self.month_mode = False
         self.marks: dict[date, set[str]] = {}
+        #: the day a dragged item would go to
+        self.over: date | None = None
         self.setFixedHeight(self.HEAD + self.CELL)
 
     def days(self) -> list[date]:
@@ -122,6 +129,12 @@ class DayGrid(QWidget):
             chosen, is_today = d == self.selected, d == self.today
             in_month = not self.month_mode or d.month == self.anchor.month
             disc = QRectF(cx - 16, cy - 16, 32, 32)
+            if d == self.over:
+                drop = QColor(t.qcolor(pal.accent))
+                drop.setAlpha(40)
+                p.setPen(QPen(t.qcolor(pal.accent), 1.6))
+                p.setBrush(drop)
+                p.drawRoundedRect(QRectF(cx - col / 2 + 2, cy - 19, col - 4, self.CELL - 4), 10, 10)
             if chosen:
                 p.setPen(Qt.PenStyle.NoPen)
                 p.setBrush(t.qcolor(pal.go))
@@ -152,6 +165,8 @@ class DayTimeline(QWidget):
     HOUR = 40
     GUTTER = 46
     PAD = 8
+    #: a block lower than this has no room for its time line (and no stretch edge)
+    SHORT = 38
 
     def __init__(self) -> None:
         super().__init__()
@@ -162,6 +177,9 @@ class DayTimeline(QWidget):
         self.now: datetime | None = None
         self.first, self.last = 0, 24
         self.setFixedHeight(2 * self.PAD + (self.last - self.first) * self.HOUR)
+        #: while dragging: the key of the item picked up, and (item, target) where it would land on this day
+        self.lifted: str | None = None
+        self.preview: tuple[Item, dg.Target] | None = None
 
     def set_items(self, day: date, items: list[Item], now: datetime | None) -> None:
         """``now`` draws the red line (pass it only for today)."""
@@ -200,9 +218,12 @@ class DayTimeline(QWidget):
             out.append((item, QRectF(left + lane * w, top + 1, w - 3, bottom - top - 2)))
         return out
 
+    def minute_of(self, y: float) -> float:
+        """The minute of day at ``y`` (not rounded)."""
+        return self.first * 60 + (y - self.PAD) * 60 / self.HOUR
+
     def minutes_at(self, y: float) -> int:
-        raw = self.first * 60 + (y - self.PAD) * 60 / self.HOUR
-        return max(0, min(24 * 60 - 30, int(raw // 30) * 30))
+        return max(0, min(24 * 60 - 30, int(self.minute_of(y) // 30) * 30))
 
     def mouseReleaseEvent(self, event) -> None:
         if event.button() != Qt.MouseButton.LeftButton:
@@ -231,7 +252,11 @@ class DayTimeline(QWidget):
             p.setPen(QPen(t.qcolor(pal.sep), 1))
             p.drawLine(int(self.GUTTER), int(y), self.width(), int(y))
         for item, rect in self.blocks():
+            p.setOpacity(0.35 if item.key == self.lifted else 1.0)
             self._block(p, item, rect, pal)
+        p.setOpacity(1.0)
+        if self.preview is not None:
+            self._ghost(p, *self.preview, pal)
         if self.now is not None and self.first <= self.now.hour < self.last:
             y = self._y(self.now)
             p.setPen(QPen(t.qcolor(pal.bad), 1.6))
@@ -239,6 +264,19 @@ class DayTimeline(QWidget):
             p.setPen(Qt.PenStyle.NoPen)
             p.setBrush(t.qcolor(pal.bad))
             p.drawEllipse(QRectF(self.GUTTER - 4, y - 4, 8, 8))
+
+    def _ghost(self, p: QPainter, item: Item, target: dg.Target, pal: t.Palette) -> None:
+        """Where a dragged item would land: the block at its new time, outlined, over the day's full width."""
+        assert target.start is not None
+        start = datetime.combine(target.day, time(target.start // 60, target.start % 60))
+        left = self.GUTTER + 4
+        top = self._y_of(target.start)
+        bottom = max(top + 22, self._y_of(dg.end_minute(target)))
+        rect = QRectF(left, top + 1, max(40.0, self.width() - left - 2) - 3, bottom - top - 2)
+        self._block(p, replace(item, start=start, minutes=target.minutes, done=False), rect, pal)
+        p.setPen(QPen(look_colour(item.look), 1.5))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawRoundedRect(rect, 8, 8)
 
     def _block(self, p: QPainter, item: Item, rect: QRectF, pal: t.Palette) -> None:
         tone = look_colour(item.look)
@@ -267,7 +305,7 @@ class DayTimeline(QWidget):
         p.setFont(title_font)
         p.setPen(t.qcolor(pal.label3 if item.done else pal.label))
         text_w = rect.right() - x - 6
-        short = rect.height() < 38  # no room for the time line: put the start after the title
+        short = rect.height() < self.SHORT  # no room for the time line: put the start after the title
         text = f"{item.title} · {item.start:%H:%M}" if short and item.start is not None else item.title
         title = p.fontMetrics().elidedText(text, Qt.TextElideMode.ElideRight, int(text_w))
         p.drawText(QRectF(x, rect.top() + 3, text_w, 18), Qt.AlignmentFlag.AlignVCenter, title)
@@ -403,7 +441,7 @@ class TaskRow(kit.Clickable):
         text.addWidget(self.sub)
         lay.addLayout(text, 1)
         lay.addWidget(kit.Glyph("chevron", 14, "label3", stroke=2.4))
-        self.setToolTip("Tap to edit")
+        self.setToolTip("Tap to edit" + (", drag to move" if dg.can_drag(item) else ""))
 
     def text(self) -> str:
         return self.title.text()
@@ -493,6 +531,7 @@ class CalendarCard(QFrame):
         self.hours.setFixedHeight(5 * DayTimeline.HOUR)
         self.timeline = self.hours.line
         lay.addWidget(self.hours)
+        self.drag = CalDrag(self)
 
         self.todo_head = QWidget()
         todo_row = QHBoxLayout(self.todo_head)

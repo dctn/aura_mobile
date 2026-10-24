@@ -7,9 +7,9 @@ from __future__ import annotations
 from datetime import timedelta
 
 import pytest
-from PyQt6.QtCore import QEvent, Qt
-from PyQt6.QtGui import QKeyEvent
-from PyQt6.QtWidgets import QDialog, QPushButton
+from PyQt6.QtCore import QEvent, QPoint, QPointF, Qt
+from PyQt6.QtGui import QKeyEvent, QMouseEvent
+from PyQt6.QtWidgets import QApplication, QDialog, QPushButton
 
 from aura_mobile.ui import layers
 from aura_mobile.ui import tokens as t
@@ -411,3 +411,170 @@ def test_pins_sheet_keeps_at_most_six(phone):
     assert len(dialog.chosen()) == 6
     dialog._toggle("totalSleepMin")
     assert "totalSleepMin" not in dialog.chosen()
+
+
+# -- dragging on the calendar ----------------------------------------------------------------------------------
+
+
+def _mouse(widget, kind, x: float, y: float) -> None:
+    """Send a left-button mouse event at (x, y) in ``widget`` (the card's drag sees it first)."""
+    local = QPointF(x, y)
+    glob = QPointF(widget.mapToGlobal(local.toPoint()))
+    left = Qt.MouseButton.LeftButton
+    button = Qt.MouseButton.NoButton if kind == QEvent.Type.MouseMove else left
+    buttons = Qt.MouseButton.NoButton if kind == QEvent.Type.MouseButtonRelease else left
+    QApplication.sendEvent(widget, QMouseEvent(kind, local, glob, button, buttons, Qt.KeyboardModifier.NoModifier))
+
+
+def _card_of(widget):
+    from aura_mobile.ui.calview import CalendarCard
+
+    while widget is not None and not isinstance(widget, CalendarCard):
+        widget = widget.parentWidget()
+    return widget
+
+
+def _global(widget, x: float, y: float) -> QPointF:
+    return QPointF(widget.mapToGlobal(QPoint(int(x), int(y))))
+
+
+def _at(line, hour: float) -> float:
+    """The timeline y of ``hour`` (13.5 = 13:30), with the hours scrolled so it shows."""
+    y = line._y_of(int(hour * 60))
+    hours = _card_of(line).hours
+    bar = hours.verticalScrollBar()
+    if not bar.value() + 30 < y < bar.value() + hours.viewport().height() - 30:
+        bar.setValue(int(y - hours.viewport().height() / 2))
+    return y
+
+
+def _toasts(ctx) -> list[str]:
+    seen: list[str] = []
+    ctx.toast.connect(seen.append)
+    return seen
+
+
+def _pick_up(widget, x: float, y: float) -> None:
+    _mouse(widget, QEvent.Type.MouseButtonPress, x, y)
+    _mouse(widget, QEvent.Type.MouseMove, x, y + 8)  # past the slop: the drag starts
+
+
+def test_dragging_a_block_moves_the_event_in_quarter_hours(phone):
+    window, ctx, api = phone
+    line = window.home.cal.timeline
+    toasts = _toasts(ctx)
+    clicks: list[str] = []
+    line.item_clicked.connect(clicks.append)
+    line.slot_clicked.connect(lambda m: clicks.append(str(m)))
+    x = line.GUTTER + 60
+    # lunch is 13:00-14:00; picked up at 13:30, let go at 15:10 -> starts 14:40, snapped to 14:45
+    _pick_up(line, x, _at(line, 13.5))
+    to = _at(line, 15 + 10 / 60)
+    _mouse(line, QEvent.Type.MouseMove, x, to)
+    assert line.preview is not None and line.preview[1].start == 14 * 60 + 45
+    assert line.lifted == "event:e-lunch"
+    _mouse(line, QEvent.Type.MouseButtonRelease, x, to)
+    lunch = next(e for e in ctx.store.data["events"] if e["id"] == "e-lunch")
+    assert "T14:45:00" in lunch["start"] and "T15:45:00" in lunch["end"]
+    assert toasts[-1].startswith("Lunch with Ana · ") and toasts[-1].endswith("14:45–15:45")
+    assert clicks == []  # the release ended the drag; it opened nothing and added nothing
+    assert line.lifted is None and line.preview is None
+    settle()
+    assert [w[:2] for w in api.cal_writes] == [("update_event", "e-lunch")]
+
+
+def test_the_bottom_edge_stretches_a_block(phone):
+    window, ctx, _api = phone
+    line = window.home.cal.timeline
+    _at(line, 19)
+    gym = next(r for i, r in line.blocks() if i.id == "e-gym")
+    _pick_up(line, gym.center().x(), gym.bottom() - 3)
+    assert window.home.cal.drag.live.mode == "stretch"
+    to = _at(line, 19.5)
+    _mouse(line, QEvent.Type.MouseMove, gym.center().x(), to)
+    _mouse(line, QEvent.Type.MouseButtonRelease, gym.center().x(), to)
+    event = next(e for e in ctx.store.data["events"] if e["id"] == "e-gym")
+    assert "T18:00:00" in event["start"] and "T19:30:00" in event["end"]
+
+
+def test_a_todo_row_drops_into_the_hours_and_gets_a_time(phone):
+    window, ctx, api = phone
+    home = window.home
+    line, drag = home.cal.timeline, home.cal.drag
+    row = home.cal.task_rows()[0]
+    _pick_up(row, row.width() / 2, 10)
+    assert drag.live is not None and drag.live.item.title == "Finish report"
+    # grabbed 15 minutes into its 30: at 10:15 it starts at 10:00
+    drag.aim(_global(line, line.GUTTER + 60, _at(line, 10.25)))
+    assert line.preview is not None and line.preview[1].start == 10 * 60
+    assert "10:00–10:30" in drag.chip.text()
+    drag.end(True)
+    task = next(x for x in ctx.store.data["tasks"] if x["id"] == "t1")
+    assert task["hasTime"] is True and "T10:00:00" in task["dueAt"] and task["estimateMinutes"] == 30
+    assert task["horizon"] == "today"
+    assert "Finish report" in [i.title for i in line.items]
+    settle()
+    assert [w[:2] for w in api.cal_writes] == [("update_task", "t1")]
+
+
+def test_a_block_dropped_on_a_day_keeps_its_time_and_the_day_shows(phone):
+    window, ctx, _api = phone
+    home = window.home
+    grid, line, drag = home.cal.grid, home.cal.timeline, home.cal.drag
+    week = grid.days()
+    other = next(d for d in week if d != TODAY)
+    _pick_up(line, line.GUTTER + 60, _at(line, 18.5))
+    drag.aim(_global(grid, grid.width() / 7 * (week.index(other) + 0.5), grid.HEAD + 10))
+    assert grid.over == other and line.preview is None
+    drag.end(True)
+    gym = next(e for e in ctx.store.data["events"] if e["id"] == "e-gym")
+    assert gym["start"].startswith(f"{other}T18:00:00")
+    assert home.cal_day == other and grid.over is None
+    assert "Gym · legs" in [i.title for i in line.items]
+
+
+def test_esc_puts_it_back_and_the_release_clicks_nothing(phone):
+    window, ctx, api = phone
+    line, drag = window.home.cal.timeline, window.home.cal.drag
+    clicks: list[int] = []
+    line.slot_clicked.connect(clicks.append)
+    x, y = line.GUTTER + 60, _at(line, 13.5)
+    _pick_up(line, x, y)
+    _mouse(line, QEvent.Type.MouseMove, x, y + 40)
+    assert drag.live is not None
+    drag.chip.keyPressEvent(QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Escape, Qt.KeyboardModifier.NoModifier))
+    assert drag.live is None and line.preview is None and drag.chip.isHidden()
+    _mouse(line, QEvent.Type.MouseButtonRelease, x, y + 40)
+    assert clicks == []
+    settle()
+    assert api.cal_writes == []
+    assert next(e for e in ctx.store.data["events"] if e["id"] == "e-lunch")["start"].endswith("T13:00:00+05:30")
+
+
+def test_done_tasks_do_not_pick_up(phone):
+    window, _ctx, _api = phone
+    home = window.home
+    home._tick(home._items["task:t1"], True)
+    home._toggle_todo()  # show the done row too
+    row = next(r for r in home.cal.task_rows() if r.item.id == "t1")
+    _pick_up(row, row.width() / 2, 10)
+    assert home.cal.drag.live is None
+
+
+def test_holding_at_an_edge_or_on_the_arrows_flips_the_day_or_week(phone):
+    window, _ctx, _api = phone
+    home = window.home
+    line, drag, port = home.cal.timeline, home.cal.drag, home.cal.hours.viewport()
+    _pick_up(line, line.GUTTER + 60, _at(line, 13.5))
+    drag.aim(_global(port, port.width() - 5, port.height() / 2))
+    assert drag.live.side == 1 and drag._hold.isActive()
+    drag._held()
+    assert home.cal_day == TODAY + timedelta(days=1)
+    assert drag.live.target is not None and drag.live.target.day == TODAY + timedelta(days=1)
+    nxt = home.cal.next
+    drag.aim(_global(nxt, nxt.width() / 2, nxt.height() / 2))
+    assert drag._hold_key == "flip:1"
+    drag._held()
+    assert home.cal_day == TODAY + timedelta(days=8)
+    drag.end(False)
+    assert not drag._hold.isActive()

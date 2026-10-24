@@ -86,6 +86,15 @@ Like the PC app's Calendar day view (`ui/calview.py`, data rules in `core/agenda
   bottom adds a task to the shown day in one line.
 - Tap any block or task to edit it: title, day, time, length, **Mark done / Mark not done**, **Delete** (asks
   first). A task placed by a calendar block keeps its time; only the title changes here.
+- **Drag and drop** (`ui/caldrag.py`, maths in `core/drag.py`, the same rules as the website): drag a block to move
+  it in 15-minute steps, or its bottom edge to change its length (not on short blocks). Drag it onto a day in the
+  grid to move it there at the same time, or drag a to-do row into the hours to give it a time. Hold at the hours'
+  left or right edge to go to the day before or after, or on ‹ › to flip the week or month; the hours scroll near
+  their top and bottom. A chip under the pointer says where it will land; **Esc** puts it back. Done tasks and tasks
+  placed by a calendar block don't move. A drop writes through the same Task / Calendar PATCH as the editor.
+
+![Move](docs/screenshots/15-drag-move.png) ![Stretch](docs/screenshots/16-drag-stretch.png) ![Day](docs/screenshots/17-drag-day-dark.png)
+
 - Writes go to Task (`POST/PATCH/DELETE /v1/tasks`, `…/complete`) and Calendar (`PATCH/DELETE
   /v1/calendar/events/{id}`) with `If-Match` versions; a stale version is re-read once. A task's day is its block
   (`scheduledAt`), else `dueAt` (`hasTime` says if the time counts), else `plannedFor`; an open task with none shows
