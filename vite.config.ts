@@ -6,5 +6,6 @@ export default defineConfig({
   base: './',
   plugins: [react()],
   build: { target: 'es2020', sourcemap: false },
-  test: { environment: 'jsdom', testTimeout: 15_000, include: ['src/**/*.test.ts', 'src/**/*.test.tsx'] },
+  // Tests always draw the bundled sample: never the live data, whatever .env.local says.
+  test: { environment: 'jsdom', testTimeout: 15_000, env: { VITE_DEMO_API: '' }, include: ['src/**/*.test.ts', 'src/**/*.test.tsx'] },
 });
