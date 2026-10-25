@@ -40,3 +40,20 @@
 .rc-rbtn:hover { background: var(--fill2); }
 .rc-rbtn.stop { background: var(--bad); color: #fff; }
 .rc-rbuttons .grow { flex: 1; }
+
+/* Recovery's features: a heading per group, then each feature as a card row (icon, name over its status, the green
+   verb), with its logging card and this week's entries under it when it is logged by hand. Tokens only, so the dark
+   theme follows from tokens.css. */
+.rc-group { display: flex; flex-direction: column; gap: 12px; }
+.rc-features { display: grid; gap: 12px; }
+.rc-fblock { display: grid; gap: 8px; }
+.rc-feature { display: flex; align-items: center; gap: 12px; padding: 12px 14px; cursor: pointer; transition: background 0.12s; }
+.rc-feature:hover { background: var(--card2); }
+.rc-feature:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.rc-feature .grow { flex: 1; min-width: 0; }
+.rc-fname { font-weight: 600; }
+.rc-fstatus { font-size: var(--t-sub); color: var(--label2); }
+.rc-fstatus.todo { color: var(--warn); font-weight: 600; }
+.rc-fstatus.done { color: var(--good); font-weight: 600; }
+.rc-log { display: grid; gap: 8px; }
+.rc-log .head { margin-top: 4px; }

@@ -1,0 +1,53 @@
+/* Search → Logging's category pages, forms and the quick check. Token colours only, so light and dark both work. */
+
+.lb-computed .row .value { white-space: normal; text-align: right; max-width: 58%; }
+
+.lb-card { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.lb-head { display: flex; align-items: baseline; gap: 10px; }
+.lb-head .name { flex: 1; min-width: 0; font-weight: 600; }
+.lb-head .note { font-size: var(--t-sub); color: var(--label2); white-space: nowrap; }
+.lb-card .muted { margin-top: -6px; }
+.lb-words { display: flex; justify-content: space-between; margin-top: -4px; }
+.lb-save { align-self: stretch; }
+.lb-line { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-width: 0; }
+.lb-line .btn.go { flex: none; min-width: 64px; }
+.lb-value { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.lb-pick { flex: 1; min-width: 0; }
+.lb-ask { font-size: var(--t-sub); color: var(--label2); }
+.lb-text { min-height: 84px; resize: none; line-height: 1.4; }
+
+/* 0-10: eleven equal cells across the card */
+.lb-ten { display: grid; grid-template-columns: repeat(11, minmax(0, 1fr)); gap: 3px; }
+.lb-ten .chip { padding: 7px 0; text-align: center; font-variant-numeric: tabular-nums; }
+
+/* the meal and lift sheets */
+.lb-time { display: inline-flex; align-items: center; gap: 4px; }
+.lb-time .picker { width: 64px; justify-content: center; }
+.lb-group { width: 136px; }
+.sheet-body .segbar { margin-bottom: 4px; }
+
+/* the quick check */
+.lb-pad {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 260px;
+  border-radius: var(--r-big);
+  background: var(--card);
+  touch-action: manipulation;
+  user-select: none;
+}
+.lb-pad .dot { width: 84px; height: 84px; border-radius: 50%; background: var(--fill2); transition: background 0.08s; }
+.lb-pad.wait .dot { background: var(--bad); }
+.lb-pad.go .dot { background: var(--good); }
+.lb-pad.early .dot { background: var(--warn); }
+.lb-pad .big { font-size: 22px; font-weight: 700; }
+.lb-digits { text-align: center; padding: 48px 0 8px; font-size: 44px; font-weight: 700; letter-spacing: 0.18em; font-variant-numeric: tabular-nums; }
+.lb-centre { text-align: center; }
+.lb-recall { text-align: center; font-size: 28px; letter-spacing: 0.14em; font-variant-numeric: tabular-nums; }
+
+/* the green button greys out until there is something to save */
+.lb-save:disabled { background: var(--fill); color: var(--label3); filter: none; }

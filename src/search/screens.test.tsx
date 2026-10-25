@@ -11,6 +11,7 @@ import { Logging } from '../screens/Logging';
 import { Settings } from '../screens/Settings';
 import { Inbox } from '../screens/Inbox';
 import { loadLocal } from '../lib/local';
+import { LogbookPage } from '../logbook/LogbookPage';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 // jsdom has no element scrolling; the kit Page scrolls to the top on mount
@@ -35,6 +36,13 @@ function Toasts() {
       )}
     </>
   );
+}
+
+/** The tab and the page on top, as "tab|name:category". */
+function Where() {
+  const nav = useNav();
+  const top = nav.stack.at(-1);
+  return <div data-where>{`${nav.tab}|${top ? `${top.name}${top.name === 'logbook' ? `:${top.category}` : ''}` : ''}`}</div>;
 }
 
 function Ready({ children }: { children: React.ReactNode }) {
@@ -105,22 +113,22 @@ describe('screens', () => {
     expect(loadLocal().pins).not.toContain('totalSleepMin');
   });
 
-  it('Logging adds water, a mood and a strength log', async () => {
-    await show(<Logging />);
-    expect(text()).toContain('of 2,000 ml');
-    const ml = () => Number(host.querySelector('.bignum .n')?.textContent?.replace(/,/g, ''));
-    const before = ml(); // the sample may already hold today's water
-    await click(button('+250 ml'));
-    await click(button('+500 ml'));
-    expect(ml()).toBe(before + 750);
+  it('Logging lists the categories, counts an entry, opens a category and points to Recovery', async () => {
+    await show(<><Logging /><LogbookPage category="mood" /><Where /></>);
+    const where = () => host.querySelector('[data-where]')?.textContent;
+    const row = (start: string) => [...host.querySelectorAll('button.row')].find((b) => b.textContent?.startsWith(start));
+    expect(text()).toContain('Nutrition');
+    expect(text()).toContain('Body measurements');
+    expect(text()).not.toContain('of 2,000 ml'); // water is Recovery's now
+    // an entry on the category page shows in Logging's count and this week's list
     await click(button('4 of 5'));
-    expect(text()).toContain('Good');
-    await click(button('Log'));
-    const local = loadLocal();
-    expect(local.lists.logs?.added.map((r) => r.type)).toEqual(['water', 'water', 'strength']);
-    expect(local.lists.checkins?.added[0]).toMatchObject({ kind: 'mood', mood: 4 });
-    expect(String(local.lists.logs?.added[0].takenAt)).toMatch(/^2026-10-24T\d\d:\d\d:\d\d\+05:30$/);
-    expect(toasts).toContain('Logged 30 min of strength');
+    await click(button('Save'));
+    expect(row('Mood & energy')?.textContent).toContain('1 today');
+    expect(text()).toContain('Energy 4/5');
+    await click(row('Nutrition'));
+    expect(where()).toBe('home|logbook:nutrition');
+    await click(row('Now in Recovery'));
+    expect(where()).toBe('recovery|');
   });
 
   it('Settings shows the profile without an email and saves a goal', async () => {

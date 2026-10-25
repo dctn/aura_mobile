@@ -13,6 +13,7 @@ import { Recovery } from '../screens/Recovery';
 import { Search } from '../screens/Search';
 import { Metric } from '../screens/Metric';
 import { Logging } from '../screens/Logging';
+import { LogbookPage } from '../logbook/LogbookPage';
 import { Modes, ModeSetup } from '../screens/Modes';
 import { Sessions } from '../screens/Sessions';
 import { Settings } from '../screens/Settings';
@@ -32,6 +33,8 @@ function PageView({ page }: { page: Page }) {
       return <Metric field={page.field} />;
     case 'logging':
       return <Logging />;
+    case 'logbook':
+      return <LogbookPage category={page.category} />;
     case 'modes':
       return <Modes />;
     case 'mode':

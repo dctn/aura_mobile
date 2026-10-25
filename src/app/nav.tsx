@@ -4,12 +4,15 @@
 import { createContext, useCallback, useContext, useMemo, useRef, useState, type ReactNode } from 'react';
 import { MODES } from '../lib/catalog';
 import { cardFor } from '../lib/metrics';
+import { categoryOf } from '../logbook/kinds';
 
 export type Tab = 'home' | 'recovery' | 'search';
 
 export type Page =
   | { name: 'metric'; field: string }
   | { name: 'logging' }
+  /** One of Logging's categories (logbook/kinds.ts CATEGORIES id). */
+  | { name: 'logbook'; category: string }
   | { name: 'modes' }
   | { name: 'mode'; index: number }
   | { name: 'sessions' }
@@ -156,6 +159,8 @@ export function titleOf(page: Page): string {
       return cardFor(page.field).label;
     case 'mode':
       return MODES[page.index]?.name ?? 'Mode';
+    case 'logbook':
+      return categoryOf(page.category)?.label ?? 'Logging';
     default:
       return page.name.charAt(0).toUpperCase() + page.name.slice(1);
   }

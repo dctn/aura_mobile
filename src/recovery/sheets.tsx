@@ -41,21 +41,30 @@ function FooterButton({ label, accent, onClick, disabled }: { label: string; acc
 
 const hhmm = (minute: number) => `${String(Math.floor(minute / 60)).padStart(2, '0')}:${String(minute % 60).padStart(2, '0')}`;
 
-/** The wake time on the same 24-hour pill as the calendar (the browser's time field would follow its locale). */
-function TimeSheet({ footer, initial, onSave, close }: { footer: string; initial: string; onSave: (hhmm: string) => void; close: () => void }) {
+/** What the time sheet is for: its title and the row's words; the wake time unless told otherwise. */
+export interface TimeLook {
+  title: string;
+  label: string;
+}
+
+const WAKE_LOOK: TimeLook = { title: 'Wake time', label: 'Wake up at' };
+
+/** One time of day (the wake time, or the bedtime) on the same 24-hour pill as the calendar (the browser's time field
+ *  would follow its locale). */
+function TimeSheet({ footer, initial, look, onSave, close }: { footer: string; initial: string; look: TimeLook; onSave: (hhmm: string) => void; close: () => void }) {
   const [minute, setMinute] = useState(/^\d{2}:\d{2}/.test(initial) ? Number(initial.slice(0, 2)) * 60 + Number(initial.slice(3, 5)) : 7 * 60);
   const value = hhmm(minute);
   return (
-    <SheetFrame title="Wake time" onCancel={close} action="Save" actionDisabled={!value} onAction={() => { close(); onSave(value); }}>
+    <SheetFrame title={look.title} onCancel={close} action="Save" actionDisabled={!value} onAction={() => { close(); onSave(value); }}>
       <Group footer={footer}>
-        <Row title="Wake up at" icon="alarm" accent="focus" trailing={<TimePill value={minute} onChange={setMinute} />} />
+        <Row title={look.label} icon="alarm" accent="focus" trailing={<TimePill value={minute} onChange={setMinute} />} />
       </Group>
     </SheetFrame>
   );
 }
 
-export function openTimeSheet(nav: Nav, footer: string, initial: string, onSave: (hhmm: string) => void): void {
-  nav.openSheet({ render: (close) => <TimeSheet footer={footer} initial={initial} onSave={onSave} close={close} /> });
+export function openTimeSheet(nav: Nav, footer: string, initial: string, onSave: (hhmm: string) => void, look: TimeLook = WAKE_LOOK): void {
+  nav.openSheet({ render: (close) => <TimeSheet footer={footer} initial={initial} look={look} onSave={onSave} close={close} /> });
 }
 
 // -- DX-05 / DX-06: the hard training to move or cancel -----------------------------------------------------------

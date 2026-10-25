@@ -14,6 +14,7 @@ import { nowIn, shiftIso, wallIso, type Now } from './when';
 import { kicker } from '../run/clock';
 import { liveRun, runControls } from '../run/live';
 import * as S from '../recovery/sheets';
+import { openAlerts } from '../screens/shared';
 
 export const WATER_GLASS_ML = 250;
 /** BS-02: what Reconnect backfills, in minutes since the last sync. */
@@ -28,6 +29,8 @@ export interface PlannedEvent {
   day: string;
   minute: number;
   minutes: number;
+  /** The feature whose action planned it, so Home can offer it as today's to-do. */
+  featureId?: string;
 }
 
 // -- pure helpers (tested in actions.test.ts) ---------------------------------------------------------------------
@@ -137,6 +140,16 @@ function finishAlert(aura: Aura, alert: Json | null): void {
   if (id) aura.edit.change('alerts', id, { done: true });
 }
 
+/** The features a hand log answers: a mood check-in (NI-02), a connection check-in (NI-03), any water (NI-04). */
+export const LOGGED_BY: Record<'mood' | 'connection' | 'water', string> = { mood: 'NI-02', connection: 'NI-03', water: 'NI-04' };
+
+/** Logging a feature's own item finishes its open alert, wherever it was logged (Home, Recovery's card, an alert's
+ *  button), so Home and Recovery agree; nothing happens when none is open. A second finish (the alert's own done()
+ *  and this) writes the same { done: true } again, which changes nothing. */
+export function finishFeature(aura: Aura, featureId: string): void {
+  finishAlert(aura, openAlerts(aura.data.alerts, aura.data.alertOff).find((a) => a.featureId === featureId) ?? null);
+}
+
 /** Take the alert off "What you need to do" (locally). */
 export function markDone(aura: Aura, nav: Nav, alert: Json): void {
   const id = String(alert.id ?? '');
@@ -160,19 +173,43 @@ export function addTasks(aura: Aura, nav: Nav, titles: string[], horizon: 'today
 }
 
 export function eventRow(zone: string, e: PlannedEvent): Json {
-  return { title: e.title, start: wallIso(zone, e.day, e.minute), end: wallIso(zone, e.day, e.minute + e.minutes) };
+  const row: Json = { title: e.title, start: wallIso(zone, e.day, e.minute), end: wallIso(zone, e.day, e.minute + e.minutes) };
+  if (e.featureId) row.featureId = e.featureId;
+  return row;
 }
 
-export function addEvents(aura: Aura, nav: Nav, events: PlannedEvent[]): boolean {
+/** The planned events not on the calendar yet: an event with the same title starting at the same day and minute (in
+ *  `zone`) is already there. Recovery's verbs work without an alert, so a second tap would otherwise stack copies. */
+export function notYetPlanned(existing: Json[], events: PlannedEvent[], zone: string): PlannedEvent[] {
+  const key = (title: unknown, day: string, minute: number) => `${String(title ?? '')}|${day}|${minute}`;
+  const have = new Set(
+    existing.flatMap((e) => {
+      const at = localParts(e.start, zone);
+      return at ? [key(e.title, at.day, at.minute)] : [];
+    }),
+  );
+  return events.filter((e) => {
+    const k = key(e.title, e.day, e.minute);
+    if (have.has(k)) return false;
+    have.add(k); // nor twice from one plan
+    return true;
+  });
+}
+
+/** Add the events that aren't there yet; `featureId` tags each one that has none (the alert's feature). True when
+ *  the plan is on the calendar afterwards, added now or before. */
+export function addEvents(aura: Aura, nav: Nav, events: PlannedEvent[], featureId?: string): boolean {
   if (!events.length) return false;
-  for (const e of events) aura.edit.add('events', eventRow(aura.zone, e));
-  nav.showToast(`Added ${events.length} to your calendar`);
+  const fresh = notYetPlanned(aura.data.events, events, aura.zone);
+  for (const e of fresh) aura.edit.add('events', eventRow(aura.zone, { ...e, featureId: e.featureId ?? featureId }));
+  nav.showToast(fresh.length ? `Added ${fresh.length} to your calendar` : 'Already in your calendar');
   return true;
 }
 
 export function logWater(aura: Aura, nav: Nav, ml = WATER_GLASS_ML): boolean {
   const now = nowOf(aura);
   aura.edit.add('logs', { type: 'water', date: now.day, takenAt: now.iso, data: { ml } });
+  finishFeature(aura, LOGGED_BY.water);
   nav.showToast(`Logged ${ml} ml of water`);
   return true;
 }
@@ -182,6 +219,7 @@ export function saveCheckin(aura: Aura, nav: Nav, kind: 'mood' | 'connection', v
   const now = nowOf(aura);
   const row: Json = { kind, [kind]: value, takenAt: now.iso, date: now.day };
   aura.edit.add('checkins', row);
+  finishFeature(aura, LOGGED_BY[kind]);
   nav.showToast(`Saved: ${kind} ${value}/5`);
   if (kind !== 'mood') return;
   const weekLow = moodLowThisWeek([...aura.data.checkins, row], now.day);
@@ -368,7 +406,7 @@ export function connectionPlan(aura: Aura, nav: Nav, then?: () => void): void {
     if (plan.call) planned = addTasks(aura, nav, [`Call ${plan.who}`]);
     if (plan.meal) {
       const [hh, mm] = plan.time.split(':').map(Number);
-      planned = addEvents(aura, nav, [{ title: `Meal with ${plan.who}`, day: plan.day, minute: hh * 60 + mm, minutes: 90 }]) || planned;
+      planned = addEvents(aura, nav, [{ title: `Meal with ${plan.who}`, day: plan.day, minute: hh * 60 + mm, minutes: 90 }], 'NI-03') || planned;
     }
     if (!planned) nav.showToast('Nothing planned; tick a call or a meal next time.');
     then?.();
@@ -376,12 +414,15 @@ export function connectionPlan(aura: Aura, nav: Nav, then?: () => void): void {
   });
 }
 
-/** PB-05: the signs, and a task to book a doctor's visit. */
+/** PB-05: the signs, and a task to book a doctor's visit. Without an alert (Recovery's stand-in, no id) nothing was
+ *  flagged, so the wording stays neutral instead of speaking of "these signs". */
 export function healthCheck(aura: Aura, nav: Nav, alert: Json, then?: () => void): void {
-  const body = String(alert.body ?? '').trim() || 'These signs are worth checking with a doctor.';
+  const body = alert.id
+    ? `${String(alert.body ?? '').trim() || 'These signs are worth checking with a doctor.'} Book a visit and show the doctor your Trends screen.`
+    : 'A yearly check-up is worth booking. Show the doctor your Trends screen.';
   nav.showAlert({
     title: String(alert.title ?? '') || 'Worth a check-up',
-    body: `${body} Book a visit and show the doctor your Trends screen.`,
+    body,
     buttons: [
       { label: 'Not now', role: 'cancel' },
       {
@@ -413,9 +454,14 @@ export function performAlert(aura: Aura, nav: Nav, alert: Json): void {
   };
 
   switch (ref) {
-    case 'bedtime':
-      ended(updateGoal(aura, nav, 'bedtime', hhmmMinus(goals.bedtime ?? '23:00', 30)));
+    case 'bedtime': {
+      const earlier = hhmmMinus(goals.bedtime ?? '23:00', 30);
+      // a real alert moves it at once, as the app does; Recovery's stand-in (no id) can be tapped any day, so each tap
+      // would take another 30 min off: it opens the time, 30 min earlier, for the person to confirm
+      if (alert.id) ended(updateGoal(aura, nav, 'bedtime', earlier));
+      else S.openTimeSheet(nav, `Your bedtime now is ${String(goals.bedtime ?? '23:00')}; half an hour earlier pays back sleep debt.`, earlier, (hhmm) => updateGoal(aura, nav, 'bedtime', hhmm), { title: 'Bedtime', label: 'Go to bed at' });
       return;
+    }
     case 'settings':
       S.openTimeSheet(nav, 'One wake time for every day', String(goals.wakeTime ?? '07:00'), (hhmm) => ended(updateGoal(aura, nav, 'wakeTime', hhmm)));
       return;
@@ -449,14 +495,14 @@ export function performAlert(aura: Aura, nav: Nav, alert: Json): void {
       ended(addEvents(aura, nav, [
         { title: 'Walk · 30 min', day: sat, minute: 9 * 60, minutes: 30 },
         { title: 'Walk · 30 min', day: addDays(sat, 1), minute: 9 * 60, minutes: 30 },
-      ]));
+      ], f?.id));
       return;
     }
     case 'light':
-      ended(addEvents(aura, nav, lightTimes(now.day, now.minute, goals.wakeTime ?? '07:00')));
+      ended(addEvents(aura, nav, lightTimes(now.day, now.minute, goals.wakeTime ?? '07:00'), f?.id));
       return;
     case 'scores':
-      if (addEvents(aura, nav, [{ title: 'Recovery day: keep it light', day: addDays(now.day, 1), minute: 9 * 60, minutes: 60 }])) {
+      if (addEvents(aura, nav, [{ title: 'Recovery day: keep it light', day: addDays(now.day, 1), minute: 9 * 60, minutes: 60 }], f?.id)) {
         done();
         askCheckin(aura, nav, 'mood');
       }
@@ -466,7 +512,7 @@ export function performAlert(aura: Aura, nav: Nav, alert: Json): void {
         { title: 'Strength · 40 min', day: addDays(now.day, 1), minute: 18 * 60, minutes: 40 },
         { title: 'Brisk session · 30 min', day: addDays(now.day, 3), minute: 18 * 60, minutes: 30 },
         { title: 'Strength · 40 min', day: addDays(now.day, 5), minute: 18 * 60, minutes: 40 },
-      ]));
+      ], f?.id));
       return;
     case 'checkin/mood':
       askCheckin(aura, nav, 'mood', done);

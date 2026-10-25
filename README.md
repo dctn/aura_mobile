@@ -81,8 +81,34 @@ the week. Touch needs a short hold first, so a swipe still scrolls.
 The bedtime reminder and wake alarm ring (a toast and a short tone) only while the page is open, like the PC app.
 A session running on another device would show in Sessions, but the demo account never has one.
 
-Home and Recovery list one alert per feature (its newest). The app lists every open day, but the demo's month was
-sent all at once, which would leave about 95 rows.
+Recovery lists one alert per feature (its newest). The app lists every open day, but the demo's month was sent all
+at once, which would leave about 95 rows.
+
+## Today, Recovery and Logging
+
+- **Home → Today** shows only what is due today (`todayItems` in `src/calendar/homeParts.ts`), in this order:
+  - today's open alerts;
+  - recovery events still ahead today, with Start;
+  - the mood and connection check-ins not done yet;
+  - the sleep check, when it's due;
+  - water until the goal;
+  - strength while the last 7 days have fewer than 2 strength days.
+
+  Items drop off once done. The seeded alerts are dated 19 Oct or earlier, so in the demo Today rarely shows an
+  alert; Recovery has them all.
+- **Recovery** (`src/screens/Recovery.tsx`) lists all 16 recovery features in six groups, every day.
+  - Each row shows its status and its one-verb action, which works even with no open alert.
+  - The feature's log sits under the row: water, mood, connection, strength and the sleep check
+    (`src/recovery/logCards.tsx`).
+  - The presets grid stays at the bottom. It includes **Aerobic session**, which lives in `EXTRA_PRESETS` in
+    `src/lib/catalog.ts` until the PyQt catalog has it.
+  - BS-01 and BS-02 stay on Home.
+- **Search → Logging** holds everything else the app logs, from the Zoho tab "Categories and Sources": 105 rows in
+  13 categories (`src/logbook/kinds.ts`).
+  - Typed-in items get a form (`forms.tsx`, including the 1-minute Quick check).
+  - Computed items are worked out from logs, the calendar and sessions (`derive.ts`).
+  - Items only the band or the desktop app can measure say so, with no number.
+  - Every entry is saved as a local `logs` row.
 
 ## Keeping it fresh
 

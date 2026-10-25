@@ -16,6 +16,15 @@ describe('search', () => {
     expect(valueText(m.CARDS.stress, null)).toBe('');
   });
 
+  it('reads a length of time in hours, as the Sleep card does', () => {
+    // DX-01's 14-day sleep debt and DX-07's high stress are minutes; the feature rows and sheets showed "1563 min"
+    expect(valueText(m.cardFor('sleepDebtMin14'), 1563)).toBe('26.1 h');
+    expect(valueText(m.cardFor('stressDurationMin'), 150)).toBe('2.5 h');
+    expect(m.cardFor('sleepDebtMin14').label).toBe('Sleep debt (14 d)');
+    // plain minutes stay minutes
+    expect(valueText(m.cardFor('sleepLatencyMin'), 25)).toBe('25 min');
+  });
+
   it('shows everything with an empty box', () => {
     const hits = searchHits('  ', ['vo2max']);
     expect(hits.categories).toEqual([...m.CATEGORIES]);
@@ -26,6 +35,8 @@ describe('search', () => {
   it('matches extra words and any metric label', () => {
     expect(searchHits('hrv', []).categories).toEqual(['recovery']);
     expect(searchHits('WATER', []).places).toEqual(['Logging']);
+    // the logbook's categories
+    for (const word of ['protein', 'meal', 'meeting', 'weight', 'focus', 'learning', 'energy']) expect(searchHits(word, []).places, word).toContain('Logging');
     const hits = searchHits('vo2', ['vo2max', 'stepCount']);
     expect(hits.categories).toEqual([]);
     expect(hits.fields).toEqual(['vo2max']);

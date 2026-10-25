@@ -110,6 +110,9 @@ const UNITS: Partial<Record<Kind, string>> = { duration: 'min', minutes: 'min', 
 export function cardFor(field: string): Card {
   const found = Object.values(CARDS).find((c) => c.field === field);
   if (found) return found;
+  // a length of time reads in hours, as the Sleep card does ("26.1 h" of sleep debt, not "1563 min"); website-only,
+  // the PyQt card_for still says min
+  if (KNOWN[field]?.[1] === 'duration') return card(field, labelFor(field), field, 'h', 'blue', 'chart', 60, 1);
   return card(field, labelFor(field), field, UNITS[KNOWN[field]?.[1] ?? 'raw'] ?? '', 'blue', 'chart');
 }
 

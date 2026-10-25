@@ -3,15 +3,23 @@ import {
   alertWeeks,
   backfillMinutes,
   eventRow,
+  finishFeature,
   hardTraining,
   hhmmMinus,
   lightTimes,
+  logWater,
   moodLowThisWeek,
   nextWeekday,
+  notYetPlanned,
+  performAlert,
+  saveCheckin,
   sessionRow,
   sleepMeaning,
   stressChangeText,
 } from './actions';
+import type { Aura } from '../app/store';
+import type { Nav } from '../app/nav';
+import type { Json } from './types';
 
 describe('hhmmMinus', () => {
   it('takes minutes off a time of day', () => {
@@ -125,6 +133,19 @@ describe('copy', () => {
   });
 });
 
+describe('notYetPlanned', () => {
+  const walk = { title: 'Walk · 30 min', day: '2026-10-31', minute: 9 * 60, minutes: 30 };
+  it('skips an event already there with the same title and start, however its start is written', () => {
+    const there = [{ id: 'e1', title: 'Walk · 30 min', start: '2026-10-31T03:30:00.000Z', end: '2026-10-31T04:00:00.000Z' }]; // 09:00 in Kolkata
+    const sunday = { ...walk, day: '2026-11-01' };
+    expect(notYetPlanned(there, [walk, sunday], 'Asia/Kolkata')).toEqual([sunday]);
+  });
+  it('keeps one at another time or with another title, and drops a repeat within the plan', () => {
+    const there = [{ title: 'Walk · 30 min', start: '2026-10-31T10:00:00+05:30' }, { title: 'Run', start: '2026-10-31T09:00:00+05:30' }];
+    expect(notYetPlanned(there, [walk, walk], 'Asia/Kolkata')).toEqual([walk]);
+  });
+});
+
 describe('rows', () => {
   it('writes an event in the zone', () => {
     expect(eventRow('Asia/Kolkata', { title: 'Walk · 30 min', day: '2026-10-31', minute: 9 * 60, minutes: 30 })).toEqual({
@@ -132,6 +153,11 @@ describe('rows', () => {
       start: '2026-10-31T09:00:00+05:30',
       end: '2026-10-31T09:30:00+05:30',
     });
+  });
+  it('tags an event with the feature that planned it, and only then', () => {
+    const row = eventRow('Asia/Kolkata', { title: 'Nap', day: '2026-10-31', minute: 14 * 60, minutes: 10, featureId: 'DX-01' });
+    expect(row.featureId).toBe('DX-01');
+    expect('featureId' in eventRow('Asia/Kolkata', { title: 'Nap', day: '2026-10-31', minute: 0, minutes: 10 })).toBe(false);
   });
   it('writes a session', () => {
     const start = new Date('2026-10-24T07:00:00Z').getTime();
@@ -148,5 +174,64 @@ describe('rows', () => {
       actualMinutes: 5,
     });
     expect(sessionRow('Asia/Kolkata', '2026-10-24', { title: 'Flowtime', minutes: 0 }, true, 60, start, start).plannedMinutes).toBe(null);
+  });
+});
+
+describe('finishFeature', () => {
+  /** Just enough of the store and the nav: what was changed, added and said. */
+  function fake(alerts: Json[], alertOff: string[] = []) {
+    const changed: [string, string, Json][] = [];
+    const added: [string, Json][] = [];
+    const said: string[] = [];
+    const aura = {
+      zone: 'Asia/Kolkata',
+      today: '2026-10-24',
+      data: { alerts, alertOff, checkins: [] as Json[], me: {} },
+      edit: {
+        change: (part: string, id: string, c: Json) => changed.push([part, id, c]),
+        add: (part: string, row: Json) => added.push([part, row]),
+      },
+    } as unknown as Aura;
+    const nav = { showToast: (t: string) => said.push(t), openSheet: () => undefined } as unknown as Nav;
+    return { aura, nav, changed, added, said };
+  }
+  const alerts = [
+    { id: 'a-old', featureId: 'NI-02', date: '2026-10-20' },
+    { id: 'a-new', featureId: 'NI-02', date: '2026-10-23' },
+    { id: 'a-water', featureId: 'NI-04', date: '2026-10-23' },
+    { id: 'a-conn', featureId: 'NI-03', date: '2026-10-22' },
+  ];
+
+  it("marks the feature's open alert (its newest) done, and nothing when none is open", () => {
+    const f = fake(alerts);
+    finishFeature(f.aura, 'NI-02');
+    expect(f.changed).toEqual([['alerts', 'a-new', { done: true }]]);
+    finishFeature(f.aura, 'DX-01');
+    expect(f.changed).toHaveLength(1);
+    const done = fake([{ ...alerts[1], done: true }]);
+    finishFeature(done.aura, 'NI-02');
+    expect(done.changed).toEqual([]);
+  });
+
+  it('a mood or connection check-in and any water log finish their own feature, wherever they come from', () => {
+    const f = fake(alerts);
+    saveCheckin(f.aura, f.nav, 'mood', 4);
+    saveCheckin(f.aura, f.nav, 'connection', 3);
+    logWater(f.aura, f.nav, 500);
+    expect(f.changed.map(([, id]) => id)).toEqual(['a-new', 'a-conn', 'a-water']);
+    expect(f.added.map(([part]) => part)).toEqual(['checkins', 'checkins', 'logs']);
+    expect(f.said).toEqual(['Saved: mood 4/5', 'Saved: connection 3/5', 'Logged 500 ml of water']);
+  });
+
+  it("finishing twice (the alert's own done() and the log) only writes done again", () => {
+    const f = fake(alerts);
+    performAlert(f.aura, f.nav, alerts[2]); // NI-04's Drink: a glass, then done
+    expect(f.changed).toEqual([['alerts', 'a-water', { done: true }], ['alerts', 'a-water', { done: true }]]);
+  });
+
+  it('leaves a switched-off feature alone', () => {
+    const f = fake(alerts, ['NI-04']);
+    logWater(f.aura, f.nav);
+    expect(f.changed).toEqual([]);
   });
 });

@@ -1,7 +1,7 @@
 // The phone's building blocks, ported from demo/src/aura_mobile/ui/kit.py. Screens compose these; colours come from
 // tokens.css, and a feature's accent is passed as a token name ("sleep") and set as --tone.
 
-import { useEffect, useRef, type CSSProperties, type ReactNode } from 'react';
+import { useEffect, useRef, type CSSProperties, type KeyboardEvent, type ReactNode } from 'react';
 import { ICONS, tone } from '../lib/catalog';
 import { useNav, type Page as PageSpec } from '../app/nav';
 
@@ -214,10 +214,21 @@ export interface ActionPillProps {
   onDone?: () => void;
 }
 
+/** Enter or Space on a `div role="button"` runs `run`, as on a real button. Only a key on the div itself: a key on a
+ *  button inside it (the verb, the check) bubbles up here too, and must not also open the row. Space would scroll the
+ *  page, so its default is stopped. */
+export function pressKeys(run?: () => void) {
+  return (e: KeyboardEvent<HTMLElement>) => {
+    if (e.target !== e.currentTarget || (e.key !== 'Enter' && e.key !== ' ')) return;
+    e.preventDefault();
+    run?.();
+  };
+}
+
 /** The black alert pill: a round icon, the title over a short reason, a check for Done, and one green verb. */
 export function ActionPill({ icon, title, reason, verb, accent, onVerb, onOpen, onDone }: ActionPillProps) {
   return (
-    <div className="pill" role="button" tabIndex={0} onClick={onOpen} onKeyDown={(e) => e.key === 'Enter' && onOpen?.()}>
+    <div className="pill" role="button" tabIndex={0} onClick={onOpen} onKeyDown={pressKeys(onOpen)}>
       <Disc icon={icon} accent={accent} size={40} />
       <span className="grow">
         <div className="ptitle">{title}</div>

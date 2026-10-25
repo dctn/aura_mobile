@@ -10,7 +10,8 @@ import type { Json } from '../lib/types';
 
 /** The second list: name, icon, accent, extra words the field matches. */
 export const PLACES = [
-  { name: 'Logging', icon: 'pencil', accent: 'fitness', words: 'water hydration mood connection strength sleep check log' },
+  // Logging's own categories (logbook/kinds.ts), and Recovery's logs, which its first row points to
+  { name: 'Logging', icon: 'pencil', accent: 'fitness', words: 'log logbook energy alertness edge worry reflection stress months challenge hindrance conversations support purpose people tv walk meal food nutrition calories kcal protein carbs fat diet fasting eating meeting focus quick check reaction memory interruptions drift sound park learning study cards skills shutdown work hours balance boundary overwork burnout exhaustion habits body weight measurements bmi blood pressure lift gym exercise sets reps volume water hydration mood connection strength sleep check' },
   { name: 'Modes', icon: 'bolt', accent: 'workout', words: 'timer flowtime walk meeting focus start' },
   { name: 'Sessions', icon: 'clock', accent: 'sleep', words: 'history running stress change' },
   { name: 'Settings', icon: 'settings', accent: 'label3', words: 'profile goals alerts appearance dark theme inbox reset' },

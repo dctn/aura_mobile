@@ -1,21 +1,24 @@
 // Home (ui/pages/home.py) in the Figma look: the calendar (a week or the month, then the chosen day's timeline and
-// to-do list, where tasks and events are added, edited, ticked and deleted), today's alert pills with their 14-day
-// cards, Burnout, this week's movement (weeklyActiveMinutes against 150, DX-09), the pins, then "Finish your
-// profile" while body details are missing (BS-01) and the band line (BS-02). Every change stays in this browser.
+// to-do list, where tasks and events are added, edited, ticked and deleted), Today (only what is due today: today's
+// alert pills with their 14-day cards, the check-ins, water, strength and the recovery events still ahead),
+// Burnout, this week's movement (weeklyActiveMinutes against 150, DX-09), the pins, then "Finish your profile" while
+// body details are missing (BS-01) and the band line (BS-02). Every change stays in this browser.
 
 import { useEffect, useRef, useState, type RefObject } from 'react';
-import { featureFor } from '../lib/catalog';
-import { askCheckin, logWater, performAlert, timedRun } from '../lib/actions';
-import { useAura } from '../app/store';
-import { useNav } from '../app/nav';
+import { PRESETS, featureFor } from '../lib/catalog';
+import { askCheckin, logWater, nowOf, performAlert, sleepCheck, timedRun, windDown } from '../lib/actions';
+import { clock } from '../lib/agenda';
+import { useAura, type Aura } from '../app/store';
+import { useNav, type Nav } from '../app/nav';
 import * as m from '../lib/metrics';
 import type { Json } from '../lib/types';
-import { ActionPill, Group, Icon, IconTile, MetricCard, Page, Ring, Row, Section, SettingsButton, SheetFrame, TileGrid } from '../kit/kit';
+import { ActionPill, Group, Icon, IconTile, MetricCard, Page, Ring, Row, Section, SettingsButton, SheetFrame, Stepper, TileGrid } from '../kit/kit';
 import { AlertCard, openAlerts } from './shared';
 import { CalendarCard } from '../calendar/CalendarCard';
+import { ItemSheet } from '../calendar/ItemSheet';
 import {
-  MAX_PINS, SHOW_ALERTS, WEEKLY_ACTIVE_TARGET, backfillMinutes, burnoutRisk, lastSync, missing, numericFields, pinLook, pinsOf,
-  syncText, togglePin, weeklyMinutes,
+  MAX_PINS, SHOW_TODAY, STRENGTH_DAYS, WEEKLY_ACTIVE_TARGET, WIND_DOWN, backfillMinutes, burnoutRisk, eventTimer, lastSync, minuteNow, missing,
+  numericFields, pinLook, pinsOf, seeAllAt, syncText, todayItems, togglePin, weeklyMinutes, type TodayItem,
 } from '../calendar/homeParts';
 import { longDay } from '../calendar/zone';
 import '../calendar/calendar.css';
@@ -104,7 +107,7 @@ function QuickSheet({ top, close }: { top: Json | null; close: () => void }) {
       </Group>
       <Group heading="Water">
         <Row
-          title={`${ml} ml today`}
+          title={`${ml.toLocaleString('en-US')} ml today`}
           icon="drop"
           accent="blue"
           trailing={
@@ -118,6 +121,77 @@ function QuickSheet({ top, close }: { top: Json | null; close: () => void }) {
       </Group>
     </SheetFrame>
   );
+}
+
+/** Today's Strength "Log": minutes (5 to 240), saved as a strength log as Search → Logging does. */
+function StrengthSheet({ close }: { close: () => void }) {
+  const aura = useAura();
+  const nav = useNav();
+  const [minutes, setMinutes] = useState(30);
+  const log = () => {
+    const now = nowOf(aura);
+    aura.edit.add('logs', { type: 'strength', date: now.day, takenAt: now.iso, data: { minutes } });
+    nav.showToast(`Logged ${minutes} min of strength`);
+    close();
+  };
+  return (
+    <SheetFrame title="Strength" onCancel={close} action="Log" onAction={log}>
+      <Group heading="How long" footer={`Muscle-strengthening on ${STRENGTH_DAYS} or more days a week (WHO).`}>
+        <Row title="Minutes" icon="dumbbell" accent="fitness" trailing={<Stepper value={minutes} min={5} max={240} step={5} format={(v) => `${v} min`} onChange={setMinutes} />} />
+      </Group>
+    </SheetFrame>
+  );
+}
+
+/** A recovery event's pill look by its title's start: [icon, accent]; a run's preset look comes first. */
+const EVENT_LOOK: [string, string, string][] = [
+  ['Dim screens', 'evening', 'sleep'],
+  ['Strength', 'dumbbell', 'fitness'],
+  ['Brisk session', 'flame', 'fitness'],
+  ['Meal with', 'people', 'teal'],
+  ['Wind-down', 'evening', 'sleep'],
+];
+
+/** The pill for one of today's non-alert to-dos: what it says and what its button does. */
+function todayPill(item: Exclude<TodayItem, { kind: 'alert' }>, aura: Aura, nav: Nav, nowMinute: number) {
+  switch (item.kind) {
+    case 'checkin': {
+      const { check } = item;
+      if (check === 'sleep') {
+        const go = () => sleepCheck(aura, nav);
+        return { icon: 'sleep', accent: 'sleep', title: 'Sleep check', reason: 'Trouble sleeping for 3 weeks', verb: 'Start', onVerb: go, onOpen: go };
+      }
+      const go = () => askCheckin(aura, nav, check);
+      return check === 'mood'
+        ? { icon: 'bubble', accent: 'sleep', title: 'Mood', reason: 'How do you feel today?', verb: 'Check in', onVerb: go, onOpen: go }
+        : { icon: 'people', accent: 'teal', title: 'Connection', reason: 'How connected do you feel?', verb: 'Log', onVerb: go, onOpen: go };
+    }
+    case 'water':
+      return { icon: 'drop', accent: 'blue', title: 'Water', reason: `${item.ml.toLocaleString('en-US')} of ${item.goal.toLocaleString('en-US')} ml`, verb: '+250', onVerb: () => logWater(aura, nav), onOpen: () => nav.setTab('recovery') };
+    case 'strength': {
+      const go = () => nav.openSheet({ render: (close) => <StrengthSheet close={close} /> });
+      // a rolling 7 days (todayItems), so "this week" would be wrong on a Monday
+      return { icon: 'dumbbell', accent: 'fitness', title: 'Strength', reason: `${item.days} of ${STRENGTH_DAYS} days in the last 7 days`, verb: 'Log', onVerb: go, onOpen: go };
+    }
+    case 'event': {
+      const { item: ev, end, run } = item;
+      const start = ev.start ?? 0;
+      const preset = run && run !== WIND_DOWN ? PRESETS.find((p) => p.title === run) : undefined;
+      const look = EVENT_LOOK.find(([t]) => ev.title.startsWith(t));
+      const icon = preset?.icon ?? look?.[1] ?? 'cal';
+      const accent = preset?.accent ?? look?.[2] ?? 'blue';
+      const reason = start <= nowMinute ? `Now · until ${clock(end)}` : `${clock(start)}–${clock(end)}`;
+      // the Start runs the preset for the event's own length (eventTimer); the wind-down keeps its list
+      const begin =
+        run === WIND_DOWN
+          ? () => windDown(aura, nav, accent)
+          : run
+            ? () => timedRun(aura, nav, eventTimer(ev, run, accent))
+            : undefined;
+      const open = () => nav.openSheet({ render: (close) => <ItemSheet close={close} kind="event" item={ev} day={ev.day ?? aura.today} at={ev.start} minutes={ev.minutes} dated /> });
+      return { icon, accent, title: ev.title, reason, verb: begin ? 'Start' : undefined, onVerb: begin, onOpen: open };
+    }
+  }
 }
 
 /** A metric card for one CARDS entry, shown even with no values ("—"). */
@@ -147,13 +221,17 @@ export function Home() {
   const latest = data.metrics.latest;
   const values = ((latest?.metrics as Json | undefined) ?? {}) as Json;
 
-  // -- today's alerts
+  // -- today: what is due today; every other open alert waits in Recovery
   const alerts = openAlerts(data.alerts, data.alertOff);
   // "Not now" hides the pills until an alert arrives that wasn't open then
   const snoozed = new Set(aura.local.snoozed ?? []);
   const fresh = alerts.some((a) => !snoozed.has(String(a.id)));
   const live = alerts.length && !fresh ? [] : alerts;
-  const shown = live.slice(0, SHOW_ALERTS);
+  const items = todayItems(data, today, zone, now, !live.length);
+  const shown = items.slice(0, SHOW_TODAY);
+  const todayAlerts = items.filter((i) => i.kind === 'alert').length;
+  const seeAll = seeAllAt(alerts.length, todayAlerts, items.length);
+  const nowMinute = minuteNow(now, zone);
   const toRecovery = () => nav.setTab('recovery');
   const notNow = () => aura.edit.snooze(alerts.map((a) => String(a.id)));
   const quick = () => nav.openSheet({ tall: true, render: (close) => <QuickSheet top={live[0] ?? null} close={close} /> });
@@ -197,7 +275,7 @@ export function Home() {
           title="Today"
           trailing={
             <span className="home-trail">
-              {(alerts.length > SHOW_ALERTS || (alerts.length > 0 && !live.length)) && <button className="link" onClick={toRecovery}>See all</button>}
+              {seeAll === 'top' && <button className="link" onClick={toRecovery}>See all</button>}
               <button className="home-plus" aria-label="Quick: check in, breathe or log water" title="Check in, breathe or log water" onClick={quick}>
                 <Icon name="plus" size={22} stroke={2} />
               </button>
@@ -205,9 +283,18 @@ export function Home() {
           }
         />
         {shown.length ? (
-          shown.map((a, i) => <AlertCard key={String(a.id ?? i)} alert={a} onLater={notNow} />)
+          shown.map((item) =>
+            item.kind === 'alert' ? (
+              <AlertCard key={item.key} alert={item.alert} onLater={notNow} />
+            ) : (
+              <ActionPill key={item.key} {...todayPill(item, aura, nav, nowMinute)} />
+            ),
+          )
         ) : (
           <ActionPill icon="check" title="All clear" reason={alerts.length ? `${alerts.length} in Recovery` : 'Nothing to do'} accent="go" onOpen={quick} />
+        )}
+        {seeAll === 'bottom' && (
+          <button className="link home-more" onClick={toRecovery}>See all</button>
         )}
       </div>
 
