@@ -1,5 +1,6 @@
 // The phone's fixed copy, exported from the demo package by tools/export_catalog.py (catalog.json is never edited by
-// hand; the few website-only additions below say so).
+// hand). The website's own list of things to start is lib/modes.ts; the phone's old presets and modes in catalog.json
+// are only read by modes.test.ts, which checks that each still finds its mode.
 
 import data from '../data/catalog.json';
 import type { Json } from './types';
@@ -26,38 +27,10 @@ export interface Feature {
   icon: string;
 }
 
-export interface Preset {
-  title: string;
-  word: string;
-  minutes: number;
-  /** The Session kind: recovery or walk. */
-  kind: string;
-  accent: string;
-  note: string;
-  icon: string;
-}
-
-export interface Mode {
-  name: string;
-  mode: string;
-  kind: string;
-  /** 0 is open-ended (Flowtime counts up). */
-  minutes: number;
-  start: string;
-  icon: string;
-  accent: string;
-}
-
-/** Presets the website has ahead of the PyQt app. They move to the PyQt core/features.py during the PyQt port (and
- *  then come back through catalog.json), so this list empties again. */
-export const EXTRA_PRESETS: Preset[] = [
-  { title: 'Aerobic session', word: 'Aerobic', minutes: 20, kind: 'walk', accent: 'fitness', note: 'Brisk pace: you can talk but not sing.', icon: 'heart' },
-];
-
 export const FEATURES = data.features as Feature[];
-export const PRESETS: Preset[] = [...(data.presets as Preset[]), ...EXTRA_PRESETS];
-export const MODES = data.modes as Mode[];
 export const ICONS = data.icons as Record<string, string>;
+/** A name ICONS has ("sleep", "walk", ...). */
+export type IconName = keyof typeof data.icons;
 
 export const BY_ID: Record<string, Feature> = Object.fromEntries(FEATURES.map((f) => [f.id, f]));
 const BY_ACTION: Record<string, Feature> = Object.fromEntries(FEATURES.map((f) => [f.action, f]));

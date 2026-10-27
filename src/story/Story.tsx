@@ -4,8 +4,28 @@
 import { useMemo } from 'react';
 import { FEATURES, tone } from '../lib/catalog';
 import { Disc } from '../kit/kit';
-import { useNav } from '../app/nav';
+import { useNav, type Nav } from '../app/nav';
 import './story.css';
+
+/** After a try-link changes the phone, bring the app's top into view when it is off screen or low on it: at phone
+ *  width the app is the page and this intro sits below it, so the link would otherwise change a screen nobody sees.
+ *  Smooth, unless the visitor asked for less motion. */
+export function showApp(): void {
+  const app = document.getElementById('app');
+  if (!app) return;
+  const top = app.getBoundingClientRect().top;
+  if (top >= 0 && top < window.innerHeight / 2) return;
+  const still = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+  app.scrollIntoView({ behavior: still ? 'auto' : 'smooth', block: 'start' });
+}
+
+/** The try-links: where each one takes the phone. */
+const TRIES: { text: string; go: (nav: Nav) => void }[] = [
+  { text: "Tap a black pill's green button: it does the thing", go: (nav) => nav.setTab('recovery') },
+  { text: "Add a task or an event to today's calendar", go: (nav) => nav.setTab('home') },
+  { text: 'See a month of sleep in Search → Sleep', go: (nav) => { nav.setTab('search'); nav.push({ name: 'metric', field: 'totalSleepMin' }); } },
+  { text: 'Start a walk or a nap from Recovery → Modes', go: (nav) => { nav.setTab('recovery'); nav.push({ name: 'modes' }); } },
+];
 
 export function Hero() {
   const nav = useNav();
@@ -18,10 +38,12 @@ export function Hero() {
         change stays on this device.
       </p>
       <ol className="tries">
-        <li><span>01</span><button className="trylink" onClick={() => nav.setTab('recovery')}>Tap a black pill&apos;s green button: it does the thing</button></li>
-        <li><span>02</span><button className="trylink" onClick={() => nav.setTab('home')}>Add a task or an event to today&apos;s calendar</button></li>
-        <li><span>03</span><button className="trylink" onClick={() => { nav.setTab('search'); nav.push({ name: 'metric', field: 'totalSleepMin' }); }}>See a month of sleep in Search → Sleep</button></li>
-        <li><span>04</span><button className="trylink" onClick={() => { nav.setTab('search'); nav.push({ name: 'modes' }); }}>Start a walk timer from Modes</button></li>
+        {TRIES.map((t, i) => (
+          <li key={t.text}>
+            <span>{String(i + 1).padStart(2, '0')}</span>
+            <button className="trylink" onClick={() => { t.go(nav); showApp(); }}>{t.text}</button>
+          </li>
+        ))}
       </ol>
     </div>
   );

@@ -1,10 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
-  BACKFILL_MAX, BACKFILL_MIN, DEFAULT_PINS, MAX_PINS, WIND_DOWN, backfillMinutes, burnoutRisk, eventRun, eventTimer, isRecoveryEvent, lastSync,
+  BACKFILL_MAX, BACKFILL_MIN, DEFAULT_PINS, MAX_PINS, WIND_DOWN, backfillMinutes, burnoutRisk, eventRun, isRecoveryEvent, lastSync,
   missing, numericFields, pinsOf, seeAllAt, syncText, todayItems, togglePin, weeklyMinutes, type TodayData, type TodayItem,
 } from './homeParts';
-import type { Item } from '../lib/agenda';
-import { PRESETS } from '../lib/catalog';
+import { findMode } from '../lib/modes';
 
 const Z = 'Asia/Kolkata';
 
@@ -189,8 +188,8 @@ describe("today's to-dos", () => {
     const items = todayItems({ ...base(), events }, today, Z, now);
     expect(keys(items)).toEqual(['event:e4', 'event:e3', 'event:e2', 'event:e1']);
     expect(items.map((i) => (i.kind === 'event' ? [i.item.start, i.end, i.run] : null))).toEqual([
-      [13 * 60 + 20, 13 * 60 + 40, 'Nap'],
-      [14 * 60, 14 * 60 + 30, 'Easy walk'],
+      [13 * 60 + 20, 13 * 60 + 40, 'nap-10'],
+      [14 * 60, 14 * 60 + 30, 'urban-walk'],
       [15 * 60, 16 * 60, null],
       [21 * 60, 21 * 60 + 30, null],
     ]);
@@ -212,23 +211,26 @@ describe("today's to-dos", () => {
     expect(isRecoveryEvent({ title: 'Meal with Sam' })).toBe(true);
     expect(isRecoveryEvent({ title: 'Lunch', featureId: 'NI-03' })).toBe(true);
     expect(isRecoveryEvent({ title: 'Walk the dog' })).toBe(false);
-    expect(eventRun('Recovery day: keep it light')).toBe('Recovery break');
-    expect(eventRun('Brisk session · 30 min')).toBe('Aerobic session');
-    expect(eventRun('Outdoor light · 15 min')).toBe('Outdoor light');
+    // the titles the recovery actions write, to the mode their Start runs
+    expect(eventRun('Recovery day: keep it light')).toBe('recovery-break');
+    expect(eventRun('Brisk session · 30 min')).toBe('zone2');
+    expect(eventRun('Outdoor light · 15 min')).toBe('morning-light');
+    expect(eventRun('Walk · 30 min')).toBe('urban-walk');
+    expect(eventRun('Nap')).toBe('nap-10');
     expect(eventRun('Wind-down')).toBe(WIND_DOWN);
+    // a mode's own name or an old preset title
+    expect(eventRun('Easy walk')).toBe('urban-walk');
+    expect(eventRun('Aerobic session')).toBe('zone2');
+    // only shown: no mode by that name (not by id either), or a plan mode, which is a calendar block itself
     expect(eventRun('Strength · 40 min')).toBeNull();
     expect(eventRun('Meal with Sam')).toBeNull();
+    expect(eventRun(findMode('day-off')!.name)).toBeNull();
   });
 
-  it("an event's Start runs the preset for the event's own length", () => {
-    const ev = (title: string, minutes: number): Item => ({ kind: 'event', id: 'e', title, day: '2026-10-24', start: 18 * 60, minutes, done: false, look: 'recovery', raw: {} });
-    const aerobic = PRESETS.find((p) => p.title === 'Aerobic session')!;
-    // stretched from 30 to 45 minutes on the calendar: 45, with the preset's look and words
-    expect(eventTimer(ev('Brisk session · 30 min', 45), 'Aerobic session', 'blue')).toEqual({
-      title: 'Aerobic session', minutes: 45, kind: aerobic.kind, accent: aerobic.accent, note: aerobic.note,
-    });
-    expect(eventTimer(ev('Brisk session · 30 min', 0), 'Aerobic session', 'blue').minutes).toBe(aerobic.minutes);
-    // a preset missing from the catalog: the event's own title, as a walk
-    expect(eventTimer(ev('Stroll · 20 min', 20), 'No such preset', 'teal')).toEqual({ title: 'Stroll', minutes: 20, kind: 'walk', accent: 'teal' });
+  it("every Start is a mode in the list, which Home starts for the event's own length", () => {
+    const titles = ['Recovery day: keep it light', 'Brisk session · 30 min', 'Outdoor light · 15 min', 'Walk · 30 min', 'Nap', 'Wind-down', 'Easy walk'];
+    for (const title of titles) expect(findMode(eventRun(title)!), title).toBeDefined();
+    expect(findMode(eventRun('Wind-down')!)!.run).toBe('winddown');
+    expect(findMode(eventRun('Brisk session · 30 min')!)).toBe(findMode('Aerobic session')); // the old preset title, now zone2
   });
 });

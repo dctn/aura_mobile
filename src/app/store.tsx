@@ -26,6 +26,8 @@ export interface Edit {
   synced(at: string): void;
   /** "Not now" on Home: hide these alerts' pills (null shows them again). */
   snooze(ids: string[] | null): void;
+  /** Note one use of a feature or mode ('feature:NI-04', 'mode:nap-10') at `at` (ISO); Recovery orders by these. */
+  used(key: string, at: string): void;
   reset(): void;
 }
 
@@ -143,6 +145,7 @@ export function AuraProvider({ children }: { children: ReactNode }) {
     theme: (theme) => update((s) => ({ ...s, theme })),
     synced: (at) => update((s) => ({ ...s, lastSync: at })),
     snooze: (ids) => update((s) => ({ ...s, snoozed: ids })),
+    used: (key, at) => update((s) => L.addUse(s, key, at)),
     reset: () => update((s) => ({ ...L.EMPTY, theme: s.theme })),
   }), [update]);
 

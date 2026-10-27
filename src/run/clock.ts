@@ -1,5 +1,5 @@
 // The run view's arithmetic (ui/runview.py), kept pure so it can be tested: a wall-clock start, pauses added up, the
-// clock text, and the breathing pacer's size.
+// clock text and the kicker. The breathing pacer's phases are in breath.ts.
 
 /** The word in the kicker, by session kind ("MOVE · 20 MIN"). */
 export const KIND_WORDS: Record<string, string> = { recovery: 'Recovery', walk: 'Move', nap: 'Nap', focus: 'Focus', meeting: 'Meeting' };
@@ -54,24 +54,15 @@ export function minutesLeftText(seconds: number): string {
   return `${m} minute${m !== 1 ? 's' : ''} left`;
 }
 
-/** The small caps line over the title: "MOVE · 20 MIN", "BREATHE · 5 MIN", "FOCUS · OPEN". */
-export function kicker(kind: string, minutes: number, breathing = false): string {
-  const word = breathing ? 'Breathe' : KIND_WORDS[kind] ?? (kind ? kind[0].toUpperCase() + kind.slice(1) : 'Session');
+/** The small caps line over the title: "MOVE · 20 MIN", "BREATHE · 5 MIN", "FOCUS · OPEN"; `own` is a word of the run's
+ *  own when the kind's doesn't fit ("MEDITATE · 10 MIN" for a guided run, whose kind is recovery). */
+export function kicker(kind: string, minutes: number, breathing = false, own?: string): string {
+  const word = own || (breathing ? 'Breathe' : KIND_WORDS[kind] ?? (kind ? kind[0].toUpperCase() + kind.slice(1) : 'Session'));
   return `${word} · ${minutes > 0 ? `${minutes} min` : 'open'}`.toUpperCase();
 }
 
-/** The pacer: in for 5 s while the circle grows from 0.62 to full, out for 5 s while it shrinks (eased). */
-export const BREATH_IN = 5;
-export const BREATH_OUT = 5;
+/** The pacer's circle at its smallest (breathed out); full is 1. */
 export const BREATH_SMALL = 0.62;
-
-export function breath(seconds: number): { inhaling: boolean; scale: number; text: string } {
-  const phase = ((seconds % (BREATH_IN + BREATH_OUT)) + BREATH_IN + BREATH_OUT) % (BREATH_IN + BREATH_OUT);
-  const inhaling = phase < BREATH_IN;
-  const x = inhaling ? phase / BREATH_IN : 1 - (phase - BREATH_IN) / BREATH_OUT;
-  const eased = 0.5 - 0.5 * Math.cos(Math.PI * x);
-  return { inhaling, scale: BREATH_SMALL + (1 - BREATH_SMALL) * eased, text: inhaling ? 'Breathe in' : 'Breathe out' };
-}
 
 /** The mini bar's second line: "Paused · 03:12", "Running · 04:00" (open-ended) or "03:12 left". */
 export function statusText(c: Clock, now: number): string {

@@ -96,13 +96,31 @@ at once, which would leave about 95 rows.
 
   Items drop off once done. The seeded alerts are dated 19 Oct or earlier, so in the demo Today rarely shows an
   alert; Recovery has them all.
-- **Recovery** (`src/screens/Recovery.tsx`) lists all 16 recovery features in six groups, every day.
-  - Each row shows its status and its one-verb action, which works even with no open alert.
-  - The feature's log sits under the row: water, mood, connection, strength and the sleep check
-    (`src/recovery/logCards.tsx`).
-  - The presets grid stays at the bottom. It includes **Aerobic session**, which lives in `EXTRA_PRESETS` in
-    `src/lib/catalog.ts` until the PyQt catalog has it.
-  - BS-01 and BS-02 stay on Home.
+- **Recovery** (`src/screens/Recovery.tsx`) has three parts, top to bottom.
+  - **Often used:** the 4 things used most, features and modes mixed. Scores come from
+    `src/recovery/usage.ts`: the 30-day uses the visitor noted (`LocalState.used`) plus the sessions, logs,
+    check-ins and planned events already in the data. With no history, it shows up to 2 open-alert features and
+    then default modes.
+  - **The 16 recovery features in six groups:**
+    - The busiest group comes first, and mode uses count towards their group.
+    - Each row shows its status and its one-verb action, which works even with no open alert.
+    - The feature's log sits under the row (`src/recovery/logCards.tsx`).
+    - BS-01 and BS-02 stay on Home.
+  - **Modes:** 4 tiles, never repeating Often used, and **Show more**. Show more opens the Modes page inside
+    Recovery (`src/recovery/ModesPage.tsx`), which has shelf chips and a set-up page per mode.
+- **Modes** (`src/lib/modes.ts`) holds 65 modes in 10 shelves: Focus, Breathe, Meditate, Sleep, Rest, Movement,
+  Mind, Outside, People and Fuel.
+  - They come from the Swift app (`origin/main` c022c0d): the 50 recovery presets, the focus modes, the breathing
+    patterns and the guided meditations.
+  - The old presets and modes resolve through aliases.
+  - `startMode` (`src/lib/actions.ts`) runs each kind:
+    - a timer, or a flow (open-ended) run;
+    - a breathing pacer with In / Hold / Out;
+    - guided prompts;
+    - the wind-down;
+    - a calendar plan, for Day off and Alcohol-free evening.
+  - Search no longer lists Modes, but typing a mode's name finds it.
+  - The list moves to the PyQt `core/features.py` in the port.
 - **Search → Logging** holds everything else the app logs, from the Zoho tab "Categories and Sources": 105 rows in
   13 categories (`src/logbook/kinds.ts`).
   - Typed-in items get a form (`forms.tsx`, including the 1-minute Quick check).

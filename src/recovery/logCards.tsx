@@ -2,8 +2,9 @@
 // (NI-04): today's ml against the goal, a drop per glass, the week as bars, +250 / +500. Mood (NI-02) and Connection
 // (NI-03): five faces, a tap saves the check-in; a low mood (or a low week) opens "Help is close". Strength (PB-04):
 // minutes and Log. The sleep check (DX-03): its seven questions. Each has its own "this week" list under it. A water
-// log or a mood / connection check-in finishes that feature's open alert (actions.finishFeature), as on Home. Everything
-// is added in this browser only.
+// log or a mood / connection check-in finishes that feature's open alert (actions.finishFeature), as on Home. Each card
+// writes its row itself, so it also notes the use (recovery/usage.ts) for Often used. Everything is added in this
+// browser only.
 
 import { useState } from 'react';
 import { useAura } from '../app/store';
@@ -19,6 +20,7 @@ import {
 import { DropRow } from '../search/parts';
 import { HelpSheet, SleepCheckSheet } from '../search/sheets';
 import { isoIn, whenText } from '../search/when';
+import { noteUse } from './usage';
 import '../search/search.css';
 
 /** What one card logs: a log type (water, strength) or a check-in kind (mood, connection, insomnia). */
@@ -67,6 +69,7 @@ export function WaterCard() {
   const water = (amount: number) => {
     aura.edit.add('logs', { type: 'water', date: aura.today, takenAt: takenAt(), data: { ml: amount } });
     finishFeature(aura, LOGGED_BY.water); // any water counts: NI-04's own action is a glass, then done
+    noteUse(aura, `feature:${LOGGED_BY.water}`);
     nav.showToast(`Logged ${amount} ml of water`);
   };
   return (
@@ -102,6 +105,7 @@ export function FaceCard({ kind }: { kind: 'mood' | 'connection' }) {
     const row: Json = { kind, takenAt: takenAt(), date: today, [kind]: value };
     aura.edit.add('checkins', row);
     finishFeature(aura, LOGGED_BY[kind]); // as saveCheckin does, so Home and Recovery agree
+    noteUse(aura, `feature:${LOGGED_BY[kind]}`);
     nav.showToast(`Saved: ${kind} ${value}/5`);
     if (kind !== 'mood') return;
     const weekLow = moodLowThisWeek([...checkins, row], today);
@@ -131,6 +135,7 @@ export function StrengthCard() {
   const strength = strengthWeek(aura.data.logs, aura.today);
   const logStrength = () => {
     aura.edit.add('logs', { type: 'strength', date: aura.today, takenAt: takenAt(), data: { minutes } });
+    noteUse(aura, 'feature:PB-04');
     nav.showToast(`Logged ${minutes} min of strength`);
   };
   return (
@@ -159,6 +164,7 @@ export function SleepCheckRow() {
           onDone={(answers) => {
             const score = answers.reduce((a, b) => a + b, 0);
             aura.edit.add('checkins', { kind: 'insomnia', takenAt: takenAt(), date: aura.today, insomnia: answers, insomniaScore: score });
+            noteUse(aura, 'feature:DX-03');
             nav.showAlert({ title: 'Your sleep check', body: `Score ${score} of 28. ${insomniaMeaning(score)}` });
           }}
         />

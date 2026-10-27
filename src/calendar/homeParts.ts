@@ -3,8 +3,9 @@
 
 import { KNOWN, newest, series, type MetricDay } from '../lib/metrics';
 import { daysBetween, eventItem, localParts, type Item } from '../lib/agenda';
-import { alertWeeks, type TimedRun } from '../lib/actions';
-import { PRESETS, featureFor } from '../lib/catalog';
+import { alertWeeks } from '../lib/actions';
+import { featureFor } from '../lib/catalog';
+import { MODE_LIST, findMode, type Mode } from '../lib/modes';
 import type { Json } from '../lib/types';
 import { waterGoal, waterOn } from '../search/logic';
 import { openAlerts } from '../screens/shared';
@@ -131,15 +132,16 @@ export const SLEEP_CHECK_WEEKS = 3;
 export const SLEEP_CHECK_DAYS = 14;
 /** How the events a recovery action plans begin (rows from before featureId was written have only the title). */
 export const RECOVERY_TITLES = ['Outdoor light', 'Dim screens', 'Walk ·', 'Recovery day', 'Strength ·', 'Brisk session', 'Meal with', 'Wind-down', 'Nap'];
-/** An event's Start that is the wind-down (with its list), not a preset. */
+/** An event's Start that is the wind-down (with its list), not a timer. */
 export const WIND_DOWN = 'wind-down';
-/** Title start -> what its Start runs: a preset's title, or the wind-down. The rest are only shown. */
+/** Title start -> the mode its Start runs (lib/modes.ts id), for the titles the recovery actions write
+ *  ("Walk · 30 min"). The rest are only shown. */
 const EVENT_RUNS: [string, string][] = [
-  ['Nap', 'Nap'],
-  ['Walk ·', 'Easy walk'],
-  ['Outdoor light', 'Outdoor light'],
-  ['Recovery day', 'Recovery break'],
-  ['Brisk session', 'Aerobic session'],
+  ['Nap', 'nap-10'],
+  ['Walk ·', 'urban-walk'],
+  ['Outdoor light', 'morning-light'],
+  ['Recovery day', 'recovery-break'],
+  ['Brisk session', 'zone2'],
   ['Wind-down', WIND_DOWN],
 ];
 
@@ -149,7 +151,7 @@ export type TodayItem =
   | { kind: 'water'; key: string; ml: number; goal: number }
   /** `days`: days of the last 7 with a strength log (Recovery's minutes) or a lift entry (the logbook's). */
   | { kind: 'strength'; key: string; days: number }
-  /** `end` in minutes after midnight (past 1440 when it runs over); `run` is a preset title, WIND_DOWN or null. */
+  /** `end` in minutes after midnight (past 1440 when it runs over); `run` is a mode id, WIND_DOWN or null. */
   | { kind: 'event'; key: string; item: Item; end: number; run: string | null };
 
 export type TodayData = { alerts: Json[]; alertOff: string[]; checkins: Json[]; logs: Json[]; events: Json[]; me: Json };
@@ -169,18 +171,22 @@ export function isRecoveryEvent(event: Json): boolean {
   return Boolean(event.featureId) || RECOVERY_TITLES.some((t) => title.startsWith(t));
 }
 
-/** What an event's Start runs: a preset title, WIND_DOWN, or null when it has no run. */
-export function eventRun(title: string): string | null {
-  return EVENT_RUNS.find(([start]) => title.startsWith(start))?.[1] ?? null;
+/** The mode an event title names: its part before " · " as a mode's name or old title (not its id: an event called
+ *  "Strength" is not the "strength" mode's timer). */
+export function modeNamed(title: string): Mode | undefined {
+  const t = title.split(' · ')[0].trim().toLowerCase();
+  if (!t) return undefined;
+  return MODE_LIST.find((m) => m.name.toLowerCase() === t || (m.aliases ?? []).some((a) => a.toLowerCase() === t));
 }
 
-/** The timer an event's Start opens (not the wind-down, which has its list): the preset's title, kind, accent and
- *  note for the event's own length (it may have been stretched on the calendar); a preset missing from the catalog
- *  falls back to the event's own title as a walk. */
-export function eventTimer(item: Item, run: string, accent: string): TimedRun {
-  const preset = PRESETS.find((p) => p.title === run);
-  if (!preset) return { title: item.title.split(' · ')[0], minutes: item.minutes, kind: 'walk', accent };
-  return { title: preset.title, minutes: item.minutes > 0 ? item.minutes : preset.minutes, kind: preset.kind, accent: preset.accent, note: preset.note };
+/** What an event's Start runs: a mode id (the title naming a mode, else the title's start; WIND_DOWN for the
+ *  wind-down), or null when it has no run: no mode in the list, or a plan mode (a calendar block itself). Home starts
+ *  the mode through startMode, for the event's own length. */
+export function eventRun(title: string): string | null {
+  const id = modeNamed(title)?.id ?? EVENT_RUNS.find(([start]) => title.startsWith(start))?.[1];
+  const mode = id ? findMode(id) : undefined;
+  if (!mode || mode.run === 'plan') return null;
+  return mode.run === 'winddown' ? WIND_DOWN : mode.id;
 }
 
 /** Where Today's one "See all" (to Recovery) goes, if anywhere: the header while open alerts from other days wait in

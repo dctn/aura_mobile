@@ -38,11 +38,12 @@ function Toasts() {
   );
 }
 
-/** The tab and the page on top, as "tab|name:category". */
+/** The tab and the page on top, as "tab|name:category" (or "tab|modes:shelf"). */
 function Where() {
   const nav = useNav();
   const top = nav.stack.at(-1);
-  return <div data-where>{`${nav.tab}|${top ? `${top.name}${top.name === 'logbook' ? `:${top.category}` : ''}` : ''}`}</div>;
+  const extra = top?.name === 'logbook' ? `:${top.category}` : top?.name === 'modes' && top.shelf ? `:${top.shelf}` : '';
+  return <div data-where>{`${nav.tab}|${top ? `${top.name}${extra}` : ''}`}</div>;
 }
 
 function Ready({ children }: { children: React.ReactNode }) {
@@ -100,6 +101,33 @@ describe('screens', () => {
     });
     expect(text()).toContain('VO2max');
     expect(text()).not.toContain('Logging');
+  });
+
+  it("Search no longer lists Modes; typing nap or a shelf opens Recovery's Modes page", async () => {
+    await show(<><Search /><Where /></>);
+    const where = () => host.querySelector('[data-where]')?.textContent;
+    const rows = () => [...host.querySelectorAll('button.row')].map((b) => b.textContent?.trim());
+    expect(rows()).toContain('Logging');
+    expect(rows()).not.toContain('Modes');
+    const input = host.querySelector('input') as HTMLInputElement;
+    const type = async (value: string) =>
+      act(async () => {
+        const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!;
+        set.call(input, value);
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+      });
+    await type('nap');
+    expect(rows()).toContain('Modes');
+    await click(button('Modes'));
+    expect(where()).toBe('recovery|modes');
+    // "breath" finds the Health row Breathing and the shelf, which goes by "Breathe modes" so the two don't share a name
+    await type('breath');
+    const titles = () => [...host.querySelectorAll('button.row .title')].map((t) => t.textContent?.trim());
+    expect(titles()).toContain('Breathing');
+    expect(titles()).toContain('Breathe modes');
+    expect(titles().filter((t) => t === 'Breathing')).toHaveLength(1);
+    await click(button('Breathe modes'));
+    expect(where()).toBe('recovery|modes:Breathe');
   });
 
   it('Metric shows the hero, the average and pins', async () => {

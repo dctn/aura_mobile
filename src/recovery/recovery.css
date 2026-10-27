@@ -23,10 +23,18 @@
 .rc-line { height: 4px; border-radius: 2px; background: var(--fill); overflow: hidden; }
 .rc-line > span { display: block; height: 100%; border-radius: 2px; background: var(--accent); transition: width 0.2s; }
 
-/* Recovery */
-.rc-todo-list { display: grid; gap: 14px; }
+/* Recovery: Often used's pills, and the "Show more" link on the Modes heading (Home's "See all" look) */
+.rc-often { display: grid; gap: 14px; }
+.rc-more { font-size: var(--t-row); font-weight: 400; padding: 2px 8px; }
 
-/* Modes */
+/* Modes: the shelf chips scroll sideways inside the page (never the page itself), then a heading, a short note and
+   the tiles per shelf */
+.rc-shelves { display: flex; gap: 8px; margin: 4px calc(-1 * var(--gutter)) 0; padding: 2px var(--gutter) 6px; overflow-x: auto; scrollbar-width: thin; overscroll-behavior-x: contain; }
+.rc-shelves .chip { flex: none; white-space: nowrap; }
+.rc-shelf { display: flex; flex-direction: column; gap: 10px; }
+.rc-shelf .section { margin-bottom: -6px; }
+.rc-shelfnote { margin: 0 4px; font-size: var(--t-sub); color: var(--label2); }
+.rc-modenote { margin: 2px 4px; }
 .rc-titlefield { width: 180px; text-align: right; border: 0; outline: none; background: transparent; color: var(--label); }
 .rc-titlefield::placeholder { color: var(--label3); }
 

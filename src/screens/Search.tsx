@@ -1,21 +1,14 @@
 // Search (ui/pages/search.py): a search box over two lists. "Health" lists the metric categories with a coloured
-// glyph, the newest value and a chevron to the metric page; the second list opens Logging, Modes, Sessions and
-// Settings. Typing also finds any other metric column by its label.
+// glyph, the newest value and a chevron to the metric page; the second list opens Logging, Sessions and Settings.
+// Typing also finds any other metric column by its label, and Recovery's Modes (all, or one shelf) by what they hold.
 
 import { useMemo, useState } from 'react';
 import { useAura } from '../app/store';
-import { useNav, type Page as PageSpec } from '../app/nav';
+import { useNav } from '../app/nav';
 import * as m from '../lib/metrics';
 import { Group, Icon, Page, Row, SettingsButton } from '../kit/kit';
-import { PLACES, metricFields, newestOf, searchHits, valueText, type PlaceName } from '../search/logic';
+import { PLACES, metricFields, newestOf, searchHits, valueText, type Place } from '../search/logic';
 import '../search/search.css';
-
-const PLACE_PAGE: Record<PlaceName, PageSpec> = {
-  Logging: { name: 'logging' },
-  Modes: { name: 'modes' },
-  Sessions: { name: 'sessions' },
-  Settings: { name: 'settings' },
-};
 
 export function Search() {
   const aura = useAura();
@@ -25,6 +18,12 @@ export function Search() {
   const fields = useMemo(() => metricFields(days), [days]);
   const hits = searchHits(query, fields);
   const nothing = query.trim() !== '' && !hits.categories.length && !hits.places.length && !hits.fields.length;
+
+  // a place on another tab (Recovery's Modes) opens on that tab, so its back link reads "‹ Recovery"
+  const open = (p: Place) => {
+    if (p.tab && p.tab !== nav.tab) nav.setTab(p.tab);
+    nav.push(p.page);
+  };
 
   const valueOf = (field: string) => {
     const newest = newestOf(days, field);
@@ -75,7 +74,7 @@ export function Search() {
               accent={p.accent}
               value={p.name === 'Sessions' && aura.data.active ? 'Running' : undefined}
               chevron
-              onClick={() => nav.push(PLACE_PAGE[p.name])}
+              onClick={() => open(p)}
             />
           ))}
         </Group>

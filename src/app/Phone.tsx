@@ -14,7 +14,7 @@ import { Search } from '../screens/Search';
 import { Metric } from '../screens/Metric';
 import { Logging } from '../screens/Logging';
 import { LogbookPage } from '../logbook/LogbookPage';
-import { Modes, ModeSetup } from '../screens/Modes';
+import { ModeSetup, ModesPage } from '../recovery/ModesPage';
 import { Sessions } from '../screens/Sessions';
 import { Settings } from '../screens/Settings';
 import { Inbox } from '../screens/Inbox';
@@ -36,9 +36,9 @@ function PageView({ page }: { page: Page }) {
     case 'logbook':
       return <LogbookPage category={page.category} />;
     case 'modes':
-      return <Modes />;
+      return <ModesPage shelf={page.shelf} />;
     case 'mode':
-      return <ModeSetup index={page.index} />;
+      return <ModeSetup id={page.id} />;
     case 'sessions':
       return <Sessions />;
     case 'settings':
@@ -46,6 +46,23 @@ function PageView({ page }: { page: Page }) {
     case 'inbox':
       return <Inbox />;
   }
+}
+
+/** Every pushed page is its own page: a key per page object (nav.push copies, back keeps the rest), so a
+ *  page's own state never carries over to the next one pushed in its place. Keyed by name and place alone, a
+ *  "Modes · Sleep" page swapped in one render for a plain "Modes" (a tab switch and a push together, as the story's
+ *  links do) kept its Sleep filter. */
+function usePageKeys(): (page: Page) => string {
+  const keys = useRef(new WeakMap<Page, string>());
+  const next = useRef(0);
+  return (page) => {
+    let key = keys.current.get(page);
+    if (!key) {
+      key = `${page.name}-${next.current++}`;
+      keys.current.set(page, key);
+    }
+    return key;
+  };
 }
 
 function Root({ tab }: { tab: Tab }) {
@@ -151,11 +168,12 @@ export function Phone() {
   useBells();
   const top = nav.stack.at(-1);
   const live = useLiveRun();
+  const keyOf = usePageKeys();
   return (
     <div className="screen">
       <Root tab={nav.tab} />
-      {nav.stack.map((page, i) => (
-        <div key={`${i}-${page.name}`} style={{ display: page === top ? 'contents' : 'none' }}>
+      {nav.stack.map((page) => (
+        <div key={keyOf(page)} style={{ display: page === top ? 'contents' : 'none' }}>
           <PageView page={page} />
         </div>
       ))}

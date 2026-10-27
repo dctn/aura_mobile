@@ -64,16 +64,7 @@ describe('kicker', () => {
     expect(C.kicker('recovery', 5, true)).toBe('BREATHE · 5 MIN');
     expect(C.kicker('focus', 0)).toBe('FOCUS · OPEN');
     expect(C.kicker('', 10)).toBe('SESSION · 10 MIN');
-  });
-});
-
-describe('breath', () => {
-  it('grows for 5 s, shrinks for 5 s', () => {
-    expect(C.breath(0)).toEqual({ inhaling: true, scale: C.BREATH_SMALL, text: 'Breathe in' });
-    expect(C.breath(5).inhaling).toBe(false);
-    expect(C.breath(5).scale).toBeCloseTo(1);
-    expect(C.breath(2.5).scale).toBeCloseTo((1 + C.BREATH_SMALL) / 2);
-    expect(C.breath(10).scale).toBeCloseTo(C.BREATH_SMALL);
-    expect(C.breath(7.5).text).toBe('Breathe out');
+    // a word of the run's own wins (a guided meditation's kind is recovery)
+    expect(C.kicker('recovery', 10, false, 'Meditate')).toBe('MEDITATE · 10 MIN');
   });
 });

@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import * as m from '../lib/metrics';
 import { FEATURES } from '../lib/catalog';
+import { SHELVES } from '../lib/modes';
 import {
   DEFAULT_PINS, MAX_PINS, age, alertAreas, checkinText, history, hours, inboxRows, insomniaMeaning, lastCheckin, logText,
-  metricFields, missing, moodLowThisWeek, newestOf, pinsOf, searchHits, strengthWeek, switchAlert, togglePin, trend,
+  PLACES, metricFields, missing, moodLowThisWeek, newestOf, pinsOf, searchHits, strengthWeek, switchAlert, togglePin, trend,
   trendWords, unread, valueText, waterGoal, waterOn, waterWeek,
 } from './logic';
 import { isoIn, offsetMinutes, offsetText, whenText } from './when';
@@ -28,13 +29,36 @@ describe('search', () => {
   it('shows everything with an empty box', () => {
     const hits = searchHits('  ', ['vo2max']);
     expect(hits.categories).toEqual([...m.CATEGORIES]);
-    expect(hits.places).toEqual(['Logging', 'Modes', 'Sessions', 'Settings']);
+    // Modes live in Recovery now: typing finds them, the empty box doesn't list them
+    expect(hits.places).toEqual(['Logging', 'Sessions', 'Settings']);
     expect(hits.fields).toEqual([]);
+  });
+
+  it("finds Recovery's Modes by what they hold, and each shelf on its own", () => {
+    for (const word of ['nap', 'breathe', 'breathing', 'meditate', 'meditation', 'walk', 'yoga', 'stretch', 'sauna', 'timer', 'flow', 'focus', 'meeting']) {
+      expect(searchHits(word, []).places, word).toContain('Modes');
+    }
+    expect(searchHits('nap', []).places).toContain('Sleep modes');
+    expect(searchHits('box', []).places).toContain('Breathe modes');
+    expect(searchHits('guided', []).places).toContain('Meditate modes');
+    const modes = PLACES.find((p) => p.name === 'Modes')!;
+    expect(modes).toMatchObject({ tab: 'recovery', page: { name: 'modes' } });
+    // one place per shelf, each opening the Modes page on that shelf, in Recovery
+    const shelves = PLACES.filter((p) => p.page.name === 'modes' && 'shelf' in p.page && p.page.shelf);
+    expect(shelves.map((p) => (p.page as { shelf: string }).shelf)).toEqual(SHELVES);
+    expect(shelves.every((p) => p.tab === 'recovery')).toBe(true);
+    expect(new Set(PLACES.map((p) => p.name)).size).toBe(PLACES.length);
+    // every shelf reads "<Shelf> modes", and no place shares a name with a Health row ("Breathing" is a category)
+    expect(shelves.map((p) => p.name)).toEqual(SHELVES.map((s) => `${s} modes`));
+    const health = new Set(m.CATEGORIES.map((key) => m.CARDS[key].label.toLowerCase()));
+    expect(PLACES.filter((p) => health.has(p.name.toLowerCase())).map((p) => p.name)).toEqual([]);
   });
 
   it('matches extra words and any metric label', () => {
     expect(searchHits('hrv', []).categories).toEqual(['recovery']);
-    expect(searchHits('WATER', []).places).toEqual(['Logging']);
+    // water is logged in Logging; the modes with water in them (a cold face, the waterside, a glass) come after
+    expect(searchHits('WATER', []).places[0]).toBe('Logging');
+    expect(searchHits('WATER', []).places).toContain('Fuel modes');
     // the logbook's categories
     for (const word of ['protein', 'meal', 'meeting', 'weight', 'focus', 'learning', 'energy']) expect(searchHits(word, []).places, word).toContain('Logging');
     const hits = searchHits('vo2', ['vo2max', 'stepCount']);

@@ -5,8 +5,10 @@
 // body details are missing (BS-01) and the band line (BS-02). Every change stays in this browser.
 
 import { useEffect, useRef, useState, type RefObject } from 'react';
-import { PRESETS, featureFor } from '../lib/catalog';
-import { askCheckin, logWater, nowOf, performAlert, sleepCheck, timedRun, windDown } from '../lib/actions';
+import { featureFor } from '../lib/catalog';
+import { findMode } from '../lib/modes';
+import { noteUse } from '../recovery/usage';
+import { askCheckin, logWater, nowOf, performAlert, sleepCheck, startMode, timedRun } from '../lib/actions';
 import { clock } from '../lib/agenda';
 import { useAura, type Aura } from '../app/store';
 import { useNav, type Nav } from '../app/nav';
@@ -17,7 +19,7 @@ import { AlertCard, openAlerts } from './shared';
 import { CalendarCard } from '../calendar/CalendarCard';
 import { ItemSheet } from '../calendar/ItemSheet';
 import {
-  MAX_PINS, SHOW_TODAY, STRENGTH_DAYS, WEEKLY_ACTIVE_TARGET, WIND_DOWN, backfillMinutes, burnoutRisk, eventTimer, lastSync, minuteNow, missing,
+  MAX_PINS, SHOW_TODAY, STRENGTH_DAYS, WEEKLY_ACTIVE_TARGET, backfillMinutes, burnoutRisk, lastSync, minuteNow, missing,
   numericFields, pinLook, pinsOf, seeAllAt, syncText, todayItems, togglePin, weeklyMinutes, type TodayItem,
 } from '../calendar/homeParts';
 import { longDay } from '../calendar/zone';
@@ -131,6 +133,7 @@ function StrengthSheet({ close }: { close: () => void }) {
   const log = () => {
     const now = nowOf(aura);
     aura.edit.add('logs', { type: 'strength', date: now.day, takenAt: now.iso, data: { minutes } });
+    noteUse(aura, 'feature:PB-04');
     nav.showToast(`Logged ${minutes} min of strength`);
     close();
   };
@@ -143,7 +146,7 @@ function StrengthSheet({ close }: { close: () => void }) {
   );
 }
 
-/** A recovery event's pill look by its title's start: [icon, accent]; a run's preset look comes first. */
+/** A recovery event's pill look by its title's start: [icon, accent]; a run's mode look comes first. */
 const EVENT_LOOK: [string, string, string][] = [
   ['Dim screens', 'evening', 'sleep'],
   ['Strength', 'dumbbell', 'fitness'],
@@ -176,18 +179,13 @@ function todayPill(item: Exclude<TodayItem, { kind: 'alert' }>, aura: Aura, nav:
     case 'event': {
       const { item: ev, end, run } = item;
       const start = ev.start ?? 0;
-      const preset = run && run !== WIND_DOWN ? PRESETS.find((p) => p.title === run) : undefined;
+      const mode = run ? findMode(run) : undefined;
       const look = EVENT_LOOK.find(([t]) => ev.title.startsWith(t));
-      const icon = preset?.icon ?? look?.[1] ?? 'cal';
-      const accent = preset?.accent ?? look?.[2] ?? 'blue';
+      const icon = mode?.icon ?? look?.[1] ?? 'cal';
+      const accent = mode?.accent ?? look?.[2] ?? 'blue';
       const reason = start <= nowMinute ? `Now · until ${clock(end)}` : `${clock(start)}–${clock(end)}`;
-      // the Start runs the preset for the event's own length (eventTimer); the wind-down keeps its list
-      const begin =
-        run === WIND_DOWN
-          ? () => windDown(aura, nav, accent)
-          : run
-            ? () => timedRun(aura, nav, eventTimer(ev, run, accent))
-            : undefined;
+      // the Start runs the mode for the event's own length (it may have been stretched); the wind-down keeps its list
+      const begin = mode ? () => startMode(aura, nav, mode, ev.minutes > 0 ? { minutes: ev.minutes } : {}) : undefined;
       const open = () => nav.openSheet({ render: (close) => <ItemSheet close={close} kind="event" item={ev} day={ev.day ?? aura.today} at={ev.start} minutes={ev.minutes} dated /> });
       return { icon, accent, title: ev.title, reason, verb: begin ? 'Start' : undefined, onVerb: begin, onOpen: open };
     }

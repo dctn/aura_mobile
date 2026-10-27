@@ -28,9 +28,11 @@ export interface LocalState {
   lastSync: string | null;
   /** The alerts open when "Not now" was pressed: Home hides its pills until one that isn't here arrives. */
   snoozed?: string[] | null;
+  /** What was used when: 'feature:NI-04' or 'mode:nap-10' -> its last few ISO times, oldest first (Recovery's Often used). */
+  used: Record<string, string[]>;
 }
 
-export const EMPTY: LocalState = { v: 1, lists: {}, me: {}, alertOff: null, pins: null, theme: 'system', lastSync: null };
+export const EMPTY: LocalState = { v: 1, lists: {}, me: {}, alertOff: null, pins: null, theme: 'system', lastSync: null, used: {} };
 
 const KEY = 'aura-demo:local';
 
@@ -85,6 +87,15 @@ export function changeMe(state: LocalState, changes: Json): LocalState {
   return { ...state, me };
 }
 
+/** Times kept per used key. */
+export const USES_KEPT = 20;
+
+/** One more use of `key` at `at` (ISO), keeping the newest USES_KEPT. */
+export function addUse(state: LocalState, key: string, at: string): LocalState {
+  const times = [...(state.used?.[key] ?? []), at].slice(-USES_KEPT);
+  return { ...state, used: { ...state.used, [key]: times } };
+}
+
 // -- the merge ---------------------------------------------------------------------------------------------------
 
 function mergeList(rows: Json[], e: ListEdits | undefined): Json[] {
@@ -117,7 +128,8 @@ export function merge(snapshot: Snapshot | null, local: LocalState): Data {
   };
 }
 
-/** How many changes the visitor has made (the demo chip shows it next to Reset). */
+/** How many changes the visitor has made (the demo chip shows it next to Reset). The noted uses aren't edits (the
+ *  row a use wrote already counts); Reset still forgets them. */
 export function changeCount(state: LocalState): number {
   const lists = Object.values(state.lists).reduce((n, e) => n + (e ? e.added.length + Object.keys(e.changed).length + e.removed.length : 0), 0);
   return lists + Object.keys(state.me).length + (state.alertOff ? 1 : 0) + (state.pins ? 1 : 0) + (state.lastSync ? 1 : 0);

@@ -1,23 +1,61 @@
 // The pure parts of Search, Metric, Logging, Settings and Inbox (ported from ui/pages/search.py, metric.py,
 // logbook.py, profile.py and core/profile.py), kept apart from React so vitest can check them.
 
+import type { Page as PageSpec, Tab } from '../app/nav';
 import type { Feature } from '../lib/catalog';
+import { SHELF_LOOK, SHELVES, modesOn, type Shelf } from '../lib/modes';
 import * as m from '../lib/metrics';
 import { addDays, daysBetween } from '../lib/agenda';
 import type { Json } from '../lib/types';
 
 // -- Search ---------------------------------------------------------------------------------------------------------
 
-/** The second list: name, icon, accent, extra words the field matches. */
-export const PLACES = [
-  // Logging's own categories (logbook/kinds.ts), and Recovery's logs, which its first row points to
-  { name: 'Logging', icon: 'pencil', accent: 'fitness', words: 'log logbook energy alertness edge worry reflection stress months challenge hindrance conversations support purpose people tv walk meal food nutrition calories kcal protein carbs fat diet fasting eating meeting focus quick check reaction memory interruptions drift sound park learning study cards skills shutdown work hours balance boundary overwork burnout exhaustion habits body weight measurements bmi blood pressure lift gym exercise sets reps volume water hydration mood connection strength sleep check' },
-  { name: 'Modes', icon: 'bolt', accent: 'workout', words: 'timer flowtime walk meeting focus start' },
-  { name: 'Sessions', icon: 'clock', accent: 'sleep', words: 'history running stress change' },
-  { name: 'Settings', icon: 'settings', accent: 'label3', words: 'profile goals alerts appearance dark theme inbox reset' },
-] as const;
+/** A row of Search's second list: where it goes, and the extra words that find it. */
+export interface Place {
+  name: string;
+  icon: string;
+  accent: string;
+  words: string;
+  /** The page it opens. */
+  page: PageSpec;
+  /** The tab it opens on; the current one (Search) when left out. */
+  tab?: Tab;
+  /** Found by typing only: not listed under an empty box. */
+  typed?: boolean;
+}
 
-export type PlaceName = (typeof PLACES)[number]['name'];
+/** A shelf's words: every mode on it by name, tile word and old title, so "nap" or "box" finds its shelf. */
+const shelfWords = (shelf: Shelf) =>
+  modesOn(shelf)
+    .flatMap((mode) => [mode.name, mode.word, ...(mode.aliases ?? [])])
+    .join(' ');
+
+/** The second list. Modes live in Recovery now: typing finds them, and they open there. */
+export const PLACES: Place[] = [
+  // Logging's own categories (logbook/kinds.ts), and Recovery's logs, which its first row points to
+  { name: 'Logging', icon: 'pencil', accent: 'fitness', page: { name: 'logging' }, words: 'log logbook energy alertness edge worry reflection stress months challenge hindrance conversations support purpose people tv walk meal food nutrition calories kcal protein carbs fat diet fasting eating meeting focus quick check reaction memory interruptions drift sound park learning study cards skills shutdown work hours balance boundary overwork burnout exhaustion habits body weight measurements bmi blood pressure lift gym exercise sets reps volume water hydration mood connection strength sleep check' },
+  {
+    name: 'Modes',
+    icon: 'bolt',
+    accent: 'workout',
+    page: { name: 'modes' },
+    tab: 'recovery',
+    typed: true,
+    words: 'recovery preset start timer flow flowtime focus meeting nap sleep wind down breathe breathing breath box meditate meditation guided walk run yoga stretch sauna cold outside light sun rest break people social fuel caffeine',
+  },
+  ...SHELVES.map((shelf): Place => ({
+    // "<Shelf> modes" for every shelf, so none reads like a Health row ("Breathing" is a metric category)
+    name: `${shelf} modes`,
+    icon: SHELF_LOOK[shelf].icon,
+    accent: SHELF_LOOK[shelf].accent,
+    page: { name: 'modes', shelf },
+    tab: 'recovery',
+    typed: true,
+    words: `${shelf} ${SHELF_LOOK[shelf].note} ${shelfWords(shelf)}`,
+  })),
+  { name: 'Sessions', icon: 'clock', accent: 'sleep', page: { name: 'sessions' }, words: 'history running stress change' },
+  { name: 'Settings', icon: 'settings', accent: 'label3', page: { name: 'settings' }, words: 'profile goals alerts appearance dark theme inbox reset' },
+];
 
 /** Extra words per category, so "hrv" or "steps" still finds a row. */
 export const WORDS: Record<string, string> = {
@@ -62,7 +100,7 @@ export function metricFields(days: m.MetricDay[]): string[] {
 
 export interface SearchHits {
   categories: string[];
-  places: PlaceName[];
+  places: string[];
   /** Other metric columns whose label (or name) matches; only while typing. */
   fields: string[];
 }
@@ -76,7 +114,7 @@ export function searchHits(query: string, fields: string[]): SearchHits {
     const card = m.CARDS[key];
     return !needle || `${card.label} ${WORDS[key] ?? ''} health`.toLowerCase().includes(needle);
   });
-  const places = PLACES.filter((p) => !needle || `${p.name} ${p.words}`.toLowerCase().includes(needle)).map((p) => p.name);
+  const places = PLACES.filter((p) => (needle ? `${p.name} ${p.words}`.toLowerCase().includes(needle) : !p.typed)).map((p) => p.name);
   if (!needle) return { categories: [...categories], places, fields: [] };
   const all = new Set<string>(m.CATEGORIES.map((key) => m.CARDS[key].field));
   const hits = fields

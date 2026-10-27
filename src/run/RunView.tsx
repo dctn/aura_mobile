@@ -1,6 +1,7 @@
 // The full-phone timer and the 3-2-1 before it (demo ui/runview.py). A run covers the phone: Hide ⌄ and ⓘ at the
 // top; the kicker, the title, a big clock, a note and a thin progress line in the middle; a round pause and a red ✕
-// at the bottom. Variants: night (black, the nap), a breathing pacer, open-ended (Flowtime counts up).
+// at the bottom. Variants: night (black, the nap), a breathing pacer (the pattern's phase word and its seconds left),
+// open-ended (Flowtime counts up). A panel (the wind-down's list, a meditation's prompts) sits under the clock.
 //
 // Hide slides it into a mini bar 8 px above the tab bar (Phone shows the tab bar again while it is hidden); a tap opens it again. The clock
 // reads a wall-clock start, so pauses add up and nothing drifts. run.onEnd is called once, then nav.endRun().
@@ -9,8 +10,11 @@ import { useCallback, useEffect, useRef, useState, type CSSProperties } from 're
 import { useNav, type Run } from '../app/nav';
 import { Disc, Icon, Ring } from '../kit/kit';
 import { tone } from '../lib/catalog';
+import { breathLine } from '../lib/modes';
 import * as C from './clock';
 import { publish, type RunControls } from './live';
+import { breathPhase } from './breath';
+import { RunElapsed } from './guided';
 import './run.css';
 
 /** A short beep when the time is up (the app's QApplication.beep); silent where audio is not allowed. */
@@ -68,6 +72,21 @@ export function Countdown() {
 
 // -- the run ------------------------------------------------------------------------------------------------------
 
+/** What to do once a run is on screen, by run: a start after a 3-2-1 only counts once the 3-2-1 wasn't cancelled. */
+const shownHooks = new WeakMap<Run, () => void>();
+
+/** Call `then` once, when `run` is on screen. */
+export function whenShown(run: Run, then: () => void): void {
+  shownHooks.set(run, then);
+}
+
+/** The run is on screen: its whenShown hook runs (once, however often this is called). */
+export function onScreen(run: Run): void {
+  const then = shownHooks.get(run);
+  shownHooks.delete(run);
+  then?.();
+}
+
 export function RunView({ run }: { run: Run }) {
   return <RunBody run={run} />;
 }
@@ -96,8 +115,10 @@ function RunBody({ run }: { run: Run }) {
   const clockRef = useRef(clock);
   clockRef.current = clock;
   const open = C.openEnded(clock);
-  const note = run.breathing ? 'In through the nose, out slowly: five seconds each.' : run.note ?? '';
+  const note = run.note ?? (run.breathing ? (run.pattern ? `${breathLine(run.pattern)}.` : 'In through the nose, out slowly: five seconds each.') : '');
   const accentStyle = { ['--tone' as string]: tone(run.accent) } as CSSProperties;
+
+  useEffect(() => onScreen(run), [run]);
 
   // -- time
   useEffect(() => {
@@ -192,7 +213,8 @@ function RunBody({ run }: { run: Run }) {
 
   const paused = clock.pausedAt !== null;
   const shown = C.clockSeconds(clock, now);
-  const breath = run.breathing ? C.breath(C.elapsed(clock, now)) : null;
+  const ran = C.elapsed(clock, now);
+  const breath = run.breathing ? breathPhase(run.pattern, ran) : null;
 
   if (collapsed) {
     return (
@@ -226,7 +248,9 @@ function RunBody({ run }: { run: Run }) {
         {breath && (
           <>
             <BreathingCircle scale={breath.scale} />
-            <div className="rv-phase">{breath.text}</div>
+            <div className="rv-phase" aria-live="polite">
+              {breath.word} <span className="rv-phase-left">{breath.left}</span>
+            </div>
           </>
         )}
         <div className="rv-clock" role="timer">{C.clockText(shown)}</div>
@@ -236,7 +260,11 @@ function RunBody({ run }: { run: Run }) {
             <span style={{ width: `${C.progress(clock, now) * 100}%` }} />
           </div>
         )}
-        {run.panel && <div className="rv-panel">{run.panel}</div>}
+        {run.panel && (
+          <div className="rv-panel">
+            <RunElapsed.Provider value={ran}>{run.panel}</RunElapsed.Provider>
+          </div>
+        )}
       </div>
       <div className="rv-buttons">
         <button className="rv-round pause" onClick={togglePause} aria-label={paused ? 'Resume' : 'Pause'} title={paused ? 'Resume' : 'Pause'}>

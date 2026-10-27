@@ -2,7 +2,7 @@
 // the 3-2-1 countdown, a toast). Mirrors the PyQt shell: three tabs, drill pages stack with "‹ <page below>".
 
 import { createContext, useCallback, useContext, useMemo, useRef, useState, type ReactNode } from 'react';
-import { MODES } from '../lib/catalog';
+import { findMode, type Breath, type Shelf } from '../lib/modes';
 import { cardFor } from '../lib/metrics';
 import { categoryOf } from '../logbook/kinds';
 
@@ -13,8 +13,10 @@ export type Page =
   | { name: 'logging' }
   /** One of Logging's categories (logbook/kinds.ts CATEGORIES id). */
   | { name: 'logbook'; category: string }
-  | { name: 'modes' }
-  | { name: 'mode'; index: number }
+  /** Recovery's Modes list: every shelf, or one. */
+  | { name: 'modes'; shelf?: Shelf }
+  /** One mode's setup page (lib/modes.ts id). */
+  | { name: 'mode'; id: string }
   | { name: 'sessions' }
   | { name: 'settings' }
   | { name: 'inbox' };
@@ -32,6 +34,8 @@ export interface Run {
   note?: string;
   /** Slow-breathing circle instead of the clock bar. */
   breathing?: boolean;
+  /** The breathing pattern the pacer follows (with `breathing`); Coherent 5/5 when left out. */
+  pattern?: Breath;
   /** Dark screen (a nap). */
   night?: boolean;
   /** Drawn under the clock while it runs (the wind-down's list for tomorrow). */
@@ -131,7 +135,9 @@ export function NavProvider({ children }: { children: ReactNode }) {
       setTabState(t);
       setStack([]);
     },
-    push: (page) => setStack((s) => [...s, page]),
+    // a copy: each push is a page of its own (the phone keys its pages by object), even when a caller pushes the same
+    // constant twice (Search's places)
+    push: (page) => setStack((s) => [...s, { ...page }]),
     back: () => setStack((s) => s.slice(0, -1)),
     home: () => setStack([]),
     sheet,
@@ -158,7 +164,7 @@ export function titleOf(page: Page): string {
     case 'metric':
       return cardFor(page.field).label;
     case 'mode':
-      return MODES[page.index]?.name ?? 'Mode';
+      return findMode(page.id)?.name ?? 'Mode';
     case 'logbook':
       return categoryOf(page.category)?.label ?? 'Logging';
     default:

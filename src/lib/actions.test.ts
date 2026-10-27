@@ -1,5 +1,26 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+// usage.ts is Recovery's own; here only which uses were noted counts
+const used = vi.hoisted(() => [] as string[]);
+vi.mock('../recovery/usage', () => ({ noteUse: (_aura: unknown, key: string) => used.push(key) }));
+// the 1-5 sheet and the sleep check answer at once (4, and all ones); the connection and easy-day sheets answer
+// with what a test sets, else are closed unanswered
+const answers = vi.hoisted(() => ({ connection: null as import('../recovery/sheets').ConnectionPlan | null, easyDay: false }));
+vi.mock('../recovery/sheets', async (load) => ({
+  ...(await load<typeof import('../recovery/sheets')>()),
+  openRating: (_nav: unknown, _kind: unknown, onPick: (v: number) => void) => onPick(4),
+  openSleepCheck: (_nav: unknown, onDone: (answers: number[]) => void) => onDone([1, 1, 1, 1, 1, 1, 1]),
+  openConnection: (_nav: unknown, _today: unknown, onSubmit: (plan: import('../recovery/sheets').ConnectionPlan) => void) => {
+    if (answers.connection) onSubmit(answers.connection);
+  },
+  openEasyDay: (_nav: unknown, props: { onSubmit: (chosen: string[], earlyNight: boolean) => void }) => {
+    if (answers.easyDay) props.onSubmit([], false);
+  },
+}));
+
 import {
+  PLAN_LATEST,
+  PLAN_MORNING,
   alertWeeks,
   backfillMinutes,
   eventRow,
@@ -12,14 +33,21 @@ import {
   nextWeekday,
   notYetPlanned,
   performAlert,
+  planSlot,
   saveCheckin,
+  sessionMode,
   sessionRow,
+  sleepCheck,
   sleepMeaning,
+  startMode,
   stressChangeText,
 } from './actions';
 import type { Aura } from '../app/store';
-import type { Nav } from '../app/nav';
+import type { Nav, Run } from '../app/nav';
+import type { Mode } from './modes';
 import type { Json } from './types';
+import { COHERENT } from '../run/breath';
+import { onScreen } from '../run/RunView';
 
 describe('hhmmMinus', () => {
   it('takes minutes off a time of day', () => {
@@ -159,6 +187,11 @@ describe('rows', () => {
     expect(row.featureId).toBe('DX-01');
     expect('featureId' in eventRow('Asia/Kolkata', { title: 'Nap', day: '2026-10-31', minute: 0, minutes: 10 })).toBe(false);
   });
+  it('stamps when it was planned, when given', () => {
+    const at = '2026-10-24T10:07:00+05:30';
+    expect(eventRow('Asia/Kolkata', { title: 'Nap', day: '2026-10-31', minute: 0, minutes: 10 }, at).createdAt).toBe(at);
+    expect('createdAt' in eventRow('Asia/Kolkata', { title: 'Nap', day: '2026-10-31', minute: 0, minutes: 10 })).toBe(false);
+  });
   it('writes a session', () => {
     const start = new Date('2026-10-24T07:00:00Z').getTime();
     const row = sessionRow('Asia/Kolkata', '2026-10-24', { title: 'Walk', minutes: 20, kind: 'walk', mode: 'walk' }, false, 310, start, start + 310_000);
@@ -174,6 +207,9 @@ describe('rows', () => {
       actualMinutes: 5,
     });
     expect(sessionRow('Asia/Kolkata', '2026-10-24', { title: 'Flowtime', minutes: 0 }, true, 60, start, start).plannedMinutes).toBe(null);
+    // what it was a use of, when known
+    const tagged = sessionRow('Asia/Kolkata', '2026-10-24', { title: 'Nap', minutes: 10, featureId: 'DX-04', modeId: 'nap-10' }, true, 600, start, start);
+    expect(tagged).toMatchObject({ featureId: 'DX-04', modeId: 'nap-10' });
   });
 });
 
@@ -233,5 +269,268 @@ describe('finishFeature', () => {
     const f = fake(alerts, ['NI-04']);
     logWater(f.aura, f.nav);
     expect(f.changed).toEqual([]);
+  });
+});
+
+// -- modes ---------------------------------------------------------------------------------------------------------
+
+/** A store and nav that keep what was added, said and started (one run at a time, as the phone does). */
+function phone(events: Json[] = []) {
+  const added: [string, Json][] = [];
+  const changed: [string, string, Json][] = [];
+  const said: string[] = [];
+  const runs: { run: Run; countdown: boolean }[] = [];
+  const data = { alerts: [] as Json[], alertOff: [] as string[], checkins: [] as Json[], events, sessions: [] as Json[], me: {} };
+  const aura = {
+    zone: 'Asia/Kolkata',
+    today: '2026-10-24',
+    data,
+    local: { lastSync: null },
+    edit: {
+      add: (part: string, row: Json) => {
+        added.push([part, row]);
+        if (part === 'events') data.events = [...data.events, row];
+      },
+      change: (part: string, id: string, c: Json) => changed.push([part, id, c]),
+      me: () => undefined,
+    },
+  } as unknown as Aura;
+  const nav = {
+    run: null as Run | null,
+    counting: false,
+    showToast: (t: string) => said.push(t),
+    showAlert: () => undefined,
+    openSheet: () => undefined,
+    startRun(run: Run, countdown = false) {
+      runs.push({ run, countdown });
+      nav.run = run;
+    },
+  };
+  return { aura, nav: nav as unknown as Nav & { run: Run | null }, added, changed, said, runs };
+}
+
+const mode = (m: Partial<Mode> & Pick<Mode, 'id' | 'run'>): Mode =>
+  ({ name: m.id, word: m.id, shelf: 'Rest', minutes: 10, kind: 'recovery', accent: 'recovery', icon: 'timer', note: 'A note.', ...m }) as Mode;
+
+const TIMER = mode({ id: 'timer', name: 'Timer', shelf: 'Focus', run: 'timer', minutes: 25, kind: 'focus' });
+const FLOW = mode({ id: 'flow', name: 'Flow', shelf: 'Focus', run: 'flow', minutes: 0, kind: 'focus' });
+const MEETING = mode({ id: 'meeting', name: 'Meeting', shelf: 'Focus', run: 'timer', minutes: 30, kind: 'meeting' });
+const NAP = mode({ id: 'nap-10', name: 'Ten-minute nap', shelf: 'Sleep', run: 'timer', kind: 'nap' });
+const BOX = mode({ id: 'box', name: 'Box breathing', shelf: 'Breathe', run: 'breathe', minutes: 5, pattern: { in: 4, hold: 4, out: 4, hold2: 4 } });
+const GUIDED = mode({ id: 'body-scan', name: 'Body scan', shelf: 'Meditate', run: 'guided', minutes: 6, prompts: ['One', 'Two', 'Three'] });
+const WIND = mode({ id: 'wind-down', name: 'Wind-down', shelf: 'Sleep', run: 'winddown', minutes: 15 });
+const DAY_OFF = mode({ id: 'day-off', name: 'A whole day off', run: 'plan', minutes: 480 });
+const HOBBY = mode({ id: 'hobby', name: 'Hobby', run: 'plan', minutes: 180 });
+
+describe('startMode', () => {
+  beforeEach(() => {
+    used.length = 0;
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-10-24T04:37:00Z')); // 10:07 in Kolkata
+  });
+  afterEach(() => vi.useRealTimers());
+
+  /** End the run as the run view does, and give back the session row it leaves. */
+  const finish = (p: ReturnType<typeof phone>, completed = true) => {
+    p.runs.at(-1)!.run.onEnd?.(completed, 600);
+    return p.added.filter(([part]) => part === 'sessions').map(([, row]) => row).at(-1)!;
+  };
+
+  it('a Focus timer counts 3-2-1 first and saves a focus timer session under its own title', () => {
+    const p = phone();
+    expect(startMode(p.aura, p.nav, TIMER, { title: '  Write the deck ', minutes: 40 })).toBe(true);
+    const { run, countdown } = p.runs[0];
+    expect(countdown).toBe(true);
+    expect(run).toMatchObject({ title: 'Write the deck', minutes: 40, night: false });
+    expect(run.breathing).toBeUndefined();
+    // a use only once the 3-2-1 is over and the run is on screen (Cancel on the 3-2-1 starts nothing)
+    expect(used).toEqual([]);
+    onScreen(run);
+    onScreen(run);
+    expect(used).toEqual(['mode:timer']);
+    expect(finish(p)).toMatchObject({ title: 'Write the deck', kind: 'focus', mode: 'timer', plannedMinutes: 40, modeId: 'timer' });
+  });
+
+  it('a Focus start cancelled on the 3-2-1 is no use', () => {
+    const p = phone();
+    startMode(p.aura, p.nav, FLOW);
+    expect(p.runs[0].countdown).toBe(true);
+    expect(used).toEqual([]); // never on screen
+  });
+
+  it('another shelf starts at once; a nap is dark and keeps its name', () => {
+    const p = phone();
+    startMode(p.aura, p.nav, NAP);
+    expect(p.runs[0].countdown).toBe(false);
+    expect(p.runs[0].run).toMatchObject({ title: 'Ten-minute nap', minutes: 10, night: true, accent: 'recovery', note: 'A note.' });
+    expect(finish(p)).toMatchObject({ title: 'Ten-minute nap', kind: 'nap', mode: 'timer', modeId: 'nap-10' });
+    expect(used).toEqual(['mode:nap-10']);
+  });
+
+  it('Flow counts up and saves as flowtime; Meeting saves as meeting', () => {
+    const p = phone();
+    startMode(p.aura, p.nav, FLOW, { minutes: 50 });
+    expect(p.runs[0].run.minutes).toBe(0);
+    expect(finish(p)).toMatchObject({ mode: 'flowtime', plannedMinutes: null, kind: 'focus' });
+    p.nav.run = null;
+    startMode(p.aura, p.nav, MEETING);
+    expect(finish(p)).toMatchObject({ mode: 'meeting', kind: 'meeting', title: 'Meeting' });
+    expect(sessionMode(MEETING)).toBe('meeting');
+    expect(sessionMode(NAP)).toBe('timer');
+  });
+
+  it('a breathing mode paces its own pattern; without one, Coherent', () => {
+    const p = phone();
+    startMode(p.aura, p.nav, BOX);
+    expect(p.runs[0].run).toMatchObject({ breathing: true, pattern: { in: 4, hold: 4, out: 4, hold2: 4 }, label: 'BREATHE · 5 MIN' });
+    p.nav.run = null;
+    startMode(p.aura, p.nav, { ...BOX, id: 'plain', pattern: undefined });
+    expect(p.runs[1].run.pattern).toEqual(COHERENT);
+  });
+
+  it('a guided meditation runs with its prompts under the clock', () => {
+    const p = phone();
+    startMode(p.aura, p.nav, GUIDED);
+    expect(p.runs[0].run.panel).toBeTruthy();
+    expect(p.runs[0].run.breathing).toBeUndefined();
+    expect(p.runs[0].run.label).toBe('MEDITATE · 6 MIN');
+    expect(finish(p)).toMatchObject({ title: 'Body scan', mode: 'timer' });
+  });
+
+  it('the wind-down keeps its list, for the length asked', () => {
+    const p = phone();
+    startMode(p.aura, p.nav, WIND, { minutes: 20 });
+    expect(p.runs[0].run).toMatchObject({ title: 'Wind-down', minutes: 20 });
+    expect(p.runs[0].run.panel).toBeTruthy();
+    expect(used).toEqual(['mode:wind-down']);
+    expect(finish(p)).toMatchObject({ title: 'Wind-down', modeId: 'wind-down' });
+  });
+
+  it('a plan mode goes on the calendar once a day', () => {
+    const p = phone();
+    expect(startMode(p.aura, p.nav, HOBBY)).toBe(true);
+    expect(p.runs).toEqual([]);
+    expect(p.added).toEqual([['events', { title: 'Hobby', start: '2026-10-24T10:15:00+05:30', end: '2026-10-24T13:15:00+05:30', createdAt: '2026-10-24T10:07:00+05:30' }]]);
+    expect(p.said).toEqual(['Added to your calendar']);
+    // later the same day the slot has moved on, but the title is already there that day
+    vi.setSystemTime(new Date('2026-10-24T06:00:00Z'));
+    startMode(p.aura, p.nav, HOBBY);
+    expect(p.added).toHaveLength(1);
+    expect(p.said.at(-1)).toBe('Already in your calendar');
+    expect(used).toEqual(['mode:hobby', 'mode:hobby']);
+  });
+
+  it('a day off past its morning goes on tomorrow, 09:00 to 17:00', () => {
+    const p = phone();
+    startMode(p.aura, p.nav, DAY_OFF);
+    expect(p.added[0][1]).toMatchObject({ title: 'A whole day off', start: '2026-10-25T09:00:00+05:30', end: '2026-10-25T17:00:00+05:30' });
+  });
+
+  it('nothing starts (or counts) while another run is going', () => {
+    const p = phone();
+    startMode(p.aura, p.nav, NAP);
+    expect(startMode(p.aura, p.nav, TIMER)).toBe(false);
+    expect(p.runs).toHaveLength(1);
+    expect(used).toEqual(['mode:nap-10']);
+  });
+});
+
+describe('planSlot', () => {
+  it('takes the next quarter-hour when the block ends by 22:00, else tomorrow morning', () => {
+    expect(planSlot('hobby', '2026-10-24', 10 * 60 + 7, 180)).toEqual({ day: '2026-10-24', minute: 10 * 60 + 15, minutes: 180 });
+    expect(planSlot('hobby', '2026-10-24', 10 * 60 + 15, 60)).toEqual({ day: '2026-10-24', minute: 10 * 60 + 30, minutes: 60 });
+    expect(planSlot('hobby', '2026-10-24', PLAN_LATEST - 60, 180)).toEqual({ day: '2026-10-25', minute: PLAN_MORNING, minutes: 180 });
+    expect(planSlot('hobby', '2026-10-24', PLAN_LATEST - 75, 60).day).toBe('2026-10-24');
+  });
+  it('keeps the fixed slots: today while still ahead, else tomorrow', () => {
+    expect(planSlot('day-off', '2026-10-24', 8 * 60, 480)).toEqual({ day: '2026-10-24', minute: 9 * 60, minutes: 480 });
+    expect(planSlot('alcohol-free-evening', '2026-10-24', 17 * 60, 0)).toEqual({ day: '2026-10-24', minute: 18 * 60, minutes: 240 });
+    expect(planSlot('alcohol-free-evening', '2026-10-24', 18 * 60, 240).day).toBe('2026-10-25');
+  });
+});
+
+describe('noting uses', () => {
+  beforeEach(() => {
+    used.length = 0;
+    answers.connection = null;
+    answers.easyDay = false;
+  });
+
+  it('each log notes its feature once', () => {
+    const p = phone();
+    logWater(p.aura, p.nav);
+    saveCheckin(p.aura, p.nav, 'mood', 4);
+    saveCheckin(p.aura, p.nav, 'connection', 3);
+    sleepCheck(p.aura, p.nav);
+    expect(used).toEqual(['feature:NI-04', 'feature:NI-02', 'feature:NI-03', 'feature:DX-03']);
+  });
+
+  it("an alert's verb notes its feature, real or Recovery's stand-in", () => {
+    const p = phone();
+    performAlert(p.aura, p.nav, { id: 'a1', featureId: 'DX-04' }); // the nap
+    p.nav.run = null;
+    performAlert(p.aura, p.nav, { featureId: 'PB-03' }); // a stand-in: no id
+    expect(used).toEqual(['feature:DX-04', 'feature:PB-03']);
+  });
+
+  it('a verb that logs (Drink, a check-in) is noted once, by the log', () => {
+    const p = phone();
+    performAlert(p.aura, p.nav, { id: 'w', featureId: 'NI-04' });
+    performAlert(p.aura, p.nav, { id: 'm', featureId: 'NI-02' });
+    expect(used).toEqual(['feature:NI-04', 'feature:NI-02']);
+  });
+
+  it('notes nothing for a sheet closed, a Not now, or a run refused while another is going', () => {
+    const p = phone();
+    performAlert(p.aura, p.nav, { id: 's', featureId: 'DX-02' }); // the wake-time sheet, closed
+    performAlert(p.aura, p.nav, { id: 'b', featureId: 'PB-05' }); // Not now on the check-up
+    performAlert(p.aura, p.nav, { id: 'r', featureId: 'DX-05' }); // the easy-day sheet, closed
+    p.nav.run = { title: 'Walk' } as Run;
+    performAlert(p.aura, p.nav, { id: 'n', featureId: 'DX-04' }); // the nap, while a walk runs
+    expect(used).toEqual([]);
+    expect(p.changed).toEqual([]);
+  });
+
+  it('a plan is one use when something was added, however many events, and none when all was there', () => {
+    const p = phone();
+    performAlert(p.aura, p.nav, { id: 'l', featureId: 'PB-01' });
+    const events = p.added.filter(([part]) => part === 'events').map(([, e]) => e);
+    expect(events.length).toBeGreaterThan(1);
+    expect(events.every((e) => e.featureId === 'PB-01' && e.createdAt === events[0].createdAt)).toBe(true);
+    performAlert(p.aura, p.nav, { featureId: 'PB-01' }); // again: it is all there
+    expect(p.said.at(-1)).toBe('Already in your calendar');
+    expect(used).toEqual(['feature:PB-01']);
+  });
+
+  it("a feature's timed run is noted when it starts and saved as that feature's session", () => {
+    const p = phone();
+    performAlert(p.aura, p.nav, { id: 'n', featureId: 'DX-04' });
+    expect(used).toEqual(['feature:DX-04']);
+    p.runs[0].run.onEnd?.(true, 600);
+    const session = p.added.find(([part]) => part === 'sessions')![1];
+    expect(session).toMatchObject({ title: 'Nap', featureId: 'DX-04' });
+    expect('modeId' in session).toBe(false);
+  });
+
+  it("DX-05's easy day is a use once submitted, and its recovery break is DX-05's session", () => {
+    answers.easyDay = true;
+    const p = phone();
+    performAlert(p.aura, p.nav, { id: 'r', featureId: 'DX-05' });
+    expect(used).toEqual(['feature:DX-05']);
+    expect(p.changed).toEqual([['alerts', 'r', { done: true }]]);
+    expect(p.runs[0].run.title).toBe('Recovery break');
+    p.runs[0].run.onEnd?.(false, 60);
+    expect(p.added.find(([part]) => part === 'sessions')![1]).toMatchObject({ featureId: 'DX-05' });
+  });
+
+  it('NI-03: a call or meal added and the check-in after it are one use; with nothing added, the check-in is', () => {
+    answers.connection = { who: 'Sam', call: true, meal: true, day: '2026-10-25', time: '19:00' };
+    const p = phone();
+    performAlert(p.aura, p.nav, { id: 'c', featureId: 'NI-03' });
+    expect(p.added.map(([part]) => part)).toEqual(['tasks', 'events', 'checkins']);
+    expect(used).toEqual(['feature:NI-03']);
+    answers.connection = { who: 'Sam', call: false, meal: false, day: '2026-10-25', time: '19:00' };
+    performAlert(p.aura, p.nav, { id: 'c2', featureId: 'NI-03' });
+    expect(used).toEqual(['feature:NI-03', 'feature:NI-03']);
   });
 });

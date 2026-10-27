@@ -1,15 +1,23 @@
-// Recovery draws every feature by group from the bundled sample: its verb works with or without an open alert, its
-// logging cards add rows to the visitor's local layer, and the presets include the website's Aerobic session.
+// Recovery draws Often used, every feature by group and four modes from the bundled sample: a verb works with or without
+// an open alert, the logging cards add rows to the visitor's local layer, and what is used rises to the top. The Modes
+// page (Show more) lists every mode by shelf, and a mode's setup page starts it. Uses are noted and scored on the demo's
+// own clock (the sample's frozen day), never the real date, so these pass on any day.
 
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { AuraProvider, useAura } from '../app/store';
-import { NavProvider, useNav } from '../app/nav';
+import { AuraProvider, useAura, type Aura } from '../app/store';
+import { NavProvider, useNav, type Nav } from '../app/nav';
+import { Phone } from '../app/Phone';
 import { GROUP_ORDER, Recovery, featureGroups } from '../screens/Recovery';
 import { EMPTY, loadLocal, saveLocal } from '../lib/local';
-import { FEATURES, PRESETS } from '../lib/catalog';
+import { FEATURES } from '../lib/catalog';
+import { startMode } from '../lib/actions';
+import { DEFAULT_MODES, SHELVES, findMode, modesOn } from '../lib/modes';
+import { openAlerts } from '../screens/shared';
 import { entriesFor } from './logCards';
+import { ModeSetup, ModesPage, modeVerb } from './ModesPage';
+import { noteUse, oftenUsed, orderGroups, scoresFor, topModes, type UseKey } from './usage';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 // jsdom has no element scrolling; the kit Page scrolls to the top on mount
@@ -18,9 +26,13 @@ Element.prototype.scrollTo ??= function scrollTo() {};
 let host: HTMLDivElement;
 let root: Root;
 let toasts: string[] = [];
+/** The app state and the navigation as of the last render. */
+let aura: Aura;
+let nav: Nav;
 
 function Toasts() {
-  const nav = useNav();
+  nav = useNav();
+  aura = useAura();
   if (nav.toast && toasts.at(-1) !== nav.toast) toasts.push(nav.toast);
   return (
     <>
@@ -74,6 +86,22 @@ async function press(el: Element | null | undefined, key: string) {
 }
 const sheet = () => host.querySelector('[data-sheet]');
 const feature = (id: string) => FEATURES.find((f) => f.id === id)!;
+/** The section headings, without a trailing link. */
+const sections = () => [...host.querySelectorAll('.section')].map((s) => s.firstElementChild?.textContent);
+/** Often used's items, as usage keys. */
+const often = () => [...host.querySelectorAll('.rc-often [data-use]')].map((el) => el.getAttribute('data-use'));
+/** The tiles' words, in order. */
+const tiles = (el: Element | null | undefined = host) => [...(el?.querySelectorAll('.tile .tname') ?? [])].map((t) => t.textContent);
+/** Recovery's Modes tiles (the last grid on the page). */
+const modesGrid = () => [...host.querySelectorAll('.tilegrid')].at(-1);
+const scoresNow = () => scoresFor(aura);
+/** The modes Often used shows, by id. */
+const oftenModes = () => often().filter((k) => k?.startsWith('mode:')).map((k) => k!.slice('mode:'.length));
+/** Note `times` uses of `key` now, on the demo's clock. */
+async function use(key: UseKey, times = 1) {
+  for (let i = 0; i < times; i++) await act(async () => { noteUse(aura, key); });
+}
+const openIds = () => openAlerts(aura.data.alerts, aura.data.alertOff).map((a) => String(a.featureId));
 
 beforeEach(() => {
   localStorage.clear();
@@ -124,14 +152,17 @@ describe('entriesFor', () => {
 });
 
 describe('Recovery', () => {
-  it('shows all 16 features grouped, with To do kept on top and the presets at the bottom', async () => {
+  it('shows Often used, all 16 features grouped by use, then Modes', async () => {
     await show(<Recovery />);
     const ids = [...host.querySelectorAll('[data-feature]')].map((el) => el.getAttribute('data-feature'));
     expect(ids).toHaveLength(16);
     expect(ids).not.toContain('BS-01');
     expect(ids).not.toContain('BS-02');
-    const sections = [...host.querySelectorAll('.section')].map((s) => s.textContent);
-    expect(sections).toEqual(['To do', ...GROUP_ORDER, 'Presets']);
+    const groups = orderGroups(featureGroups(), scoresNow());
+    expect(sections()).toEqual(['Often used', ...groups.map((g) => g.title), 'Modes']);
+    expect(sections().slice(1, -1).sort()).toEqual([...GROUP_ORDER].sort());
+    // the rows follow the same order, group by group
+    expect(ids).toEqual(groups.flatMap((g) => g.features.map((f) => f.id)));
     // the sample has an open alert for every one of them
     expect(row('NI-04')?.textContent).toContain('To do');
     // the logged-by-hand features carry their card
@@ -162,16 +193,80 @@ describe('Recovery', () => {
     expect(changed[0][1]).toEqual({ done: true });
   });
 
-  it('keeps To do compact: pills only, the metric cards stay in the rows below', async () => {
+  it('Often used: four black pills, the most used first, with no metric cards', async () => {
     await show(<Recovery />);
-    const todo = host.querySelector('.rc-todo-list');
-    expect(todo?.querySelectorAll('.pill').length).toBeGreaterThan(0);
-    expect(todo?.querySelector('.mcard')).toBeNull();
+    const list = host.querySelector('.rc-often');
+    expect(list?.querySelectorAll('.pill')).toHaveLength(4);
+    expect(list?.querySelector('.mcard')).toBeNull();
+    expect(often()).toEqual(oftenUsed(scoresNow(), openIds()));
+    // a feature pill is the feature: its name, its status and its verb
+    const first = often().find((k) => k?.startsWith('feature:'));
+    expect(first).toBeTruthy();
+    const f = feature(first!.slice('feature:'.length));
+    const pill = host.querySelector(`[data-use="${first}"] .pill`);
+    expect(pill?.querySelector('.ptitle')?.textContent).toBe(f.name);
+    expect(pill?.querySelector('.btn.go')?.textContent).toBe(f.verb);
+  });
+
+  it('with no history, Often used is the open alerts (newest first), then the default modes', () => {
+    expect(oftenUsed(new Map(), ['DX-04', 'NI-04'])).toEqual(['feature:DX-04', 'feature:NI-04', `mode:${DEFAULT_MODES[0]}`, `mode:${DEFAULT_MODES[1]}`]);
+    expect(oftenUsed(new Map(), [])).toEqual(DEFAULT_MODES.map((id) => `mode:${id}`));
+    expect(topModes(new Map()).map((m) => m.id)).toEqual(DEFAULT_MODES);
+  });
+
+  it('a mode started three times rises into Often used and leaves the Modes tiles', async () => {
+    await show(<Recovery />);
+    const sauna = findMode('sauna')!;
+    expect(often()).not.toContain('mode:sauna');
+    expect(tiles(modesGrid())).not.toContain(sauna.word);
+    for (let i = 0; i < 3; i++) {
+      await act(async () => { startMode(aura, nav, sauna); });
+      await act(async () => { nav.endRun(); });
+    }
+    expect(loadLocal().used['mode:sauna']).toHaveLength(3);
+    expect(often()).toContain('mode:sauna');
+    // the Modes tiles never repeat a mode Often used already shows
+    expect(tiles(modesGrid())).not.toContain(sauna.word);
+    // its pill reads its length and shelf; Start runs it, a tap opens its page
+    const pill = host.querySelector('[data-use="mode:sauna"] .pill');
+    expect(pill?.querySelector('.preason')?.textContent).toBe('20 min · Rest');
+    await click(buttonIn(pill, 'Start'));
+    expect(nav.run?.title).toBe(sauna.name);
+    await act(async () => { nav.endRun(); });
+    await click(pill);
+    expect(nav.stack.at(-1)).toEqual({ name: 'mode', id: 'sauna' });
+  });
+
+  it('logging strength by hand moves Strength into Often used and Movement up', async () => {
+    await show(<Recovery />);
+    const before = sections().indexOf('Movement');
+    for (let i = 0; i < 4; i++) await click(buttonIn(block('PB-04'), 'Log'));
+    expect(loadLocal().used['feature:PB-04']).toHaveLength(4);
+    expect(often()).toContain('feature:PB-04');
+    expect(sections().indexOf('Movement')).toBeLessThan(before);
+    // Strength leads its group
+    const movement = [...host.querySelectorAll('.rc-group')].find((g) => g.querySelector('.section')?.textContent === 'Movement');
+    expect(movement?.querySelector('[data-feature]')?.getAttribute('data-feature')).toBe('PB-04');
+  });
+
+  it('Modes: four tiles, none of them in Often used, that start straight away; Show more opens the Modes page', async () => {
+    await show(<Recovery />);
+    const shown = topModes(scoresNow(), 4, oftenModes());
+    expect(tiles(modesGrid())).toEqual(shown.map((m) => m.word));
+    expect(tiles(modesGrid())).toHaveLength(4);
+    for (const id of oftenModes()) expect(shown.map((m) => m.id)).not.toContain(id);
+    const first = shown.find((m) => m.run !== 'plan')!;
+    await click([...(modesGrid()?.querySelectorAll('.tile') ?? [])].find((t) => t.querySelector('.tname')?.textContent === first.word));
+    expect(nav.run?.title).toBe(first.name);
+    expect(loadLocal().used[`mode:${first.id}`]).toHaveLength(1);
+    await act(async () => { nav.endRun(); });
+    await click(buttonIn(host, 'Show more'));
+    expect(nav.stack.at(-1)).toEqual({ name: 'modes' });
   });
 
   it("a mood or connection from its card and any water finish that feature's open alert", async () => {
     await show(<Recovery />);
-    // the sample has an open alert for all 16; the header counts them (To do itself shows at most 12)
+    // the sample has an open alert for all 16; the header counts them
     expect(host.textContent).toContain('16 things to do');
     for (const id of ['NI-02', 'NI-03', 'NI-04']) expect(row(id)?.textContent).toContain('To do');
     await click(buttonIn(block('NI-02'), '4 of 5'));
@@ -270,12 +365,42 @@ describe('Recovery', () => {
     expect(sheet()?.textContent).toContain('Short-night nap');
     act(() => { (buttonIn(sheet(), 'Done') as HTMLElement).click(); });
     expect(sheet()).toBeNull();
-    // the To do pills (ActionPill) work the same way
-    const pill = host.querySelector('.pill') as HTMLElement;
+    // Often used's feature pills (ActionPill) work the same way
+    const pill = host.querySelector('.rc-often [data-use^="feature:"] .pill') as HTMLElement;
     await press(pill.querySelector('button.btn.go'), 'Enter');
     expect(sheet()).toBeNull();
     await press(pill, 'Enter');
     expect(sheet()).toBeTruthy();
+  });
+
+  it("a plan mode's Plan in Often used opens its page instead of adding a calendar block", async () => {
+    await show(<Recovery />);
+    await use('mode:day-off', 6);
+    expect(often()).toContain('mode:day-off');
+    const pill = host.querySelector('[data-use="mode:day-off"] .pill');
+    expect(pill?.querySelector('.preason')?.textContent).toBe('Plan · Rest');
+    expect(buttonIn(pill, 'Start')).toBeUndefined();
+    await click(buttonIn(pill, 'Plan'));
+    expect(nav.stack.at(-1)).toEqual({ name: 'mode', id: 'day-off' });
+    expect(nav.run).toBeNull();
+    expect(loadLocal().lists.events).toBeUndefined();
+    expect(toasts).not.toContain('Added to your calendar');
+  });
+
+  it("a plan mode's tile opens its page too; Add to calendar there is the one way to plan it", async () => {
+    await show(<Recovery />);
+    // four features fill Often used, so the day off shows as a tile
+    for (const id of ['PB-04', 'NI-04', 'NI-02', 'NI-03']) await use(`feature:${id}`, 8);
+    await use('mode:day-off', 3);
+    expect(oftenModes()).toEqual([]);
+    const dayOff = findMode('day-off')!;
+    const tile = [...(modesGrid()?.querySelectorAll('.tile') ?? [])].find((t) => t.querySelector('.tname')?.textContent === dayOff.word);
+    await click(tile);
+    expect(nav.stack.at(-1)).toEqual({ name: 'mode', id: 'day-off' });
+    expect(nav.run).toBeNull();
+    expect(loadLocal().lists.events).toBeUndefined();
+    expect(modeVerb(dayOff)).toBe('Plan');
+    expect(modeVerb(findMode('urban-walk')!)).toBe('Start');
   });
 
   it("Strength's Log adds a strength log taken in the person's zone", async () => {
@@ -289,11 +414,95 @@ describe('Recovery', () => {
     expect(toasts).toContain('Logged 30 min of strength');
   });
 
-  it('lists the Aerobic session preset', async () => {
-    expect(PRESETS.map((p) => p.title)).toContain('Aerobic session');
-    expect(PRESETS.find((p) => p.title === 'Aerobic session')).toMatchObject({ word: 'Aerobic', minutes: 20, kind: 'walk', accent: 'fitness' });
-    await show(<Recovery />);
-    const tile = [...host.querySelectorAll('.tile')].find((t) => t.textContent?.includes('Aerobic'));
-    expect(tile?.textContent).toContain('20 min');
+});
+
+describe('Modes page', () => {
+  const chip = (label: string) => [...host.querySelectorAll('.rc-shelves button')].find((b) => b.textContent === label);
+  const shelves = () => [...host.querySelectorAll('[data-shelf]')].map((el) => el.getAttribute('data-shelf'));
+
+  it('lists every shelf under All, and a chip keeps one', async () => {
+    await show(<ModesPage />);
+    expect([...host.querySelectorAll('.rc-shelves button')].map((b) => b.textContent)).toEqual(['All', ...SHELVES]);
+    expect(chip('All')?.getAttribute('aria-pressed')).toBe('true');
+    expect(shelves()).toEqual(SHELVES);
+    // nothing used yet: no "Used most" strip
+    expect(sections()).not.toContain('Used most');
+    // the old Aerobic session preset is Movement's easy aerobic session
+    expect(findMode('Aerobic session')?.id).toBe('zone2');
+    expect(tiles(host.querySelector('[data-shelf="Movement"]'))).toContain(findMode('zone2')!.word);
+
+    await click(chip('Breathe'));
+    expect(chip('Breathe')?.getAttribute('aria-pressed')).toBe('true');
+    expect(shelves()).toEqual(['Breathe']);
+    expect(tiles()).toEqual(modesOn('Breathe').map((m) => m.word));
+    await click(host.querySelectorAll('.tile')[1]);
+    expect(nav.stack.at(-1)).toEqual({ name: 'mode', id: modesOn('Breathe')[1].id });
+  });
+
+  it('opens on one shelf, and shows Used most once a mode was used', async () => {
+    await show(<ModesPage shelf="Sleep" />);
+    await use('mode:sauna'); // on the demo's clock, not the real date
+    expect(shelves()).toEqual(['Sleep']);
+    expect(sections()).not.toContain('Used most');
+    await click(chip('All'));
+    expect(sections()[0]).toBe('Used most');
+    expect(tiles()[0]).toBe(findMode('sauna')!.word);
+  });
+
+  it("a breathing mode's page shows its breath and starts the pacer", async () => {
+    await show(<ModeSetup id="four-seven-eight" />);
+    expect(host.querySelector('.largetitle')?.textContent).toBe('4-7-8');
+    expect(host.textContent).toContain('In 4 · Hold 7 · Out 8');
+    expect(host.querySelector('.rc-titlefield')).toBeNull(); // a title is for Focus only
+    await click(host.querySelector('.startpill'));
+    expect(nav.run).toMatchObject({ title: '4-7-8', breathing: true });
+    expect(loadLocal().used['mode:four-seven-eight']).toHaveLength(1);
+  });
+
+  it("a guided meditation's page counts its prompts; Focus's timer takes a title and any length", async () => {
+    await show(<ModeSetup id="body-scan" />);
+    expect(host.textContent).toContain('6 prompts');
+    act(() => root.unmount());
+    root = createRoot(host);
+    await show(<ModeSetup id="timer" />);
+    expect(host.querySelector('.rc-titlefield')).toBeTruthy();
+    expect(host.querySelector('.stepper')).toBeTruthy();
+  });
+
+  it("a plan mode's page adds it to the calendar instead of starting a timer", async () => {
+    await show(<ModeSetup id="day-off" />);
+    expect(host.querySelector('.startpill')?.textContent).toBe('Add to calendar');
+    await click(host.querySelector('.startpill'));
+    expect(nav.run).toBeNull();
+    expect(loadLocal().lists.events?.added).toHaveLength(1);
+    expect(toasts).toContain('Added to your calendar');
+    expect(loadLocal().used['mode:day-off']).toHaveLength(1);
+  });
+});
+
+describe('the phone', () => {
+  const shelves = () => [...host.querySelectorAll('[data-shelf]')].map((el) => el.getAttribute('data-shelf'));
+  const chip = (label: string) => [...host.querySelectorAll('.rc-shelves button')].find((b) => b.textContent === label);
+  /** A tab switch and a push in one go, as the story's links and Search's places do. */
+  const go = (page: Parameters<Nav['push']>[0]) => act(async () => { nav.setTab('recovery'); nav.push(page); });
+
+  it('a Modes page pushed in place of another starts fresh, not on the old shelf', async () => {
+    await show(<Phone />);
+    await go({ name: 'modes', shelf: 'Sleep' });
+    expect(shelves()).toEqual(['Sleep']);
+    // the story's "Recovery → Modes" link while Sleep is showing: every shelf
+    await go({ name: 'modes' });
+    expect(shelves()).toEqual(SHELVES);
+    // a chip kept one shelf; the same link again shows them all
+    await click(chip('Breathe'));
+    expect(shelves()).toEqual(['Breathe']);
+    await go({ name: 'modes' });
+    expect(shelves()).toEqual(SHELVES);
+    expect(chip('All')?.getAttribute('aria-pressed')).toBe('true');
+    // and a mode page swapped for another mode shows the new one
+    await go({ name: 'mode', id: 'sauna' });
+    await go({ name: 'mode', id: 'four-seven-eight' });
+    // the page on top comes after the tab's own page (Recovery) in the phone
+    expect([...host.querySelectorAll('.largetitle')].at(-1)?.textContent).toBe('4-7-8');
   });
 });

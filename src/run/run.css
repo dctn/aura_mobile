@@ -74,7 +74,14 @@
 }
 .rv-breath .core { fill: color-mix(in srgb, var(--tone, var(--accent)) 55%, transparent); }
 .rv-phase { margin-bottom: 4px; font-size: var(--t-title); font-weight: 600; color: var(--tone, var(--accent)); }
+.rv-phase-left { margin-left: 4px; font-variant-numeric: tabular-nums; opacity: 0.7; }
 .rv-breath + .rv-phase + .rv-clock { font-size: 44px; }
+
+/* a guided meditation's prompt, one at a time ("2 of 6" in the run's colour) */
+.rv-guide { padding: 0 28px; text-align: center; }
+.rv-guide-n { font-size: var(--t-head); font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--tone, var(--accent)); }
+.rv-guide-text { margin-top: 6px; font-size: var(--t-row); line-height: 1.4; color: var(--label); }
+.runview.night .rv-guide-text { color: var(--night-fg); }
 
 .rv-buttons { display: flex; justify-content: center; gap: 40px; }
 .rv-round {

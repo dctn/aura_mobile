@@ -57,6 +57,8 @@ describe('local overlay', () => {
     L.saveLocal(s);
     expect(L.loadLocal()).toEqual(s);
     expect(L.changeCount(s)).toBe(2);
+    // a noted use is not an edit of its own
+    expect(L.changeCount(L.addUse(s, 'feature:NI-04', '2026-10-27T10:00:00+05:30'))).toBe(2);
     localStorage.setItem('aura-demo:local', '{not json');
     expect(L.loadLocal()).toEqual(L.EMPTY);
   });
