@@ -26,6 +26,8 @@ targets:
       path: App/Info.plist
       properties:
         CFBundleDisplayName: Aura Clarus
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         UILaunchScreen: {}
         UIUserInterfaceStyle: Light
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]

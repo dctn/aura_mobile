@@ -1,0 +1,287 @@
+import Foundation
+
+// The backend's JSON, as packages/contracts/src describes it. Everything but ids is optional here, so a missing field
+// never fails a whole screen, and fields the app doesn't read are ignored.
+
+enum WireDate {
+    private static let plain: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter
+    }()
+
+    /// With or without fractional seconds, at any precision, with Z or an offset.
+    static func parse(_ text: String?) -> Date? {
+        guard let text = text else { return nil }
+        guard let dot = text.firstIndex(of: ".") else { return plain.date(from: text) }
+        let afterDot = text[text.index(after: dot)...]
+        let digits = afterDot.prefix(while: { $0.isNumber })
+        let whole = String(text[..<dot]) + String(afterDot[digits.endIndex...])
+        guard let seconds = plain.date(from: whole) else { return nil }
+        let fraction = Double("0." + String(digits)) ?? 0
+        return seconds.addingTimeInterval(fraction)
+    }
+
+    /// An instant with the phone's own offset, which is what Health Data files a check-in's local day by.
+    static func string(_ date: Date) -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        formatter.timeZone = TimeZone.current
+        return formatter.string(from: date)
+    }
+}
+
+/// A metric's value: a number, a word or a yes/no. Lists and documents come through as `.other`.
+enum WireValue: Decodable, Equatable {
+    case number(Double)
+    case text(String)
+    case flag(Bool)
+    case other
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if let flag = try? container.decode(Bool.self) {
+            self = .flag(flag)
+        } else if let number = try? container.decode(Double.self) {
+            self = .number(number)
+        } else if let text = try? container.decode(String.self) {
+            self = .text(text)
+        } else {
+            self = .other
+        }
+    }
+
+    var numberValue: Double? {
+        if case .number(let value) = self { return value }
+        return nil
+    }
+
+    var textValue: String? {
+        if case .text(let value) = self { return value }
+        return nil
+    }
+}
+
+/// A list route that hands back `cursor` until it's null.
+protocol CursorPage: Decodable {
+    associatedtype Item
+    var pageItems: [Item] { get }
+    var cursor: String? { get }
+}
+
+// MARK: Scores: GET /v1/scores/today?date
+
+struct WireScore: Decodable {
+    let value: Double?
+    let checksCounted: Int?
+    let checksNeeded: Int?
+
+    static func model(_ wire: WireScore?, name: String) -> Score {
+        return Score(name: name, value: wire?.value, checksCounted: wire?.checksCounted ?? 0, checksNeeded: wire?.checksNeeded ?? 0)
+    }
+}
+
+struct WireScores: Decodable {
+    let attention: WireScore?
+    let memory: WireScore?
+    let thinking: WireScore?
+    let focus: WireScore?
+
+    var model: ScoresToday {
+        return ScoresToday(attention: WireScore.model(attention, name: "Attention"),
+                           memory: WireScore.model(memory, name: "Memory"),
+                           thinking: WireScore.model(thinking, name: "Thinking"),
+                           focus: WireScore.model(focus, name: "Focus"))
+    }
+}
+
+// MARK: Calendar: GET /v1/calendar/events
+
+struct WireEvent: Decodable {
+    let id: String
+    let title: String?
+    let start: String?
+    let end: String?
+    let kind: String?
+
+    var model: CalendarEvent? {
+        guard let startDate = WireDate.parse(start), let endDate = WireDate.parse(end) else { return nil }
+        return CalendarEvent(id: id, title: title ?? "", start: startDate, end: endDate, kind: kind ?? "focus")
+    }
+}
+
+struct WireEventPage: CursorPage {
+    let events: [WireEvent]?
+    let cursor: String?
+
+    var pageItems: [WireEvent] {
+        return events ?? []
+    }
+}
+
+// MARK: Tasks: GET /v1/tasks
+
+struct WireTask: Decodable {
+    let id: String
+    let title: String?
+    let status: String?
+    let dueAt: String?
+    let hasTime: Bool?
+    let scheduledAt: String?
+    let completedAt: String?
+
+    var model: TaskItem {
+        // A due date without a time only names the day, so it isn't the task's time.
+        let due: Date? = hasTime == true ? WireDate.parse(dueAt) : nil
+        let done = status == "completed" || completedAt != nil
+        return TaskItem(id: id, title: title ?? "", at: WireDate.parse(scheduledAt) ?? due, done: done)
+    }
+}
+
+struct WireTaskPage: CursorPage {
+    let tasks: [WireTask]?
+    let cursor: String?
+
+    var pageItems: [WireTask] {
+        return tasks ?? []
+    }
+}
+
+// MARK: Alerts: GET /v1/alerts
+
+struct WireAlert: Decodable {
+    struct Action: Decodable {
+        let ref: String?
+    }
+
+    let id: String
+    let featureId: String?
+    let date: String?
+    let title: String?
+    let body: String?
+    let action: Action?
+    let done: Bool?
+
+    var model: AlertItem {
+        return AlertItem(id: id, featureId: featureId ?? "", title: title ?? "", detail: body, date: date ?? "",
+                         done: done ?? false, actionRef: action?.ref)
+    }
+}
+
+struct WireAlertList: Decodable {
+    let alerts: [WireAlert]?
+}
+
+// MARK: Metrics: GET /v1/metrics/daily, catalogue, availability, series
+
+struct WireDay: Decodable {
+    struct Metrics: Decodable {
+        let burnoutIndexScore: WireValue?
+        let burnoutIndexRisk: WireValue?
+    }
+
+    let date: String
+    let metrics: Metrics?
+
+    var model: DailyMetrics {
+        return DailyMetrics(date: date, burnoutIndexScore: metrics?.burnoutIndexScore?.numberValue,
+                            burnoutIndexRisk: metrics?.burnoutIndexRisk?.textValue)
+    }
+}
+
+struct WireDayPage: CursorPage {
+    let days: [WireDay]?
+    let cursor: String?
+
+    var pageItems: [WireDay] {
+        return days ?? []
+    }
+}
+
+struct WireParameter: Decodable {
+    let name: String?
+    let field: String?
+    let read: String?
+    let unit: String?
+    let format: String?
+
+    var model: CatalogueParameter {
+        return CatalogueParameter(name: name ?? "", field: field, read: read ?? "none", unit: unit ?? "", format: format ?? "")
+    }
+}
+
+struct WireSection: Decodable {
+    let id: String
+    let title: String?
+    let parameters: [WireParameter]?
+
+    var model: CatalogueSection {
+        let rows = (parameters ?? []).map { $0.model }
+        return CatalogueSection(id: id, title: title ?? "", parameters: rows)
+    }
+}
+
+struct WireCatalogue: Decodable {
+    let sections: [WireSection]?
+}
+
+struct WireAvailableField: Decodable {
+    let field: String
+    let latestDate: String?
+    let latestValue: WireValue?
+
+    var model: FieldAvailability {
+        var number: Double?
+        var text: String?
+        if let value = latestValue {
+            switch value {
+            case .number(let found):
+                number = found
+            case .text(let found):
+                text = found
+            case .flag(let found):
+                text = found ? "Yes" : "No"
+            case .other:
+                break
+            }
+        }
+        return FieldAvailability(field: field, latestDate: latestDate ?? "", latestNumber: number, latestText: text)
+    }
+}
+
+struct WireAvailability: Decodable {
+    let fields: [WireAvailableField]?
+}
+
+struct WireSeriesPoint: Decodable {
+    let date: String
+    let value: WireValue?
+}
+
+struct WireSeries: Decodable {
+    let unit: String?
+    let points: [WireSeriesPoint]?
+}
+
+// MARK: Sessions
+
+struct WireStartedSession: Decodable {
+    struct Session: Decodable {
+        let id: String
+    }
+
+    let session: Session
+    let joined: Bool?
+}
+
+struct WireTrace: Decodable {
+    let status: String?
+    let stressDrop: Double?
+}
+
+// MARK: Consent: GET /v1/me/consent
+
+struct WireConsent: Decodable {
+    let aiAssistant: Bool?
+    let productAnalytics: Bool?
+}

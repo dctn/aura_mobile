@@ -34,9 +34,9 @@ enum AuraColor {
     static let ringInner = Color(hex: 0x34C759)
 
     // Run screen accents (Figma "Modes active").
-    static let runFocus = Color(hex: 0x0088FF)
+    static let runFocus = Color(hex: 0x007AFF)
     static let runFlow = Color(hex: 0xAF52DE)
-    static let runMeeting = Color(hex: 0x30B0C7)
+    static let runMeeting = Color(hex: 0x5AC8FA)
     static let runBreathe = Color(hex: 0x32ADE6)
     static let runMeditate = Color(hex: 0xAF52DE)
     static let runNap = Color(hex: 0x5E5CE6)

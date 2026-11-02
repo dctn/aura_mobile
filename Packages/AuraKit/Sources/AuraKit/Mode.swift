@@ -18,6 +18,19 @@ public struct BreathPattern: Codable, Sendable, Equatable {
         self.in = inhale; self.hold = hold; self.out = out; self.hold2 = hold2
     }
     public static let coherent = BreathPattern(in: 5, out: 5)
+
+    /// "In 4 · Hold 4 · Out 4 · Hold 4", leaving out empty holds.
+    public var line: String {
+        var parts = ["In \(Self.seconds(self.in))"]
+        if let first = hold, first > 0 { parts.append("Hold \(Self.seconds(first))") }
+        parts.append("Out \(Self.seconds(out))")
+        if let second = hold2, second > 0 { parts.append("Hold \(Self.seconds(second))") }
+        return parts.joined(separator: " · ")
+    }
+
+    private static func seconds(_ value: Double) -> String {
+        return value == value.rounded() ? String(Int(value)) : String(value)
+    }
 }
 
 /// One entry of App/Resources/modes.json (65 modes).
@@ -71,16 +84,47 @@ public struct Mode: Codable, Sendable, Identifiable, Equatable {
 
     /// The small caps line over a run's title, e.g. "BREATHE · 5 MIN".
     public func kicker(minutes length: Int) -> String {
-        let word: String
-        switch shelf {
-        case .focus: word = kind == "meeting" ? "MEETING" : "FOCUS"
-        case .breathe: word = "BREATHE"
-        case .meditate: word = "MEDITATE"
-        case .sleep: word = run == .winddown ? "RECOVERY" : "NAP"
-        case .movement: word = "MOVE"
-        default: word = pattern != nil ? "BREATHE" : "RECOVERY"
-        }
-        return length == 0 ? "\(word) · OPEN" : "\(word) · \(length) MIN"
+        return length == 0 ? "\(runWord) · OPEN" : "\(runWord) · \(length) MIN"
+    }
+
+    /// Frames 03 to 11: said by what the run does, so a walk on any shelf says MOVE.
+    private var runWord: String {
+        if shelf == .focus { return kind == "meeting" ? "MEETING" : "FOCUS" }
+        if run == .breathe || pattern != nil { return "BREATHE" }
+        if run == .guided { return "MEDITATE" }
+        if night == true { return "NAP" }
+        if kind == "walk" { return "MOVE" }
+        return "RECOVERY"
+    }
+
+    /// The length pill: "10m", "8h", "1h 30m", "Open".
+    public static func lengthText(_ minutes: Int) -> String {
+        if minutes <= 0 { return "Open" }
+        if minutes < 60 { return "\(minutes)m" }
+        let hours = minutes / 60
+        let rest = minutes % 60
+        return rest == 0 ? "\(hours)h" : "\(hours)h \(rest)m"
+    }
+
+    /// True when the search text is in the name or the tile word. Empty text matches everything.
+    public func matches(search text: String) -> Bool {
+        let query = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if query.isEmpty { return true }
+        return name.localizedCaseInsensitiveContains(query) || word.localizedCaseInsensitiveContains(query)
+    }
+
+    /// Where a plan mode's calendar block goes: its fixed start today while that's still ahead, otherwise tomorrow.
+    /// A day off starts at 09:00 and an evening without a drink at 18:00, as on the website.
+    public func planSlot(now: Date, calendar: Calendar = .current) -> (start: Date, end: Date) {
+        let hour = id == "alcohol-free-evening" ? 18 : 9
+        let parts = calendar.dateComponents([.hour, .minute], from: now)
+        let minuteNow = (parts.hour ?? 0) * 60 + (parts.minute ?? 0)
+        let today = calendar.startOfDay(for: now)
+        let daysAhead = minuteNow < hour * 60 ? 0 : 1
+        let day = calendar.date(byAdding: .day, value: daysAhead, to: today) ?? today
+        let start = calendar.date(bySettingHour: hour, minute: 0, second: 0, of: day) ?? day
+        let length = minutes > 0 ? minutes : 60
+        return (start: start, end: start.addingTimeInterval(TimeInterval(length) * 60))
     }
 
     /// Picks the Now cards: not in avoided hours, best-hour modes first, at most `limit`.

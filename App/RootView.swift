@@ -27,6 +27,7 @@ struct MainTabs: View {
 
     var body: some View {
         @Bindable var run = model.run
+        @Bindable var shared = model
         TabView {
             Tab("Home", systemImage: "heart.fill") {
                 NavigationStack { HomeView() }.runBarAboveTabs()
@@ -41,6 +42,9 @@ struct MainTabs: View {
         .tint(AuraColor.blue)
         .fullScreenCover(isPresented: $run.isExpanded) {
             RunScreen()
+        }
+        .sheet(isPresented: $shared.needsConsent) {
+            ConsentSheet()
         }
     }
 }

@@ -161,6 +161,12 @@ struct IconTile: View {
 struct ModeTile: View {
     let mode: Mode
 
+    private var lengthText: String {
+        if mode.minutes == 0 { return "Open" }
+        if mode.minutes >= 120 { return "\(mode.minutes / 60) Hours" }
+        return String(format: "%02d Minutes", mode.minutes)
+    }
+
     var body: some View {
         HStack(spacing: 10) {
             IconTile(symbol: mode.shelf.symbol, color: mode.shelf.color)
@@ -169,7 +175,7 @@ struct ModeTile: View {
                     .font(.system(size: 15, weight: .medium))
                     .foregroundStyle(mode.shelf.color)
                     .lineLimit(1)
-                Text(mode.minutes == 0 ? "Open" : String(format: "%02d Minutes", mode.minutes))
+                Text(lengthText)
                     .font(.system(size: 15, weight: .medium))
                     .foregroundStyle(.black)
                     .lineLimit(1)

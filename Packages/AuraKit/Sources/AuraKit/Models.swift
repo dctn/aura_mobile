@@ -15,6 +15,13 @@ public struct AppConfig: Codable, Sendable, Equatable {
     public var consentPolicyVersion: String
     public var services: [String: String]
 
+    public init(stage: String, region: String, userPoolId: String, clientId: String, platform: String, appVersion: String,
+                consentPolicyVersion: String, services: [String: String]) {
+        self.stage = stage; self.region = region; self.userPoolId = userPoolId; self.clientId = clientId
+        self.platform = platform; self.appVersion = appVersion; self.consentPolicyVersion = consentPolicyVersion
+        self.services = services
+    }
+
     public func baseURL(_ service: ServiceName) -> URL? {
         services[service.rawValue].flatMap(URL.init(string:))
     }

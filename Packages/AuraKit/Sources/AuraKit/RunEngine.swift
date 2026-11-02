@@ -134,6 +134,22 @@ public struct RunEngine: Codable, Equatable, Sendable {
         return min(count - 1, Int(elapsed(at: now) / (duration / Double(count))))
     }
 
+    /// Frame 13's question: "End now? 19 minutes left.", or the time so far when open-ended.
+    public func endEarlyTitle(at now: Date) -> String {
+        if isOpenEnded { return "End now? \(Self.clock(elapsed(at: now))) so far." }
+        let left = max(0, duration - elapsed(at: now))
+        if left < 60 { return "End now? Less than a minute left." }
+        let minutes = Int((left / 60).rounded(.up))
+        return "End now? \(minutes) minute\(minutes == 1 ? "" : "s") left."
+    }
+
+    /// How long a finished run lasted, for the Done sheet: "5 minutes", "1 minute", "Under a minute".
+    public static func lengthText(_ seconds: TimeInterval) -> String {
+        let minutes = Int((seconds / 60).rounded())
+        if minutes < 1 { return "Under a minute" }
+        return "\(minutes) minute\(minutes == 1 ? "" : "s")"
+    }
+
     /// "09:54" (or "1:02:03" past an hour).
     public static func clock(_ seconds: TimeInterval) -> String {
         let total = Int(seconds.rounded(.up))
