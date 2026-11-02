@@ -1,0 +1,60 @@
+# Builds and tests the iPhone app on every push to ios-app (or by hand from the Actions tab).
+# Uses stub data only: no sign-in, no secrets, nothing reaches AWS. Actions are pinned to commits.
+name: ios
+
+on:
+  push:
+    branches: [ios-app]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Install tools
+        run: brew install xcodegen xcbeautify
+      - name: Versions
+        run: |
+          sw_vers
+          xcodebuild -version
+          swift --version
+          xcrun simctl list devices available | grep -E 'iPhone 1[67]' || true
+      - name: AuraKit tests
+        working-directory: Packages/AuraKit
+        run: |
+          set -o pipefail
+          swift test 2>&1 | tee "$GITHUB_WORKSPACE/aurakit-test.log" | xcbeautify --renderer github-actions
+      - name: Generate the Xcode project
+        run: xcodegen generate
+      - name: Build, then walk the screens on stub data
+        env:
+          TEST_RUNNER_SCREENSHOT_DIR: ${{ github.workspace }}/screenshots
+        run: |
+          mkdir -p screenshots
+          set -o pipefail
+          xcodebuild test \
+            -project AuraClarus.xcodeproj -scheme AuraClarus \
+            -destination 'platform=iOS Simulator,name=iPhone 17 Pro' \
+            -resultBundlePath TestResults.xcresult \
+            CODE_SIGNING_ALLOWED=NO \
+            2>&1 | tee app-test.log | xcbeautify --renderer github-actions
+      - name: Keep the screenshots and logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ios-results
+          path: |
+            screenshots
+            aurakit-test.log
+            app-test.log
+          retention-days: 14
+          if-no-files-found: warn

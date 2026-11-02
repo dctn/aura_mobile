@@ -1,0 +1,50 @@
+# The Xcode project is generated from this file (xcodegen generate). It's never edited by hand or committed.
+name: AuraClarus
+options:
+  bundleIdPrefix: info.ibtaura
+  deploymentTarget:
+    iOS: "26.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    TARGETED_DEVICE_FAMILY: "1"
+packages:
+  AuraKit:
+    path: Packages/AuraKit
+targets:
+  AuraClarus:
+    type: application
+    platform: iOS
+    sources:
+      - path: App
+    dependencies:
+      - package: AuraKit
+    info:
+      path: App/Info.plist
+      properties:
+        CFBundleDisplayName: Aura Clarus
+        UILaunchScreen: {}
+        UIUserInterfaceStyle: Light
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+        ITSAppUsesNonExemptEncryption: false
+  AuraClarusUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: UITests
+    dependencies:
+      - target: AuraClarus
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: "YES"
+schemes:
+  AuraClarus:
+    build:
+      targets:
+        AuraClarus: all
+    test:
+      targets:
+        - AuraClarusUITests
