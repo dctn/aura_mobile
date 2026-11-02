@@ -1,7 +1,7 @@
 import AuraKit
 import SwiftUI
 
-/// Frame Search _ Movement: rows with a latest value, the About text the Figma has, then the rows with none.
+/// Frame Search _ Movement: rows with data, the About text the Figma has, then the rows with none.
 struct SearchCategoryView: View {
     let section: CatalogueSection
 
@@ -74,14 +74,14 @@ private struct SearchCategoryLists: View {
         }
         if !rows.available.isEmpty {
             SectionTitle("Available Data").metricTitleInset()
-            SearchAvailableList(sectionId: section.id, rows: rows.available)
+            SearchAvailableList(section: section, rows: rows.available)
         }
         if !isFiltering {
             SearchCategoryAbout(section: section)
         }
         if !rows.empty.isEmpty {
             SectionTitle("No Data Available").metricTitleInset()
-            SearchNoDataList(rows: rows.empty)
+            SearchNoDataList(sectionTitle: section.title, rows: rows.empty)
             Footnote(text: "These parameters have no recorded data yet. They move up into the section above once data comes in.")
                 .metricTitleInset()
         }
@@ -111,28 +111,28 @@ private struct SearchCategoryAbout: View {
 }
 
 private struct SearchAvailableList: View {
-    let sectionId: String
+    let section: CatalogueSection
     let rows: [MetricAvailableRow]
 
     var body: some View {
         SearchGroupCard {
             ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
                 if index > 0 { SearchRowDivider() }
-                SearchAvailableLink(sectionId: sectionId, row: row)
+                SearchAvailableLink(section: section, row: row)
             }
         }
     }
 }
 
 private struct SearchAvailableLink: View {
-    let sectionId: String
+    let section: CatalogueSection
     let row: MetricAvailableRow
 
     var body: some View {
         if row.parameter.hasSeries, let field = row.parameter.field {
             NavigationLink {
                 MetricView(name: row.parameter.name, field: field, unit: row.parameter.unit,
-                           format: row.parameter.format, backTitle: "Search")
+                           format: row.parameter.format, backTitle: section.title)
             } label: {
                 label(showsChevron: true)
             }
@@ -144,41 +144,37 @@ private struct SearchAvailableLink: View {
     }
 
     private func label(showsChevron: Bool) -> SearchGroupRow {
-        let style = SearchCategoryStyle.of(sectionId: sectionId)
-        let parameter = row.parameter
-        let isNumber = row.availability.latestNumber != nil
-        let shownUnit = isNumber ? MetricMaths.shownUnit(format: parameter.format, unit: parameter.unit) : ""
+        let style = SearchCategoryStyle.of(sectionId: section.id)
         return SearchGroupRow(symbol: style.symbol,
                               symbolColor: style.color,
-                              title: parameter.name,
-                              detail: MetricMaths.shortDay(row.availability.latestDate),
-                              value: MetricMaths.latestText(row.availability, format: parameter.format, unit: parameter.unit),
-                              unit: shownUnit,
+                              title: row.parameter.name,
                               showsChevron: showsChevron)
     }
 }
 
 private struct SearchNoDataList: View {
+    let sectionTitle: String
     let rows: [CatalogueParameter]
 
     var body: some View {
         SearchGroupCard {
             ForEach(Array(rows.enumerated()), id: \.element.id) { index, parameter in
                 if index > 0 { SearchRowDivider(leading: 20) }
-                SearchNoDataRow(parameter: parameter)
+                SearchNoDataRow(sectionTitle: sectionTitle, parameter: parameter)
             }
         }
     }
 }
 
 private struct SearchNoDataRow: View {
+    let sectionTitle: String
     let parameter: CatalogueParameter
 
     var body: some View {
         if parameter.hasSeries, let field = parameter.field {
             NavigationLink {
                 MetricView(name: parameter.name, field: field, unit: parameter.unit,
-                           format: parameter.format, backTitle: "Search")
+                           format: parameter.format, backTitle: sectionTitle)
             } label: {
                 SearchGroupRow(title: parameter.name)
             }

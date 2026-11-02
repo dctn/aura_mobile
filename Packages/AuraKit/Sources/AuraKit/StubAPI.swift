@@ -8,18 +8,18 @@ public final class StubAPI: AuraAPI, @unchecked Sendable {
         DayKey.string(Calendar.current.date(byAdding: .day, value: offset, to: Date()) ?? Date())
     }
 
-    private func today(hour: Int, minute: Int) -> Date {
-        Calendar.current.date(bySettingHour: hour, minute: minute, second: 0, of: Date()) ?? Date()
-    }
-
     public func scoresToday() async throws -> ScoresToday {
-        ScoresToday(attention: Score(name: "Attention", value: 96), memory: Score(name: "Memory", value: 82),
-                    thinking: Score(name: "Thinking", value: 90), focus: Score(name: "Focus", value: 71))
+        ScoresToday(attention: Score(name: "Attention", value: 75), memory: Score(name: "Memory", value: 50),
+                    thinking: Score(name: "Thinking", value: 50), focus: Score(name: "Focus", value: 71))
     }
 
+    /// Always ahead of the clock, so Upcoming shows them whenever CI runs.
     public func events(from: Date, to: Date) async throws -> [CalendarEvent] {
-        [CalendarEvent(id: "e1", title: "10 Min nap", start: today(hour: 12, minute: 15), end: today(hour: 12, minute: 30), kind: "recovery"),
-         CalendarEvent(id: "e2", title: "Xcode Building", start: today(hour: 12, minute: 30), end: today(hour: 13, minute: 30), kind: "focus")]
+        let now = Date()
+        let nap = now.addingTimeInterval(15 * 60)
+        let building = nap.addingTimeInterval(15 * 60)
+        return [CalendarEvent(id: "e1", title: "10 Min nap", start: nap, end: building, kind: "recovery"),
+                CalendarEvent(id: "e2", title: "Xcode Building", start: building, end: building.addingTimeInterval(60 * 60), kind: "focus")]
     }
 
     public func tasks() async throws -> [TaskItem] {

@@ -73,14 +73,11 @@ struct SearchRowDivider: View {
     }
 }
 
-/// One row of a card: an optional icon, the title with an optional date, then a value and a chevron.
+/// One row of a card: an optional icon, the title and a chevron.
 struct SearchGroupRow: View {
     var symbol: String?
     var symbolColor: Color = AuraColor.green
     let title: String
-    var detail: String?
-    var value: String?
-    var unit: String?
     var showsChevron = true
 
     var body: some View {
@@ -91,9 +88,12 @@ struct SearchGroupRow: View {
                     .foregroundStyle(symbolColor)
                     .frame(width: 30)
             }
-            titles
+            Text(title)
+                .font(.system(size: 20, weight: .medium))
+                .foregroundStyle(.black)
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
             Spacer(minLength: 8)
-            valueLabel
             if showsChevron {
                 Image(systemName: "chevron.right")
                     .font(.system(size: 16, weight: .medium))
@@ -104,41 +104,6 @@ struct SearchGroupRow: View {
         .padding(.trailing, 20)
         .frame(minHeight: 60)
         .contentShape(Rectangle())
-    }
-
-    private var titles: some View {
-        VStack(alignment: .leading, spacing: 1) {
-            Text(title)
-                .font(.system(size: 20, weight: .medium))
-                .foregroundStyle(.black)
-                .lineLimit(1)
-                .minimumScaleFactor(0.75)
-            if let detail {
-                Text(detail)
-                    .font(.system(size: 13))
-                    .foregroundStyle(MetricText.grey)
-                    .lineLimit(1)
-            }
-        }
-        .layoutPriority(1)
-    }
-
-    @ViewBuilder
-    private var valueLabel: some View {
-        if let value {
-            HStack(alignment: .firstTextBaseline, spacing: 2) {
-                Text(value)
-                    .font(.system(size: 20, weight: .medium))
-                    .foregroundStyle(.black)
-                    .lineLimit(1)
-                if let unit, !unit.isEmpty {
-                    Text(unit)
-                        .font(.system(size: 15))
-                        .foregroundStyle(MetricText.grey)
-                        .lineLimit(1)
-                }
-            }
-        }
     }
 }
 
@@ -179,11 +144,31 @@ enum MetricText {
 }
 
 extension View {
-    /// The Figma's pushed pages: the native back button with no label, then the page below's name as a big title.
+    /// The Figma's pushed pages: the native back button with no label, and a big title beside it on the same line.
+    /// The clear item stops the bar also drawing `navigationTitle` in the middle.
     func metricBackBar(_ title: String) -> some View {
         navigationTitle(title)
-            .toolbarTitleDisplayMode(.inlineLarge)
+            .navigationBarTitleDisplayMode(.inline)
             .toolbarRole(.editor)
+            .toolbar {
+                ToolbarItem(placement: .principal) {
+                    Color.clear
+                        .frame(width: 1, height: 1)
+                        .accessibilityHidden(true)
+                }
+                .sharedBackgroundVisibility(.hidden)
+                ToolbarItem(placement: .topBarLeading) {
+                    Text(title)
+                        .font(.system(size: 30, weight: .bold))
+                        .tracking(-0.4)
+                        .foregroundStyle(.black)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.6)
+                        .frame(maxWidth: 300, alignment: .leading)
+                        .accessibilityAddTraits(.isHeader)
+                }
+                .sharedBackgroundVisibility(.hidden)
+            }
     }
 
     /// Section titles and footnotes start 20 pt inside the cards' edge.

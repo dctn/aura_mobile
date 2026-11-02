@@ -23,9 +23,15 @@ final class HomeWalkTests: WalkTestCase {
 
         tap(app.navigationBars.buttons.element(boundBy: 0), "Back from Calendar")
 
-        let gearById = app.buttons["home-settings"]
-        let gear = gearById.waitForExistence(timeout: 5) ? gearById : app.buttons["Settings"]
-        tap(gear, "Settings gear")
+        openTab("Search")
+        let settings = app.buttons["search-place-Settings"]
+        XCTAssertTrue(settings.waitForExistence(timeout: 10), "Not found: Settings row")
+        var swipes = 0
+        while swipes < 8, !(settings.isHittable && settings.frame.maxY < app.tabBars.firstMatch.frame.minY) {
+            app.swipeUp()
+            swipes += 1
+        }
+        settings.tap()
         _ = app.buttons["settings-sign-out"].waitForExistence(timeout: 5)
         save("14-settings")
     }

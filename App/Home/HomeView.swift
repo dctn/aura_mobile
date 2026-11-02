@@ -13,16 +13,11 @@ struct HomeView: View {
             HomeWorkSection()
             HomePinsSection()
         }
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                NavigationLink {
-                    SettingsView()
-                } label: {
-                    Image(systemName: "gearshape")
-                }
-                .accessibilityLabel("Settings")
-                .accessibilityIdentifier("home-settings")
-            }
+        // The Figma has no bar here, so Insights sits at the top. Settings opens from Search, as in the Figma.
+        .toolbar(.hidden, for: .navigationBar)
+        // An empty bar, so text scrolling up fades under the status bar instead of running through it.
+        .safeAreaBar(edge: .top) {
+            Color.clear.frame(height: 1)
         }
         .navigationDestination(item: $modeRoute) { route in
             HomeModeDestination(route: route)

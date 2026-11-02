@@ -51,8 +51,7 @@ private struct HomeCalendarList: View {
         AuraPage {
             content
         }
-        .navigationTitle("Calendar")
-        .navigationBarTitleDisplayMode(.large)
+        .metricBackBar("Calendar")
         .task(id: loadKey) { await load() }
     }
 
@@ -127,8 +126,7 @@ private struct HomeTaskList: View {
         AuraPage {
             content
         }
-        .navigationTitle("Tasks")
-        .navigationBarTitleDisplayMode(.large)
+        .metricBackBar("Tasks")
         .task(id: loadKey) { await load() }
     }
 

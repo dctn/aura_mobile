@@ -82,6 +82,9 @@ final class RunWalkTests: WalkTestCase {
         startMode("box", search: "box")
         let done = element("run-done")
         XCTAssertTrue(done.waitForExistence(timeout: 20), "No Done sheet")
+        // The summary adds its saved line once the backend has answered.
+        let saved = app.staticTexts.containing(NSPredicate(format: "label CONTAINS 'Saved'")).firstMatch
+        XCTAssertTrue(saved.waitForExistence(timeout: 10), "The Done sheet never said Saved")
         save("33-done")
         done.tap()
         XCTAssertTrue(element("mode-start").waitForExistence(timeout: 10), "Done didn't go back to the page")

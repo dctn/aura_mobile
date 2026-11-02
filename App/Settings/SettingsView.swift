@@ -32,8 +32,7 @@ struct SettingsView: View {
             }
             signOutButton
         }
-        .navigationTitle("Settings")
-        .navigationBarTitleDisplayMode(.large)
+        .metricBackBar("Settings")
     }
 
     private func row(label: String, value: String) -> some View {
