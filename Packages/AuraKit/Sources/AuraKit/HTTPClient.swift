@@ -9,8 +9,9 @@ protocol AccessTokenSource: Sendable {
     func accessToken() async throws -> String
     /// The API answered 401 to `rejected`: a newer token, refreshing only if nobody already has.
     func refreshedToken(rejected: String) async throws -> String
-    /// The API refused a token that had just been refreshed, so the session is over.
-    func tokenRejected(_ token: String) async
+    /// The API refused a token that had just been refreshed. True when that ended the session, false when a newer
+    /// token has already replaced it and the session goes on.
+    func tokenRejected(_ token: String) async -> Bool
 }
 
 /// At most `limit` requests open at once. Dev's account runs few Lambdas at a time, so leave room for the backend.
@@ -119,24 +120,30 @@ actor ServiceClient {
 
     /// One call: returns the body of a 2xx, throws `AuraError` for anything else. `path` must already be escaped.
     func send(_ service: ServiceName, _ method: String, _ path: String, query: [String: String] = [:],
-              body: Data? = nil) async throws -> Data {
+              body: Data? = nil, headers: [String: String] = [:]) async throws -> Data {
         let url = try makeURL(service, path, query)
         var refreshed = false
+        var triedNewer = false
         var throttled = 0
         var consentTries = 0
         while true {
             let token = try await tokens.accessToken()
-            let request = makeRequest(url, method, body, token)
+            let request = makeRequest(url, method, body, token, headers)
             let reply = try await transmit(request)
             if (200..<300).contains(reply.status) { return reply.data }
             if reply.status == 401 {
-                if refreshed {
-                    await tokens.tokenRejected(token)
-                    throw AuraError.signedOut
+                if !refreshed {
+                    _ = try await tokens.refreshedToken(rejected: token)
+                    refreshed = true
+                    continue
                 }
-                _ = try await tokens.refreshedToken(rejected: token)
-                refreshed = true
-                continue
+                let ended = await tokens.tokenRejected(token)
+                if ended { throw AuraError.signedOut }
+                // Another call refreshed while this one was out, so the session is fine: one more go with the newer token.
+                if !triedNewer {
+                    triedNewer = true
+                    continue
+                }
             }
             let failure = ServiceFailure(status: reply.status, data: reply.data)
             if reply.status == 503, !failure.hasErrorBody, throttled < ServiceClient.throttleDelays.count {
@@ -183,7 +190,8 @@ actor ServiceClient {
         return url
     }
 
-    private func makeRequest(_ url: URL, _ method: String, _ body: Data?, _ token: String) -> URLRequest {
+    private func makeRequest(_ url: URL, _ method: String, _ body: Data?, _ token: String,
+                             _ headers: [String: String]) -> URLRequest {
         var request = URLRequest(url: url)
         request.httpMethod = method
         request.timeoutInterval = 25
@@ -191,6 +199,9 @@ actor ServiceClient {
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue(TimeZone.current.identifier, forHTTPHeaderField: "X-Time-Zone")
         request.setValue("\(config.platform)/\(config.appVersion)", forHTTPHeaderField: "X-Aura-App")
+        for (name, value) in headers {
+            request.setValue(value, forHTTPHeaderField: name)
+        }
         if let body = body {
             request.httpBody = body
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")

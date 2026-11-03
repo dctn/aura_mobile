@@ -19,8 +19,11 @@ final class SearchWalkTests: WalkTestCase {
         XCTAssertTrue(element("metric-range-1").waitForExistence(timeout: 10), "The metric page never opened")
         save("44-metric")
         tap(element("metric-range-1"), "1 Month")
+        // The white lozenge is still sliding right after the tap.
+        Thread.sleep(forTimeInterval: 0.8)
         save("45-metric-range")
         tap(element("metric-range-2"), "2 Months")
+        Thread.sleep(forTimeInterval: 0.8)
         save("45-metric-range-2")
         app.swipeUp()
         save("46-metric-lower")

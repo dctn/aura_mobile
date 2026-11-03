@@ -31,6 +31,9 @@ final class AppModel {
     }
 
     @ObservationIgnored private let defaults: UserDefaults
+    /// The day the screens last loaded for, so coming back on a new day loads them again.
+    @ObservationIgnored private var loadedDay = DayKey.string(Date())
+    @ObservationIgnored private var timeZoneSent = false
     private static let pinsKey = "pinnedMetrics"
 
     init(api: any AuraAPI, auth: any AuthService, modes: [Mode], defaults: UserDefaults = .standard) {
@@ -72,10 +75,19 @@ final class AppModel {
     }
 
     func signOut() async {
-        run.close()
+        // First, while the token still works.
+        await run.endForSignOut()
         await auth.signOut()
-        // Pins are saved per phone, so the next account mustn't inherit them.
+        clearForSignedOut()
+    }
+
+    /// Pins, the run and its notification are saved per phone, so the next account mustn't inherit them. Safe to repeat:
+    /// `run.close()` makes no backend call, so nothing here can come back through `run.onError` and `note`.
+    private func clearForSignedOut() {
+        run.close()
         pins = []
+        needsConsent = false
+        timeZoneSent = false
         authState = .signedOut
     }
 
@@ -84,9 +96,28 @@ final class AppModel {
         guard let error = error as? AuraError else { return }
         switch error {
         case .consentRequired: needsConsent = true
-        case .signedOut: authState = .signedOut
+        case .signedOut: clearForSignedOut()
         default: break
         }
+    }
+
+    /// Once per sign-in, and it doesn't matter if it fails.
+    func sendTimeZoneIfNeeded() {
+        guard case .some(.signedIn) = authState, !timeZoneSent else { return }
+        timeZoneSent = true
+        let api = self.api
+        let identifier = TimeZone.current.identifier
+        Task {
+            try? await api.setTimeZoneIfMissing(identifier)
+        }
+    }
+
+    /// Screens only load when `dataVersion` changes, so without this Home would still show yesterday after midnight.
+    func reloadIfNewDay() {
+        let today = DayKey.string(Date())
+        guard today != loadedDay else { return }
+        loadedDay = today
+        dataVersion += 1
     }
 
     /// Grants consent, then makes every screen load again through `dataVersion`.

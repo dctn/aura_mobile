@@ -177,6 +177,8 @@ actor AuthSession {
     }
 
     func restore() -> AuthTokens? {
+        // A call can beat RootView here on a cold launch. A new epoch now would fail the refresh that call started.
+        if let held = tokens { return held }
         var saved: AuthTokens?
         if let found = try? store.load(), !found.sub.isEmpty {
             saved = found
@@ -225,10 +227,12 @@ actor AuthSession {
         return fresh.accessToken
     }
 
-    func tokenRejected(_ token: String) {
-        if tokens?.accessToken == token {
-            clear()
-        }
+    /// True when the session is over, false when a newer token has already replaced the refused one.
+    func tokenRejected(_ token: String) -> Bool {
+        guard let held = tokens else { return true }
+        if held.accessToken != token { return false }
+        clear()
+        return true
     }
 
     func noteConfirmedWithoutSession(_ email: String) {
@@ -375,8 +379,8 @@ public final class CognitoAuth: AuthService, AccessTokenSource, Sendable {
         return try await session.refreshedToken(rejected: rejected)
     }
 
-    func tokenRejected(_ token: String) async {
-        await session.tokenRejected(token)
+    func tokenRejected(_ token: String) async -> Bool {
+        return await session.tokenRejected(token)
     }
 
     // MARK: The steps

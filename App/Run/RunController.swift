@@ -11,15 +11,35 @@ struct ActiveRun: Codable, Equatable {
     var minutes: Int
     var title: String
     var engine: RunEngine
+    /// Sent as the new session's id. A repeated id returns the stored session, so a start can be tried again.
+    var startId = UUID().uuidString.lowercased()
+    /// The id the backend answered with, which isn't `startId` when the start joined a running session.
     var sessionId: String?
     /// True once the session has been asked for, after any 3-2-1.
     var sessionBegun = false
+    /// The backend refused the start because today's work limit is used up. Not tried again.
+    var workLimitReached = false
     /// Set when the run is over: time up or Mark as done. The Done sheet shows from here.
     var finishedAt: Date?
     /// Wind-down's "For tomorrow" text, one thing a line.
     var tomorrowList = ""
-    /// True when the final `.complete` didn't reach the backend, so the Done sheet doesn't say "Saved".
-    var completeFailed = false
+    /// True once the final `.complete` reached the backend, or the backend had already ended the session.
+    var completeDelivered = false
+    /// Wind-down: the lines still to go out as tasks. Nil until the run ends.
+    var tomorrowLeft: [String]?
+
+    /// The Done sheet only says "Saved" when this is true.
+    var isSaved: Bool {
+        return completeDelivered && (tomorrowLeft ?? []).isEmpty
+    }
+
+    var tomorrowLines: [String] {
+        guard mode.run == .winddown else { return [] }
+        return tomorrowList
+            .split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+    }
 }
 
 /// Drives every run from `RunEngine`, which works from the clock. Nothing counts: one task sleeps until the next thing
@@ -43,8 +63,13 @@ final class RunController {
 
     @ObservationIgnored private var wake: Task<Void, Never>? = nil
     @ObservationIgnored private var sessionStart: Task<String?, Never>? = nil
-    /// The last session action sent. Each one waits for the one before, so they reach the backend in order.
+    /// The last thing sent. Each one waits for the one before, so they reach the backend in order. Outlives `close()`,
+    /// so a new run's start can't overtake the old run's stop and join the session that stop is about to end.
     @ObservationIgnored private var lastAction: Task<Void, Never>? = nil
+    // What's in flight, by the run's `engine.startsAt`, so a retry doesn't send it twice.
+    @ObservationIgnored private var startingFor: Date? = nil
+    @ObservationIgnored private var completingFor: Date? = nil
+    @ObservationIgnored private var sendingTasksFor: Date? = nil
     @ObservationIgnored private var foregroundObserver: (any NSObjectProtocol)? = nil
 
     private static let storeKey = "activeRun"
@@ -89,11 +114,39 @@ final class RunController {
         wake?.cancel()
         wake = nil
         sessionStart = nil
-        lastAction = nil
         cancelEndNotification()
         active = nil
         isExpanded = false
         save()
+    }
+
+    /// Sign-out, while the token still works: ends the session on the backend, waits a few seconds at most, then clears.
+    func endForSignOut() async {
+        if let run = active {
+            if run.finishedAt != nil {
+                retryWhatFailed()
+            } else if run.sessionBegun {
+                send(.stop)
+            }
+        }
+        await wait(for: lastAction, seconds: 3)
+        close()
+    }
+
+    /// A task group can't do this: it wouldn't return until `task.value` did, however long that takes.
+    private func wait(for task: Task<Void, Never>?, seconds: Double) async {
+        guard let task else { return }
+        let (stream, continuation) = AsyncStream<Void>.makeStream()
+        Task {
+            await task.value
+            continuation.finish()
+        }
+        let timer = Task {
+            try? await Task.sleep(for: .seconds(seconds))
+            continuation.finish()
+        }
+        for await _ in stream {}
+        timer.cancel()
     }
 
     /// Cancel during the 3-2-1 starts nothing and calls nothing.
@@ -128,9 +181,11 @@ final class RunController {
 
     /// Frame 13's End session: saved as stopped, with no Done sheet.
     func endSession() {
-        guard let run = active else { return }
+        guard var run = active else { return }
         send(.stop)
-        sendTomorrowList(run)
+        run.tomorrowLeft = run.tomorrowLines
+        active = run
+        sendTomorrowTasks()
         close()
     }
 
@@ -159,16 +214,18 @@ final class RunController {
     /// Does whatever is due now, then sleeps until the next thing is. Also runs when the app comes back to the front.
     func refresh() {
         update(canBeep: true)
+        retryWhatFailed()
     }
 
     private func update(canBeep: Bool) {
         guard let run = active, run.finishedAt == nil else { return }
         let now = Date()
+        // Before the time-up check: the whole run may have passed while locked, and `.complete` must follow the start.
+        if now >= run.engine.startsAt, !run.sessionBegun { beginSession() }
         if run.engine.snapshot(at: now).phase == .timeUp {
             finish(canBeep: canBeep)
             return
         }
-        if now >= run.engine.startsAt, !run.sessionBegun { beginSession() }
         scheduleWake(now: now)
     }
 
@@ -190,12 +247,15 @@ final class RunController {
     private func finish(canBeep: Bool) {
         guard var run = active, run.finishedAt == nil else { return }
         run.finishedAt = Date()
+        run.tomorrowLeft = run.tomorrowLines
         active = run
         wake?.cancel()
         wake = nil
         cancelEndNotification()
+        // A start that failed earlier goes first, or this `.complete` would find no session and be skipped.
+        retryStart()
         send(.complete, isFinal: true)
-        sendTomorrowList(run)
+        sendTomorrowTasks()
         save()
         isExpanded = true
         if canBeep, UIApplication.shared.applicationState == .active {
@@ -211,27 +271,64 @@ final class RunController {
         run.sessionBegun = true
         active = run
         save()
+        requestSession(run)
+    }
+
+    /// Waits for whatever is still going out, so it can't be overtaken, then asks for the session with the run's own id.
+    private func requestSession(_ run: ActiveRun) {
         let api = self.api
+        let id = run.startId
         let mode = run.mode
         let title = run.title
         let startsAt = run.engine.startsAt
         let planned: Int? = run.engine.isOpenEnded ? nil : run.minutes
+        let previous = lastAction
+        startingFor = startsAt
         sessionStart = Task<String?, Never> { [weak self] in
+            _ = await previous?.value
             do {
-                let session = try await api.startSession(kind: mode.kind, mode: mode.sessionMode, plannedMinutes: planned, title: title)
-                self?.sessionStarted(id: session.id, startsAt: startsAt)
+                let session = try await api.startSession(id: id, kind: mode.kind, mode: mode.sessionMode, plannedMinutes: planned, title: title)
+                self?.sessionStarted(session, startsAt: startsAt)
                 return session.id
             } catch {
-                self?.report(error)
+                self?.startFailed(error, startsAt: startsAt)
                 return nil
             }
         }
     }
 
-    private func sessionStarted(id: String, startsAt: Date) {
-        guard active?.engine.startsAt == startsAt else { return }
-        active?.sessionId = id
+    private func sessionStarted(_ session: StartedSession, startsAt: Date) {
+        if startingFor == startsAt { startingFor = nil }
+        guard var run = active, run.engine.startsAt == startsAt else { return }
+        run.sessionId = session.id
+        let isShortened = applyGrantedLength(session, to: &run)
+        active = run
         save()
+        if isShortened {
+            scheduleEndNotification()
+            refresh()
+        }
+    }
+
+    /// The backend can grant less than was asked, so the phone mustn't count past that. Only a timed run of our own is
+    /// cut: a joined session's length belongs to another run, and flow stays open-ended even when a limit gives it one.
+    private func applyGrantedLength(_ session: StartedSession, to run: inout ActiveRun) -> Bool {
+        guard !session.joined, !isShortRun, !run.engine.isOpenEnded, run.finishedAt == nil,
+              let granted = session.plannedMinutes, granted > 0 else { return false }
+        let seconds = TimeInterval(granted) * 60
+        guard seconds < run.engine.duration else { return false }
+        run.engine.duration = seconds
+        run.minutes = granted
+        return true
+    }
+
+    private func startFailed(_ error: Error, startsAt: Date) {
+        if startingFor == startsAt { startingFor = nil }
+        if active?.engine.startsAt == startsAt, (error as? AuraError)?.serverCode == "work_limit_reached" {
+            active?.workLimitReached = true
+            save()
+        }
+        report(error)
     }
 
     private func send(_ action: SessionAction, isFinal: Bool = false) {
@@ -239,49 +336,90 @@ final class RunController {
         let savedId = active?.sessionId
         let started = sessionStart
         let previous = lastAction
+        let startsAt = active?.engine.startsAt
+        if isFinal { completingFor = startsAt }
         lastAction = Task<Void, Never> { [weak self] in
             _ = await previous?.value
             var known = savedId
             if known == nil { known = await started?.value }
             guard let id = known else {
-                if isFinal { self?.noteCompleteFailed() }
+                if isFinal { self?.completeEnded(startsAt: startsAt, delivered: false) }
                 return
             }
             do {
                 try await api.sessionAction(id: id, action: action)
+                if isFinal { self?.completeEnded(startsAt: startsAt, delivered: true) }
             } catch {
-                if isFinal { self?.noteCompleteFailed() }
-                self?.report(error)
+                // The session has already ended another way, usually the sweeper's, and its minutes are recorded.
+                let alreadyEnded = isFinal && (error as? AuraError)?.serverCode == "action_not_allowed"
+                if isFinal { self?.completeEnded(startsAt: startsAt, delivered: alreadyEnded) }
+                if !alreadyEnded { self?.report(error) }
             }
         }
     }
 
-    private func noteCompleteFailed() {
-        guard active != nil else { return }
-        active?.completeFailed = true
+    private func completeEnded(startsAt: Date?, delivered: Bool) {
+        guard active?.engine.startsAt == startsAt else { return }
+        completingFor = nil
+        guard delivered else { return }
+        active?.completeDelivered = true
         save()
     }
 
-    /// Wind-down: each line becomes a task due tomorrow.
-    private func sendTomorrowList(_ run: ActiveRun) {
-        guard run.mode.run == .winddown else { return }
-        let lines = run.tomorrowList
-            .split(whereSeparator: \.isNewline)
-            .map { $0.trimmingCharacters(in: .whitespaces) }
-            .filter { !$0.isEmpty }
-        guard !lines.isEmpty else { return }
-        let calendar = Calendar.current
-        let due = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: Date()))
+    /// Wind-down: each line left becomes a task for the day after the run ended. A sent line is struck off and saved,
+    /// so a retry doesn't add it twice.
+    private func sendTomorrowTasks() {
+        guard let run = active, let lines = run.tomorrowLeft, !lines.isEmpty,
+              sendingTasksFor != run.engine.startsAt else { return }
+        let ended = run.finishedAt ?? Date()
+        let tomorrow = Calendar.current.date(byAdding: .day, value: 1, to: ended) ?? ended
+        let plannedFor = DayKey.string(tomorrow)
         let api = self.api
-        Task { [weak self] in
+        let startsAt = run.engine.startsAt
+        let previous = lastAction
+        sendingTasksFor = startsAt
+        lastAction = Task<Void, Never> { [weak self] in
+            _ = await previous?.value
             for line in lines {
                 do {
-                    try await api.addTask(title: line, due: due)
+                    try await api.addTask(title: line, plannedFor: plannedFor)
+                    self?.tomorrowLineSent(line, startsAt: startsAt)
                 } catch {
                     self?.report(error)
                 }
             }
+            self?.tomorrowTasksEnded(startsAt: startsAt)
         }
+    }
+
+    private func tomorrowLineSent(_ line: String, startsAt: Date) {
+        guard var run = active, run.engine.startsAt == startsAt,
+              let index = run.tomorrowLeft?.firstIndex(of: line) else { return }
+        run.tomorrowLeft?.remove(at: index)
+        active = run
+        save()
+    }
+
+    private func tomorrowTasksEnded(startsAt: Date) {
+        if sendingTasksFor == startsAt { sendingTasksFor = nil }
+    }
+
+    /// On restore and on coming back to the front: tries again whatever the backend hasn't got and nothing is sending.
+    private func retryWhatFailed() {
+        guard let run = active else { return }
+        retryStart()
+        if run.finishedAt != nil, !run.completeDelivered, !run.workLimitReached, completingFor != run.engine.startsAt {
+            send(.complete, isFinal: true)
+        }
+        sendTomorrowTasks()
+    }
+
+    private func retryStart() {
+        guard let run = active, run.sessionBegun, run.sessionId == nil, !run.workLimitReached,
+              startingFor != run.engine.startsAt else { return }
+        requestSession(run)
+        // The pause that went out with no session was skipped.
+        if run.engine.isPaused { send(.pause) }
     }
 
     private func report(_ error: Error) {
@@ -335,6 +473,7 @@ final class RunController {
         active = saved
         isExpanded = true
         update(canBeep: false)
+        retryWhatFailed()
         Task { [weak self] in
             self?.scheduleEndNotification()
         }

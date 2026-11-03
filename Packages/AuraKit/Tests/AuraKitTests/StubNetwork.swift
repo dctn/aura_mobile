@@ -273,6 +273,13 @@ final class TestRig {
         return .json(400, "{\"__type\":\"\(kind)\",\"message\":\"\(message)\"}")
     }
 
+    /// A session whose every request goes to the stub.
+    static func stubSession() -> URLSession {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [StubURLProtocol.self]
+        return URLSession(configuration: configuration)
+    }
+
     let server = StubServer()
     let store: MemoryTokenStore
     let sleeps = SleepLog()
@@ -281,9 +288,7 @@ final class TestRig {
 
     init(tokens: AuthTokens? = TestRig.tokens(), config: AppConfig = TestRig.config) {
         StubServer.current = server
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.protocolClasses = [StubURLProtocol.self]
-        let session = URLSession(configuration: configuration)
+        let session = TestRig.stubSession()
         let now: @Sendable () -> Date = { TestRig.now }
         let log = sleeps
         let sleep: AuraSleep = { (seconds: TimeInterval) in

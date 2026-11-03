@@ -27,6 +27,15 @@ enum DayRanges {
         return pieces
     }
 
+    /// The day before `key`, or `key` itself if it can't be read.
+    static func dayBefore(_ key: String) -> String {
+        guard let day = DayKey.date(key, calendar: calendar),
+              let earlier = calendar.date(byAdding: .day, value: -1, to: day) else {
+            return key
+        }
+        return DayKey.string(earlier, calendar: calendar)
+    }
+
     /// `from`, moved up when the range is longer than `maxDays`.
     static func clampedStart(from: String, to: String, maxDays: Int) -> String {
         guard let first = DayKey.date(from, calendar: calendar),
@@ -66,17 +75,20 @@ public final class LiveAPI: AuraAPI, Sendable {
         return scores.model
     }
 
-    /// Events overlapping `from` to `to`. The route works in whole local days, so the extra ones are dropped here.
+    /// Events overlapping `from` to `to`. The route files an event under the local day it starts, so one running past
+    /// midnight is only found by asking from the day before. The extra ones are dropped here. An event starting more
+    /// than a day before `from` isn't found.
     public func events(from: Date, to: Date) async throws -> [CalendarEvent] {
         if from > to { return [] }
         var byId: [String: CalendarEvent] = [:]
-        let ranges = DayRanges.split(from: DayKey.string(from), to: DayKey.string(to), maxDays: LiveAPI.maxEventDays)
+        let firstDay = DayRanges.dayBefore(DayKey.string(from))
+        let ranges = DayRanges.split(from: firstDay, to: DayKey.string(to), maxDays: LiveAPI.maxEventDays)
         for range in ranges {
             let query = ["from": range.from, "to": range.to]
             let wire = try await allPages(WireEventPage.self, .calendar, "/v1/calendar/events", query: query)
             for item in wire {
                 guard let event = item.model else { continue }
-                if from == to || (event.start < to && event.end > from) {
+                if LiveAPI.overlaps(event, from: from, to: to) {
                     byId[event.id] = event
                 }
             }
@@ -147,18 +159,19 @@ public final class LiveAPI: AuraAPI, Sendable {
 
     // MARK: Sessions
 
-    public func startSession(kind: String, mode: String, plannedMinutes: Int?, title: String) async throws -> StartedSession {
+    public func startSession(id: String, kind: String, mode: String, plannedMinutes: Int?, title: String) async throws -> StartedSession {
         // The route wants the key present: null for an open-ended run. A timer without minutes is refused there.
         var planned: Any = NSNull()
         if mode != "flowtime", let minutes = plannedMinutes, minutes > 0 {
             planned = min(minutes, LiveAPI.maxPlannedMinutes)
         }
-        let body: [String: Any] = ["id": LiveAPI.newId(), "kind": kind, "mode": mode, "plannedMinutes": planned,
+        let body: [String: Any] = ["id": id, "kind": kind, "mode": mode, "plannedMinutes": planned,
                                    "title": title, "device": "phone"]
         let encoded = try LiveAPI.encode(body)
         let data = try await client.send(.session, "POST", "/v1/sessions", body: encoded)
         let started = try LiveAPI.decode(WireStartedSession.self, data)
-        return StartedSession(id: started.session.id, joined: started.joined ?? false)
+        return StartedSession(id: started.session.id, joined: started.joined ?? false,
+                              plannedMinutes: started.session.plannedMinutes)
     }
 
     public func sessionAction(id: String, action: SessionAction) async throws {
@@ -182,12 +195,8 @@ public final class LiveAPI: AuraAPI, Sendable {
         try await post(.calendar, "/v1/calendar/events", body)
     }
 
-    public func addTask(title: String, due: Date?) async throws {
-        var body: [String: Any] = ["id": LiveAPI.newId(), "title": title]
-        if let due = due {
-            body["dueAt"] = WireDate.string(due)
-            body["hasTime"] = true
-        }
+    public func addTask(title: String, plannedFor: String) async throws {
+        let body: [String: Any] = ["id": LiveAPI.newId(), "title": title, "plannedFor": plannedFor]
         try await post(.task, "/v1/tasks", body)
     }
 
@@ -204,7 +213,34 @@ public final class LiveAPI: AuraAPI, Sendable {
         await client.noteConsentGranted()
     }
 
+    // MARK: Profile
+
+    /// The route refuses a write without the version just read, so a zone set in between is never overwritten.
+    public func setTimeZoneIfMissing(_ identifier: String) async throws {
+        let body = try LiveAPI.encode(["timezone": identifier])
+        var retried = false
+        while true {
+            let me = try await get(WireMe.self, .identity, "/v1/me", query: [:])
+            if let zone = me.timezone, !zone.isEmpty { return }
+            do {
+                _ = try await client.send(.identity, "PUT", "/v1/me/profile", body: body,
+                                          headers: ["If-Match": "\"v\(me.version)\""])
+                return
+            } catch AuraError.server(_, _, let status) where status == 412 && !retried {
+                // Something else wrote to the profile since the read: read again, once.
+                retried = true
+            }
+        }
+    }
+
     // MARK: Helpers
+
+    private static func overlaps(_ event: CalendarEvent, from: Date, to: Date) -> Bool {
+        if from == to {
+            return event.start <= from && event.end >= from
+        }
+        return event.start < to && event.end > from
+    }
 
     /// Calendar blocks are focus, meeting or recovery. Anything else is left for the server to classify.
     private static func blockKind(_ kind: String) -> String? {

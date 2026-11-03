@@ -18,16 +18,23 @@ public protocol AuraAPI: Sendable {
     func series(field: String, from: String, to: String) async throws -> MetricSeries
 
     // Sessions
-    func startSession(kind: String, mode: String, plannedMinutes: Int?, title: String) async throws -> StartedSession
+    /// `id` is the caller's and is safe to resend: the same id answers with the session it made. The answer's id can
+    /// still differ, when another session was already running and this joined it.
+    func startSession(id: String, kind: String, mode: String, plannedMinutes: Int?, title: String) async throws -> StartedSession
     func sessionAction(id: String, action: SessionAction) async throws
     func sessionTrace(id: String) async throws -> SessionTrace
 
     // Things a mode adds
     func addEvent(title: String, start: Date, end: Date, kind: String) async throws
-    func addTask(title: String, due: Date?) async throws
+    /// A task meant for a day (a `DayKey`), with no time of its own.
+    func addTask(title: String, plannedFor: String) async throws
 
     // Consent
     func grantHealthConsent() async throws
+
+    // Profile
+    /// Sets the profile's time zone when it has none. One already there is never changed.
+    func setTimeZoneIfMissing(_ identifier: String) async throws
 }
 
 public enum AuthState: Sendable, Equatable {
@@ -60,14 +67,21 @@ public protocol AuthService: Sendable {
     func signOut() async
 }
 
-/// Dates the backend reads as yyyy-MM-dd, on the phone's calendar.
+/// Dates the backend reads as yyyy-MM-dd: Gregorian whatever the phone's calendar is, in the phone's time zone.
 public enum DayKey {
-    public static func string(_ date: Date, calendar: Calendar = .current) -> String {
+    public static var calendar: Calendar {
+        var gregorian = Calendar(identifier: .gregorian)
+        gregorian.timeZone = TimeZone.current
+        gregorian.locale = Locale(identifier: "en_US_POSIX")
+        return gregorian
+    }
+
+    public static func string(_ date: Date, calendar: Calendar = DayKey.calendar) -> String {
         let c = calendar.dateComponents([.year, .month, .day], from: date)
         return String(format: "%04d-%02d-%02d", c.year ?? 0, c.month ?? 0, c.day ?? 0)
     }
 
-    public static func date(_ key: String, calendar: Calendar = .current) -> Date? {
+    public static func date(_ key: String, calendar: Calendar = DayKey.calendar) -> Date? {
         let parts = key.prefix(10).split(separator: "-").compactMap { Int($0) }
         guard parts.count == 3 else { return nil }
         return calendar.date(from: DateComponents(year: parts[0], month: parts[1], day: parts[2]))

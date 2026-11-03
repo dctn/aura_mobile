@@ -9,9 +9,12 @@ final class HomeWalkTests: WalkTestCase {
         _ = app.staticTexts["Higher possibility estimated"].waitForExistence(timeout: 5)
         save("10-home-top")
 
-        app.swipeUp()
+        let insights = app.staticTexts["Insights"]
+        let top = insights.frame.minY
+        dragPage(fromY: 0.7, toY: 0.2, velocity: .default)
+        XCTAssertLessThan(insights.frame.minY, top, "Home didn't scroll")
         save("11-home-mid")
-        app.swipeUp()
+        dragPage(fromY: 0.7, toY: 0.2, velocity: .default)
         save("12-home-bottom")
 
         let calendar = app.buttons["home-work-calendar"]
@@ -45,10 +48,18 @@ final class HomeWalkTests: WalkTestCase {
             let middle = element.frame.midY
             if middle >= highest && middle <= lowest && element.isHittable { return }
             if middle > lowest {
-                app.swipeUp(velocity: .slow)
+                dragPage(fromY: 0.6, toY: 0.35, velocity: .slow)
             } else {
-                app.swipeDown(velocity: .slow)
+                dragPage(fromY: 0.35, toY: 0.6, velocity: .slow)
             }
         }
+    }
+
+    /// Drags in the page's right margin. `app.swipeUp()` starts mid-screen, where the mood slider's thumb can sit and
+    /// take the touch, so Home's swipes did nothing.
+    private func dragPage(fromY: CGFloat, toY: CGFloat, velocity: XCUIGestureVelocity) {
+        let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.97, dy: fromY))
+        let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.97, dy: toY))
+        start.press(forDuration: 0.05, thenDragTo: end, withVelocity: velocity, thenHoldForDuration: 0.1)
     }
 }

@@ -556,8 +556,8 @@ private struct RunDoneSheet: View {
 
     private var saveLine: String {
         let current = model.run.active ?? run
-        let saved = current.sessionId != nil && !current.completeFailed
-        return saved ? "Saved to your sessions." : "Not saved: Aura couldn't be reached."
+        if current.workLimitReached { return "Not saved: you've reached today's work limit." }
+        return current.isSaved ? "Saved to your sessions." : "Not saved: Aura couldn't be reached."
     }
 
     /// Only recovery and walk sessions have a stress change. Same words as the website.

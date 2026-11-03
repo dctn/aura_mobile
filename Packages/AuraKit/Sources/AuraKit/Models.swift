@@ -162,7 +162,11 @@ public struct StartedSession: Sendable, Equatable {
     public var id: String
     /// True when a session was already running and this answered with it.
     public var joined: Bool
-    public init(id: String, joined: Bool = false) { self.id = id; self.joined = joined }
+    /// What the backend granted, which a tired-day limit can make shorter than asked. Nil when open-ended.
+    public var plannedMinutes: Int?
+    public init(id: String, joined: Bool = false, plannedMinutes: Int? = nil) {
+        self.id = id; self.joined = joined; self.plannedMinutes = plannedMinutes
+    }
 }
 
 public enum SessionAction: String, Sendable { case pause, resume, stop, complete }
@@ -182,4 +186,10 @@ public enum AuraError: Error, Equatable, Sendable {
     /// Health data consent is missing: the app shows the consent step, then retries.
     case consentRequired
     case server(code: String, message: String, status: Int)
+
+    /// The backend's error code for `.server`, else nil.
+    public var serverCode: String? {
+        if case .server(let code, _, _) = self { return code }
+        return nil
+    }
 }

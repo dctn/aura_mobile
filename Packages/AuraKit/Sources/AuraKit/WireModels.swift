@@ -268,6 +268,7 @@ struct WireSeries: Decodable {
 struct WireStartedSession: Decodable {
     struct Session: Decodable {
         let id: String
+        let plannedMinutes: Int?
     }
 
     let session: Session
@@ -277,6 +278,14 @@ struct WireStartedSession: Decodable {
 struct WireTrace: Decodable {
     let status: String?
     let stressDrop: Double?
+}
+
+// MARK: Profile: GET /v1/me
+
+struct WireMe: Decodable {
+    let timezone: String?
+    /// Not optional: a profile write has to name the version it read.
+    let version: Int
 }
 
 // MARK: Consent: GET /v1/me/consent

@@ -145,7 +145,9 @@ enum MetricText {
 
 extension View {
     /// The Figma's pushed pages: the native back button with no label, and a big title beside it on the same line.
-    /// The clear item stops the bar also drawing `navigationTitle` in the middle.
+    /// The clear item stops the bar also drawing `navigationTitle` in the middle. The title has a fixed width because
+    /// the bar otherwise measures it at its smallest and cuts "Calendar" down to "C...". 280 pt leaves the back button
+    /// room on the narrowest iPhones (375 pt), and long titles shrink to fit.
     func metricBackBar(_ title: String) -> some View {
         navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)
@@ -164,7 +166,8 @@ extension View {
                         .foregroundStyle(.black)
                         .lineLimit(1)
                         .minimumScaleFactor(0.6)
-                        .frame(maxWidth: 300, alignment: .leading)
+                        .frame(width: 280, alignment: .leading)
+                        .fixedSize()
                         .accessibilityAddTraits(.isHeader)
                 }
                 .sharedBackgroundVisibility(.hidden)

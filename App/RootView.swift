@@ -4,6 +4,7 @@ import SwiftUI
 /// Sign-in first, then the three tabs.
 struct RootView: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         Group {
@@ -19,6 +20,12 @@ struct RootView: View {
             }
         }
         .task { await model.restore() }
+        .onChange(of: model.authState) { _, _ in
+            model.sendTimeZoneIfNeeded()
+        }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { model.reloadIfNewDay() }
+        }
     }
 }
 

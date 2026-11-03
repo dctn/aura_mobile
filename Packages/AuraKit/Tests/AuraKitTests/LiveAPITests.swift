@@ -11,6 +11,44 @@ private let consentView = """
 {"policyVersion":null,"healthData":false,"aiAssistant":true,"productAnalytics":false,"decidedAt":null,"required":true,"currentPolicyVersion":"2026-10"}
 """
 
+private let unauthorized = "{\"message\":\"Unauthorized\"}"
+private let staleProfile = "{\"error\":{\"code\":\"precondition_failed\",\"message\":\"The profile changed since you read it.\"}}"
+
+/// Tokens a test can swap from the stub's handler, so "another call refreshed meanwhile" needs no timing.
+private final class SwappableTokens: AccessTokenSource, @unchecked Sendable {
+    private let lock = NSLock()
+    private var held: String
+
+    init(_ first: String) {
+        held = first
+    }
+
+    var current: String {
+        lock.lock()
+        defer { lock.unlock() }
+        return held
+    }
+
+    func replace(with token: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        held = token
+    }
+
+    func accessToken() async throws -> String {
+        return current
+    }
+
+    func refreshedToken(rejected: String) async throws -> String {
+        replace(with: "b")
+        return "b"
+    }
+
+    func tokenRejected(_ token: String) async -> Bool {
+        return current == token
+    }
+}
+
 final class LiveAPIRequestTests: XCTestCase {
     func testSendsBearerTimeZoneAndAppHeaders() async throws {
         let rig = TestRig()
@@ -225,6 +263,42 @@ final class LiveAPITokenTests: XCTestCase {
         XCTAssertNil(rig.store.tokens)
     }
 
+    private func liveAPI(_ tokens: SwappableTokens) -> LiveAPI {
+        return LiveAPI(config: TestRig.config, tokens: tokens, session: TestRig.stubSession(),
+                       sleep: { (_: TimeInterval) in }, now: { TestRig.now })
+    }
+
+    func testSecond401OnAnOlderTokenRetriesWithTheNewerOne() async throws {
+        let rig = TestRig()
+        let tokens = SwappableTokens("a")
+        rig.server.respond("/v1/tasks") { call in
+            let sent = call.header("Authorization")
+            if sent == "Bearer c" {
+                return .json(200, emptyTasks)
+            }
+            if sent == "Bearer b" {
+                tokens.replace(with: "c")
+            }
+            return .json(401, unauthorized)
+        }
+        _ = try await liveAPI(tokens).tasks()
+        let headers = rig.server.calls("/v1/tasks").map { $0.header("Authorization") ?? "" }
+        XCTAssertEqual(headers, ["Bearer a", "Bearer b", "Bearer c"])
+    }
+
+    func testStillOlderAfterTheRetryIsNotASignOut() async {
+        let rig = TestRig()
+        let tokens = SwappableTokens("a")
+        rig.server.respond("/v1/tasks") { _ in
+            tokens.replace(with: UUID().uuidString)
+            return .json(401, unauthorized)
+        }
+        let live = liveAPI(tokens)
+        let error = await caught { _ = try await live.tasks() }
+        XCTAssertEqual(error as? AuraError, AuraError.server(code: "http_401", message: "Unauthorized", status: 401))
+        XCTAssertEqual(rig.server.calls("/v1/tasks").count, 3)
+    }
+
     func testRefusedRefreshEndsTheSession() async {
         let rig = TestRig(tokens: TestRig.tokens(expiresIn: 10))
         rig.server.on("InitiateAuth", [TestRig.refused("NotAuthorizedException", "Refresh Token has been revoked")])
@@ -320,10 +394,43 @@ final class LiveAPIRangeTests: XCTestCase {
         XCTAssertEqual(events.map { $0.id }, ["early", "late"])
         let calls = rig.server.calls("/v1/calendar/events")
         XCTAssertEqual(calls.count, 2)
-        XCTAssertEqual(calls[0].query["from"], "2025-01-01")
-        XCTAssertEqual(calls[0].query["to"], "2025-03-03")
-        XCTAssertEqual(calls[1].query["from"], "2025-03-04")
+        XCTAssertEqual(calls[0].query["from"], "2024-12-31")
+        XCTAssertEqual(calls[0].query["to"], "2025-03-02")
+        XCTAssertEqual(calls[1].query["from"], "2025-03-03")
         XCTAssertEqual(calls[1].query["to"], "2025-04-11")
+    }
+
+    private func eventJSON(_ id: String, _ start: Date, _ end: Date) -> String {
+        return "{\"id\":\"\(id)\",\"title\":\"\(id)\",\"start\":\"\(WireDate.string(start))\",\"end\":\"\(WireDate.string(end))\"}"
+    }
+
+    func testEventRunningPastMidnightIsFound() async throws {
+        let rig = TestRig()
+        let midnight = try XCTUnwrap(DayKey.date("2025-06-11"))
+        let hour: TimeInterval = 3600
+        let from = midnight.addingTimeInterval(hour)
+        let to = midnight.addingTimeInterval(20 * hour)
+        let overnight = eventJSON("overnight", midnight.addingTimeInterval(-2 * hour), midnight.addingTimeInterval(6 * hour))
+        let finished = eventJSON("finished", midnight.addingTimeInterval(-10 * hour), midnight.addingTimeInterval(-8 * hour))
+        let later = eventJSON("later", midnight.addingTimeInterval(9 * hour), midnight.addingTimeInterval(10 * hour))
+        rig.server.on("/v1/calendar/events", [.json(200, "{\"events\":[\(overnight),\(finished),\(later)],\"cursor\":null}")])
+        let events = try await rig.api.events(from: from, to: to)
+        XCTAssertEqual(events.map { $0.id }, ["overnight", "later"])
+        let call = try XCTUnwrap(rig.server.calls("/v1/calendar/events").first)
+        XCTAssertEqual(call.query["from"], "2025-06-10")
+        XCTAssertEqual(call.query["to"], "2025-06-11")
+    }
+
+    func testEventsAtOneInstantKeepOnlyWhatCoversIt() async throws {
+        let rig = TestRig()
+        let midnight = try XCTUnwrap(DayKey.date("2025-06-11"))
+        let hour: TimeInterval = 3600
+        let at = midnight.addingTimeInterval(hour)
+        let covering = eventJSON("covering", midnight.addingTimeInterval(-2 * hour), midnight.addingTimeInterval(6 * hour))
+        let finished = eventJSON("finished", midnight.addingTimeInterval(-10 * hour), midnight.addingTimeInterval(-8 * hour))
+        rig.server.on("/v1/calendar/events", [.json(200, "{\"events\":[\(covering),\(finished)],\"cursor\":null}")])
+        let events = try await rig.api.events(from: at, to: at)
+        XCTAssertEqual(events.map { $0.id }, ["covering"])
     }
 
     func testSeriesSplitsAt400DaysAndJoins() async throws {
@@ -378,6 +485,17 @@ final class LiveAPIDecodingTests: XCTestCase {
         XCTAssertFalse(tasks[0].done)
         XCTAssertTrue(tasks[3].done)
         XCTAssertEqual(tasks[4], TaskItem(id: "e", title: ""))
+    }
+
+    func testTaskPlannedForADayHasNoTime() async throws {
+        let rig = TestRig()
+        let sample = """
+        {"tasks":[{"id":"p","title":"For tomorrow","status":"pending","dueAt":null,"hasTime":false,"plannedFor":"2030-03-18","scheduledAt":null,"completedAt":null}],"deleted":[],"cursor":null}
+        """
+        rig.server.on("/v1/tasks", [.json(200, sample)])
+        let tasks = try await rig.api.tasks()
+        XCTAssertEqual(tasks, [TaskItem(id: "p", title: "For tomorrow")])
+        XCTAssertNil(tasks[0].at)
     }
 
     func testAlerts() async throws {
@@ -485,10 +603,10 @@ final class LiveAPIBodyTests: XCTestCase {
     func testFlowtimeSessionSendsNullMinutes() async throws {
         let rig = TestRig()
         rig.server.on("/v1/sessions", [.json(201, "{\"session\":{\"id\":\"server-id\",\"status\":\"running\"},\"joined\":true}")])
-        let started = try await rig.api.startSession(kind: "focus", mode: "flowtime", plannedMinutes: 25, title: "Flow")
+        let started = try await rig.api.startSession(id: "chosen-1", kind: "focus", mode: "flowtime", plannedMinutes: 25, title: "Flow")
         XCTAssertEqual(started, StartedSession(id: "server-id", joined: true))
         let call = try XCTUnwrap(rig.server.calls("/v1/sessions").first)
-        assertClientId(call)
+        XCTAssertEqual(call.body["id"] as? String, "chosen-1")
         XCTAssertTrue(call.body["plannedMinutes"] is NSNull)
         XCTAssertEqual(call.body["device"] as? String, "phone")
         XCTAssertEqual(call.body["kind"] as? String, "focus")
@@ -499,12 +617,37 @@ final class LiveAPIBodyTests: XCTestCase {
     func testTimerSessionSendsMinutesWithinTheLimit() async throws {
         let rig = TestRig()
         rig.server.on("/v1/sessions", [.json(201, "{\"session\":{\"id\":\"one\"}}")])
-        let started = try await rig.api.startSession(kind: "recovery", mode: "timer", plannedMinutes: 25, title: "Nap")
+        let started = try await rig.api.startSession(id: "one", kind: "recovery", mode: "timer", plannedMinutes: 25, title: "Nap")
         XCTAssertEqual(started, StartedSession(id: "one", joined: false))
-        _ = try await rig.api.startSession(kind: "recovery", mode: "timer", plannedMinutes: 500, title: "Long")
+        _ = try await rig.api.startSession(id: "two", kind: "recovery", mode: "timer", plannedMinutes: 500, title: "Long")
         let calls = rig.server.calls("/v1/sessions")
         XCTAssertEqual(calls[0].body["plannedMinutes"] as? Int, 25)
         XCTAssertEqual(calls[1].body["plannedMinutes"] as? Int, 240)
+    }
+
+    func testSessionAnswersWithTheMinutesGranted() async throws {
+        let rig = TestRig()
+        rig.server.on("/v1/sessions", [.json(201, "{\"session\":{\"id\":\"one\",\"plannedMinutes\":15},\"joined\":false}")])
+        let started = try await rig.api.startSession(id: "one", kind: "focus", mode: "timer", plannedMinutes: 25, title: "Work")
+        XCTAssertEqual(started, StartedSession(id: "one", joined: false, plannedMinutes: 15))
+    }
+
+    func testOpenEndedSessionHasNoMinutes() async throws {
+        let rig = TestRig()
+        rig.server.on("/v1/sessions", [.json(201, "{\"session\":{\"id\":\"one\",\"plannedMinutes\":null},\"joined\":false}")])
+        let started = try await rig.api.startSession(id: "one", kind: "focus", mode: "flowtime", plannedMinutes: nil, title: "Flow")
+        XCTAssertNil(started.plannedMinutes)
+    }
+
+    func testResendingASessionSendsTheSameId() async throws {
+        let rig = TestRig()
+        let stored = "{\"session\":{\"id\":\"same\",\"plannedMinutes\":25},\"joined\":false}"
+        rig.server.on("/v1/sessions", [.json(201, stored), .json(200, stored)])
+        let first = try await rig.api.startSession(id: "same", kind: "focus", mode: "timer", plannedMinutes: 25, title: "Work")
+        let second = try await rig.api.startSession(id: "same", kind: "focus", mode: "timer", plannedMinutes: 25, title: "Work")
+        XCTAssertEqual(first, second)
+        let ids = rig.server.calls("/v1/sessions").map { $0.body["id"] as? String ?? "" }
+        XCTAssertEqual(ids, ["same", "same"])
     }
 
     func testSessionAction() async throws {
@@ -530,16 +673,118 @@ final class LiveAPIBodyTests: XCTestCase {
         XCTAssertEqual(WireDate.parse(calls[0].body["end"] as? String), end)
     }
 
-    func testTaskWithAndWithoutDue() async throws {
+    func testTaskPlannedForADaySendsNoTime() async throws {
         let rig = TestRig()
         rig.server.on("/v1/tasks", [.json(201, "{\"task\":{\"id\":\"x\"}}")])
-        try await rig.api.addTask(title: "Plain", due: nil)
-        try await rig.api.addTask(title: "Due", due: TestRig.now)
-        let calls = rig.server.calls("/v1/tasks")
-        assertClientId(calls[0])
-        XCTAssertNil(calls[0].body["dueAt"])
-        XCTAssertNil(calls[0].body["hasTime"])
-        XCTAssertEqual(WireDate.parse(calls[1].body["dueAt"] as? String), TestRig.now)
-        XCTAssertEqual(calls[1].body["hasTime"] as? Bool, true)
+        try await rig.api.addTask(title: "Tomorrow", plannedFor: "2030-03-18")
+        let call = try XCTUnwrap(rig.server.calls("/v1/tasks").first)
+        assertClientId(call)
+        XCTAssertEqual(call.body["title"] as? String, "Tomorrow")
+        XCTAssertEqual(call.body["plannedFor"] as? String, "2030-03-18")
+        XCTAssertNil(call.body["dueAt"])
+        XCTAssertNil(call.body["hasTime"])
+    }
+}
+
+final class LiveAPITimeZoneTests: XCTestCase {
+    private let noZone = "{\"sub\":\"sub-1\",\"timezone\":null,\"displayName\":\"Kept\",\"version\":7}"
+    private let hasZone = "{\"sub\":\"sub-1\",\"timezone\":\"Asia/Kolkata\",\"version\":8}"
+    private let saved = "{\"sub\":\"sub-1\",\"timezone\":\"Europe/Paris\",\"version\":8}"
+
+    func testSetsTheZoneAloneWithTheVersionRead() async throws {
+        let rig = TestRig()
+        rig.server.on("/v1/me", [.json(200, noZone)])
+        rig.server.on("/v1/me/profile", [.json(200, saved)])
+        try await rig.api.setTimeZoneIfMissing("Europe/Paris")
+        let put = try XCTUnwrap(rig.server.calls("/v1/me/profile").first)
+        XCTAssertEqual(put.request.httpMethod, "PUT")
+        XCTAssertEqual(put.header("If-Match"), "\"v7\"")
+        XCTAssertEqual(Array(put.body.keys), ["timezone"])
+        XCTAssertEqual(put.body["timezone"] as? String, "Europe/Paris")
+        XCTAssertEqual(rig.server.calls("/v1/me").first?.request.httpMethod, "GET")
+    }
+
+    func testNeverOverwritesAZone() async throws {
+        let rig = TestRig()
+        rig.server.on("/v1/me", [.json(200, hasZone)])
+        try await rig.api.setTimeZoneIfMissing("Europe/Paris")
+        XCTAssertEqual(rig.server.calls("/v1/me/profile").count, 0)
+    }
+
+    func testAZoneSetInBetweenIsLeftAlone() async throws {
+        let rig = TestRig()
+        rig.server.on("/v1/me", [.json(200, noZone), .json(200, hasZone)])
+        rig.server.on("/v1/me/profile", [.json(412, staleProfile)])
+        try await rig.api.setTimeZoneIfMissing("Europe/Paris")
+        XCTAssertEqual(rig.server.calls("/v1/me").count, 2)
+        XCTAssertEqual(rig.server.calls("/v1/me/profile").count, 1)
+    }
+
+    func testAStaleVersionIsReadAgainOnce() async throws {
+        let rig = TestRig()
+        let newer = "{\"sub\":\"sub-1\",\"timezone\":null,\"version\":9}"
+        rig.server.on("/v1/me", [.json(200, noZone), .json(200, newer)])
+        rig.server.on("/v1/me/profile", [.json(412, staleProfile), .json(200, saved)])
+        try await rig.api.setTimeZoneIfMissing("Europe/Paris")
+        let puts = rig.server.calls("/v1/me/profile")
+        XCTAssertEqual(puts.map { $0.header("If-Match") ?? "" }, ["\"v7\"", "\"v9\""])
+    }
+
+    func testASecondStaleVersionThrows() async {
+        let rig = TestRig()
+        rig.server.on("/v1/me", [.json(200, noZone)])
+        rig.server.on("/v1/me/profile", [.json(412, staleProfile)])
+        let error = await caught { try await rig.api.setTimeZoneIfMissing("Europe/Paris") }
+        XCTAssertEqual((error as? AuraError)?.serverCode, "precondition_failed")
+        XCTAssertEqual(rig.server.calls("/v1/me/profile").count, 2)
+    }
+}
+
+final class DayKeyTests: XCTestCase {
+    func testCalendarIsGregorianInThePhonesZone() {
+        let calendar = DayKey.calendar
+        XCTAssertEqual(calendar.identifier, Calendar.Identifier.gregorian)
+        XCTAssertEqual(calendar.timeZone.identifier, TimeZone.current.identifier)
+        XCTAssertEqual(calendar.locale?.identifier, "en_US_POSIX")
+    }
+
+    func testStringAndDateUseTheGregorianYear() throws {
+        let noon = try XCTUnwrap(DayKey.calendar.date(from: DateComponents(year: 2025, month: 3, day: 7, hour: 12)))
+        XCTAssertEqual(DayKey.string(noon), "2025-03-07")
+        let day = try XCTUnwrap(DayKey.date("2025-03-07"))
+        XCTAssertEqual(DayKey.string(day), "2025-03-07")
+    }
+
+    func testAnotherCalendarWouldNameAnotherYear() throws {
+        // Why the default isn't the phone's calendar: this is the year a Buddhist phone used to send.
+        var buddhist = Calendar(identifier: .buddhist)
+        buddhist.timeZone = TimeZone.current
+        let noon = try XCTUnwrap(DayKey.calendar.date(from: DateComponents(year: 2025, month: 3, day: 7, hour: 12)))
+        XCTAssertEqual(DayKey.string(noon, calendar: buddhist), "2568-03-07")
+    }
+}
+
+final class AuraErrorTests: XCTestCase {
+    func testServerCode() {
+        XCTAssertEqual(AuraError.server(code: "work_limit_reached", message: "Later.", status: 409).serverCode, "work_limit_reached")
+        XCTAssertNil(AuraError.offline.serverCode)
+        XCTAssertNil(AuraError.signedOut.serverCode)
+        XCTAssertNil(AuraError.consentRequired.serverCode)
+    }
+}
+
+final class StubAPITests: XCTestCase {
+    func testStartSessionEchoesWithoutShortening() async throws {
+        let stub = StubAPI()
+        let timer = try await stub.startSession(id: "chosen", kind: "focus", mode: "timer", plannedMinutes: 25, title: "Work")
+        XCTAssertEqual(timer, StartedSession(id: "chosen", joined: false, plannedMinutes: 25))
+        let flow = try await stub.startSession(id: "open", kind: "focus", mode: "flowtime", plannedMinutes: 25, title: "Flow")
+        XCTAssertEqual(flow, StartedSession(id: "open"))
+    }
+
+    func testNewCallsDoNothing() async throws {
+        let stub = StubAPI()
+        try await stub.addTask(title: "Tomorrow", plannedFor: "2030-03-18")
+        try await stub.setTimeZoneIfMissing("Europe/Paris")
     }
 }

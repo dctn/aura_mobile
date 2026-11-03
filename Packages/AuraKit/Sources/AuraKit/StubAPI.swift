@@ -77,15 +77,18 @@ public final class StubAPI: AuraAPI, @unchecked Sendable {
         return MetricSeries(field: field, unit: "km", points: points)
     }
 
-    public func startSession(kind: String, mode: String, plannedMinutes: Int?, title: String) async throws -> StartedSession {
-        StartedSession(id: "stub-session")
+    /// Grants what was asked, open-ended for flowtime as the backend does.
+    public func startSession(id: String, kind: String, mode: String, plannedMinutes: Int?, title: String) async throws -> StartedSession {
+        let granted: Int? = mode == "flowtime" ? nil : plannedMinutes
+        return StartedSession(id: id, plannedMinutes: granted)
     }
 
     public func sessionAction(id: String, action: SessionAction) async throws {}
     public func sessionTrace(id: String) async throws -> SessionTrace { SessionTrace(status: "noData") }
     public func addEvent(title: String, start: Date, end: Date, kind: String) async throws {}
-    public func addTask(title: String, due: Date?) async throws {}
+    public func addTask(title: String, plannedFor: String) async throws {}
     public func grantHealthConsent() async throws {}
+    public func setTimeZoneIfMissing(_ identifier: String) async throws {}
 }
 
 /// Always signed in, for UI tests and CI.

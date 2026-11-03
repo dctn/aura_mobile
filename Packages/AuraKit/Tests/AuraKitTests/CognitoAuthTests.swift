@@ -295,6 +295,43 @@ final class CognitoSessionTests: XCTestCase {
         XCTAssertNil(rig.store.tokens)
     }
 
+    func testSecondRestoreLeavesARunningRefreshAlone() async throws {
+        let rig = TestRig(tokens: TestRig.tokens(expiresIn: 10))
+        rig.server.on("InitiateAuth", [TestRig.refreshAnswer], delay: 0.2)
+        rig.server.on("/v1/tasks", [.json(200, "{\"tasks\":[],\"cursor\":null}")])
+        let api = rig.api
+        let call = Task<Void, Error> {
+            _ = try await api.tasks()
+        }
+        // Long enough for the refresh to be in flight, shorter than its answer. If it hasn't started, this still passes.
+        try await Task.sleep(nanoseconds: 30_000_000)
+        let state = await rig.auth.restore()
+        XCTAssertEqual(state, AuthState.signedIn(email: TestRig.email))
+        try await call.value
+        XCTAssertEqual(rig.server.calls("InitiateAuth").count, 1)
+        XCTAssertEqual(rig.server.calls("/v1/tasks").first?.header("Authorization"), "Bearer access-2")
+        XCTAssertEqual(rig.store.tokens?.accessToken, "access-2")
+    }
+
+    func testRestoreAfterSignOutStaysSignedOut() async {
+        let rig = TestRig()
+        rig.server.on("RevokeToken", [.json(200, "{}")])
+        await rig.auth.signOut()
+        let state = await rig.auth.restore()
+        XCTAssertEqual(state, AuthState.signedOut)
+    }
+
+    func testTokenRejectedOnlyEndsTheSessionForTheHeldToken() async throws {
+        let rig = TestRig()
+        _ = try await rig.auth.accessToken()
+        let older = await rig.auth.tokenRejected("access-0")
+        XCTAssertFalse(older)
+        XCTAssertNotNil(rig.store.tokens)
+        let held = await rig.auth.tokenRejected("access-1")
+        XCTAssertTrue(held)
+        XCTAssertNil(rig.store.tokens)
+    }
+
     func testOtherRefusalKeepsTheSession() async {
         let rig = TestRig(tokens: TestRig.tokens(expiresIn: 10))
         rig.server.on("InitiateAuth", [TestRig.refused("TooManyRequestsException", "Rate exceeded")])

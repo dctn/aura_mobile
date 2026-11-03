@@ -17,7 +17,7 @@ public enum MetricRange: Int, CaseIterable, Identifiable, Sendable {
         }
     }
 
-    public func span(endingOn today: Date, calendar: Calendar = .current) -> MetricDaySpan {
+    public func span(endingOn today: Date, calendar: Calendar = DayKey.calendar) -> MetricDaySpan {
         MetricMaths.daySpan(days: days, endingOn: today, calendar: calendar)
     }
 }
@@ -107,13 +107,13 @@ public enum MetricMaths {
     public static let availabilityDays = 400
     public static let recordedDays = 365
 
-    public static func daySpan(days: Int, endingOn today: Date, calendar: Calendar = .current) -> MetricDaySpan {
+    public static func daySpan(days: Int, endingOn today: Date, calendar: Calendar = DayKey.calendar) -> MetricDaySpan {
         let first = calendar.date(byAdding: .day, value: 1 - days, to: today) ?? today
         return MetricDaySpan(from: DayKey.string(first, calendar: calendar), to: DayKey.string(today, calendar: calendar))
     }
 
     /// One point for every day of the span, oldest first. A day the backend left out has no value.
-    public static func dailyPoints(_ points: [MetricPoint], span: MetricDaySpan, calendar: Calendar = .current) -> [MetricPoint] {
+    public static func dailyPoints(_ points: [MetricPoint], span: MetricDaySpan, calendar: Calendar = DayKey.calendar) -> [MetricPoint] {
         guard let first = DayKey.date(span.from, calendar: calendar),
               let last = DayKey.date(span.to, calendar: calendar) else { return points }
         var values: [String: Double] = [:]
