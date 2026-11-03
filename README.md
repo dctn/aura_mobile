@@ -18,3 +18,7 @@ The `.xcodeproj` is generated from `project.yml`, so change `project.yml` and ne
 - `Packages/AuraKit`: logic with no UI (API, sign-in, run engine, sums). `swift test` runs it.
 - `App`: the screens. `DesignSystem` holds the shared colours and parts.
 - `UITests`: walks the screens on stub data (`--uitesting`), with no network or sign-in.
+
+## Before the first live check
+Everything so far has run on stub data, so sign-in and the live calls are unproven. The app talks only to dev us-west-1
+and writes to it as a normal user: sessions, mood, tasks, consent, and the profile's time zone when it has none.

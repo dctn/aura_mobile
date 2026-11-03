@@ -15,9 +15,24 @@ struct HomeView: View {
         }
         // The Figma has no bar here, so Insights sits at the top. Settings opens from Search, as in the Figma.
         .toolbar(.hidden, for: .navigationBar)
-        // An empty bar, so text scrolling up fades under the status bar instead of running through it.
-        .safeAreaBar(edge: .top) {
-            Color.clear.frame(height: 1)
+        // With no bar there's no system fade, so this keeps scrolled text from running through the status bar.
+        .overlay {
+            VStack(spacing: 0) {
+                LinearGradient(
+                    stops: [
+                        .init(color: AuraColor.background, location: 0),
+                        .init(color: AuraColor.background, location: 0.7),
+                        .init(color: AuraColor.background.opacity(0), location: 1),
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .frame(height: 70)
+                Spacer(minLength: 0)
+            }
+            .ignoresSafeArea(edges: .top)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
         }
         .navigationDestination(item: $modeRoute) { route in
             HomeModeDestination(route: route)
