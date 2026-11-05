@@ -14,6 +14,8 @@ import { Group, Icon, Page, RoundButton, Row, Segmented, SheetFrame, Switch } fr
 import { SEX, age, alertAreas, hours, inboxRows, missing, sexText, switchAlert } from '../search/logic';
 import { BirthSheet, ChoiceSheet, NumberSheet, TextSheet, TimeSheet, TitledGroup, dateText, useBackLabel } from '../search/parts';
 import { whenText } from '../search/when';
+import { WorkHoursSheet, scheduleText } from '../calendar/WorkHoursSheet';
+import { asSchedule } from '../calendar/dayZones';
 import '../search/search.css';
 
 const ABOUT: [string, string][] = [
@@ -178,6 +180,10 @@ export function Settings() {
         {numberRow('Steps a day', fmt(steps), () =>
           sheet((close) => <NumberSheet title="Steps a day" value={steps} min={0} max={100000} step={500} quick={[500, 1000]} close={close} onSave={(v) => saveGoal('stepsPerDay', v)} />),
         )}
+      </TitledGroup>
+
+      <TitledGroup title="Work hours">
+        <Row title="Work and lunch" value={scheduleText(asSchedule(me.workSchedule))} chevron onClick={() => sheet((close) => <WorkHoursSheet close={close} />)} />
       </TitledGroup>
 
       <TitledGroup title="Band">

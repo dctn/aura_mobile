@@ -22,6 +22,10 @@ import { doneChanges, isLocked, newTask } from './rows';
 import { canDrag, moveChanges, targetText, type Target } from './drag';
 import { useDrag, type Drag, type DragMode } from './useDrag';
 import { monthTitle } from './zone';
+import { asSchedule, hoursText, zoneDay, type DayZone } from './dayZones';
+import { WorkHoursSheet } from './WorkHoursSheet';
+import { Shades } from './ZonesPage';
+import { DEFAULT_PREVIEW_SCORE } from '../lib/local';
 import './calendar.css';
 
 const WEEKDAYS = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
@@ -63,8 +67,8 @@ function DayGrid({ days, anchor, selected, today, month, marks, overDay, onPick 
 
 type Press = (item: A.Item, mode: DragMode) => (e: PointerEvent) => void;
 
-function Hours({ day, timed, now, height, box, column, drag, press, wasDrop, onSlot, onItem }: {
-  day: string; timed: A.Item[]; now: number | null; height: number;
+function Hours({ day, timed, zones, now, height, box, column, drag, press, wasDrop, onSlot, onItem }: {
+  day: string; timed: A.Item[]; zones: DayZone[]; now: number | null; height: number;
   box: RefObject<HTMLDivElement>; column: RefObject<HTMLDivElement>; drag: Drag | null; press: Press; wasDrop: () => boolean;
   onSlot: (minute: number) => void; onItem: (item: A.Item) => void;
 }) {
@@ -92,6 +96,7 @@ function Hours({ day, timed, now, height, box, column, drag, press, wasDrop, onS
     <div className="cal-hoursbox" style={{ height }}>
       <div className="cal-hours" ref={box}>
         <div className="cal-day" style={{ height: DAY_HEIGHT }} ref={column}>
+          <Shades zones={zones} />
           {Array.from({ length: 25 }, (_, h) => (
             <div key={h} className="cal-hour" style={{ top: PAD + h * HOUR }}>
               {h < 24 && <span className="cal-hlabel" style={{ width: GUTTER - 8 }}>{`${String(h).padStart(2, '0')}:00`}</span>}
@@ -218,6 +223,13 @@ function DragChip({ drag }: { drag: Drag }) {
 
 // -- the card ---------------------------------------------------------------------------------------------------
 
+/** The line above today's hours: "Score 62 · 2 h heavy work". */
+function zoneLine(status: string, score: number, heavyMinutes: number): string {
+  if (status === 'needsSchedule') return 'Set your work hours to see zones';
+  if (status === 'dayOff') return `Score ${score} · Day off`;
+  return `Score ${score} · ${heavyMinutes ? `${hoursText(heavyMinutes)} heavy work` : 'Light work today'}`;
+}
+
 /** `pageHeight`: the height of the page the card sits on (it takes about 60% of it). */
 export function CalendarCard({ pageHeight }: { pageHeight: number }) {
   const aura = useAura();
@@ -245,6 +257,18 @@ export function CalendarCard({ pageHeight }: { pageHeight: number }) {
   const marks = useMemo(() => A.marks(events, tasks, zone, today), [events, tasks, zone, today]);
   const items = useMemo(() => A.dayItems(day, events, tasks, zone, today), [day, events, tasks, zone, today]);
   const nowMinute = day === today ? (A.localParts(aura.now.toISOString(), zone)?.minute ?? null) : null;
+
+  // -- the day zones: only today has a score in this preview, so other days stay blank
+  const schedule = useMemo(() => asSchedule(aura.data.me.workSchedule), [aura.data.me.workSchedule]);
+  const score = aura.local.previewScore ?? DEFAULT_PREVIEW_SCORE;
+  const shades = useMemo(() => zoneDay(schedule, day === today ? score : null, day), [schedule, score, day, today]);
+  const askHours = (first = false) => nav.openSheet({ render: (close) => <WorkHoursSheet close={close} first={first} /> });
+  const asked = aura.local.zonesAsked === true;
+  useEffect(() => {
+    if (schedule || asked) return;
+    aura.edit.zonesAsked();
+    askHours(true);
+  }, [schedule, asked]);
 
   // -- the card's size: about CALENDAR_SHARE of the page; the hours box gets what the rest leaves
   const card = useRef<HTMLDivElement>(null);
@@ -350,9 +374,20 @@ export function CalendarCard({ pageHeight }: { pageHeight: number }) {
         <button className="btn go cal-add" onClick={() => add()} title="Add a task or an event">+&nbsp;&nbsp;Add</button>
       </div>
 
+      {day === today && (
+        <button
+          className="cal-zoneline"
+          onClick={() => (schedule ? nav.push({ name: 'zones' }) : askHours())}
+          title={schedule ? 'See the whole day' : 'Set your work hours'}
+        >
+          <span>{zoneLine(shades.status, score, shades.heavyMinutes)}</span>
+          <Icon name="chevron" size={13} stroke={2.4} />
+        </button>
+      )}
+
       <div ref={hoursWrap}>
         <Hours
-          day={day} timed={items.timed} now={nowMinute} height={hoursH} box={hoursBox} column={dayColumn}
+          day={day} timed={items.timed} zones={shades.zones} now={nowMinute} height={hoursH} box={hoursBox} column={dayColumn}
           drag={drag} press={pressOn} wasDrop={wasDrop} onSlot={(m) => add(m)} onItem={open}
         />
       </div>

@@ -19,6 +19,8 @@ export type Page =
   | { name: 'mode'; id: string }
   | { name: 'sessions' }
   | { name: 'settings' }
+  /** Today's calendar with its zones, on a page of its own. */
+  | { name: 'zones' }
   | { name: 'inbox' };
 
 export const TAB_TITLES: Record<Tab, string> = { home: 'Home', recovery: 'Recovery', search: 'Search' };
@@ -98,7 +100,7 @@ export function useNav(): Nav {
 
 export function NavProvider({ children }: { children: ReactNode }) {
   const [tab, setTabState] = useState<Tab>('home');
-  const [stack, setStack] = useState<Page[]>([]);
+  const [stack, setStack] = useState<Page[]>(() => (window.location.hash === '#zones' ? [{ name: 'zones' }] : []));
   const [sheet, setSheet] = useState<SheetSpec | null>(null);
   const [alert, setAlert] = useState<AlertSpec | null>(null);
   const [run, setRun] = useState<Run | null>(null);

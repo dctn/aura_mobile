@@ -28,6 +28,10 @@ export interface Edit {
   snooze(ids: string[] | null): void;
   /** Note one use of a feature or mode ('feature:NI-04', 'mode:nap-10') at `at` (ISO); Recovery orders by these. */
   used(key: string, at: string): void;
+  /** The score the day zones use in this preview. */
+  previewScore(score: number): void;
+  /** The work hours sheet has opened once by itself. */
+  zonesAsked(): void;
   reset(): void;
 }
 
@@ -146,7 +150,10 @@ export function AuraProvider({ children }: { children: ReactNode }) {
     synced: (at) => update((s) => ({ ...s, lastSync: at })),
     snooze: (ids) => update((s) => ({ ...s, snoozed: ids })),
     used: (key, at) => update((s) => L.addUse(s, key, at)),
-    reset: () => update((s) => ({ ...L.EMPTY, theme: s.theme })),
+    previewScore: (score) => update((s) => ({ ...s, previewScore: score })),
+    zonesAsked: () => update((s) => ({ ...s, zonesAsked: true })),
+    // the hours sheet opens by itself only once: a Reset must not pop it up over the page it was pressed on
+    reset: () => update((s) => ({ ...L.EMPTY, theme: s.theme, zonesAsked: s.zonesAsked })),
   }), [update]);
 
   const value = useMemo<Aura>(() => {

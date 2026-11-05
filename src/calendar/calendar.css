@@ -92,6 +92,50 @@
 .cal-hline { position: absolute; right: 0; top: 0; border-top: 1px solid var(--sep); }
 .cal-lanes { position: absolute; top: 0; bottom: 0; right: 2px; cursor: pointer; }
 
+/* -- the day zones: shades behind the hours, lighter than the blocks on top ------------------------------------- */
+
+.cal-lanes-still { cursor: default; }
+.cal-shades { position: absolute; top: 0; bottom: 0; right: 0; pointer-events: none; }
+.cal-shade { position: absolute; left: 0; right: 0; overflow: hidden; }
+.cal-shade span {
+  position: absolute;
+  right: 6px;
+  top: 3px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--label3);
+}
+.cal-shade.heavyWork, .cal-swatch.heavyWork { background: color-mix(in srgb, var(--stress) 24%, transparent); }
+.cal-shade.lightWork, .cal-swatch.lightWork { background: color-mix(in srgb, var(--stress) 9%, transparent); }
+.cal-shade.heavyRecovery, .cal-swatch.heavyRecovery { background: color-mix(in srgb, var(--recovery) 26%, transparent); }
+.cal-shade.shortRecovery, .cal-swatch.shortRecovery { background: color-mix(in srgb, var(--recovery) 11%, transparent); }
+
+.cal-zoneline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  width: 100%;
+  padding: 6px 10px;
+  border-radius: 10px;
+  background: var(--fill);
+  font-size: var(--t-sub);
+  font-weight: 600;
+  color: var(--label2);
+  text-align: left;
+}
+.cal-swatch { display: inline-block; width: 22px; height: 22px; border-radius: 6px; margin-left: 8px; flex: none; box-shadow: inset 0 0 0 1px var(--sep); }
+.cal-sheetnote { margin: 0; font-size: var(--t-sub); color: var(--label2); }
+.cal-sheetwarn { margin: 0; font-size: var(--t-sub); color: var(--stress); font-weight: 600; }
+.cal-timepick { width: 104px; justify-content: center; }
+.cal-workdays { display: flex; justify-content: space-between; gap: 6px; }
+.cal-workday { width: 38px; height: 38px; border-radius: 50%; background: var(--fill); font-weight: 600; color: var(--label2); }
+.cal-workday.on { background: var(--accent); color: #fff; }
+.cal-previewscore { display: flex; flex-direction: column; gap: 6px; }
+.cal-previewlabel { font-size: var(--t-sub); font-weight: 600; }
+.cal-previewhint { font-size: var(--t-small); color: var(--label3); }
+
 .cal-block {
   position: absolute;
   display: flex;

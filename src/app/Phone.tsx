@@ -18,6 +18,7 @@ import { ModeSetup, ModesPage } from '../recovery/ModesPage';
 import { Sessions } from '../screens/Sessions';
 import { Settings } from '../screens/Settings';
 import { Inbox } from '../screens/Inbox';
+import { ZonesPage } from '../calendar/ZonesPage';
 import { Countdown, RunView } from '../run/RunView';
 import { useLiveRun } from '../run/live';
 
@@ -45,6 +46,8 @@ function PageView({ page }: { page: Page }) {
       return <Settings />;
     case 'inbox':
       return <Inbox />;
+    case 'zones':
+      return <ZonesPage />;
   }
 }
 

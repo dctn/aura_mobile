@@ -30,7 +30,15 @@ export interface LocalState {
   snoozed?: string[] | null;
   /** What was used when: 'feature:NI-04' or 'mode:nap-10' -> its last few ISO times, oldest first (Recovery's Often used). */
   used: Record<string, string[]>;
+  /** The score the day zones use in this preview, until the real capacity score is connected. */
+  previewScore?: number;
+  /** The work hours sheet has opened once by itself. */
+  zonesAsked?: boolean;
 }
+
+/** The scores the preview offers: one for each level of the capacity score. */
+export const PREVIEW_SCORES = [35, 45, 62, 75, 90] as const;
+export const DEFAULT_PREVIEW_SCORE = 62;
 
 export const EMPTY: LocalState = { v: 1, lists: {}, me: {}, alertOff: null, pins: null, theme: 'system', lastSync: null, used: {} };
 
@@ -132,5 +140,5 @@ export function merge(snapshot: Snapshot | null, local: LocalState): Data {
  *  row a use wrote already counts); Reset still forgets them. */
 export function changeCount(state: LocalState): number {
   const lists = Object.values(state.lists).reduce((n, e) => n + (e ? e.added.length + Object.keys(e.changed).length + e.removed.length : 0), 0);
-  return lists + Object.keys(state.me).length + (state.alertOff ? 1 : 0) + (state.pins ? 1 : 0) + (state.lastSync ? 1 : 0);
+  return lists + Object.keys(state.me).length + (state.alertOff ? 1 : 0) + (state.pins ? 1 : 0) + (state.lastSync ? 1 : 0) + (state.previewScore !== undefined ? 1 : 0);
 }
