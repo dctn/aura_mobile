@@ -25,7 +25,7 @@ struct HomeWorkSection: View {
     }
 }
 
-/// Events for the next 7 days, by day.
+/// Today's zones and events, the work hours, then the events of the next 6 days by day.
 private struct HomeCalendarList: View {
     private struct Day: Identifiable {
         let id: Date
@@ -33,11 +33,24 @@ private struct HomeCalendarList: View {
     }
 
     @Environment(AppModel.self) private var model
+    /// Events still to come in the next 7 days, for the lists.
     @State private var events: [CalendarEvent]?
+    /// All of today's events, past ones too, for the hour grid.
+    @State private var todayEvents: [CalendarEvent] = []
     @State private var failed = false
+    @State private var zoneDay: ZoneDay?
+    @State private var zonesFailed = false
+    @State private var schedule: WorkSchedule?
+    @State private var scheduleLoaded = false
+    @State private var editingHours = false
     @State private var retry = 0
 
     private var loadKey: String { "\(model.dataVersion)-\(retry)" }
+
+    private var readyDay: ZoneDay? {
+        guard let zoneDay, zoneDay.status == .ready else { return nil }
+        return zoneDay
+    }
 
     private var days: [Day] {
         let calendar = Calendar.current
@@ -47,29 +60,78 @@ private struct HomeCalendarList: View {
         return starts.map { start in Day(id: start, events: grouped[start] ?? []) }
     }
 
+    private var todayGroup: Day? {
+        days.first { Calendar.current.isDateInToday($0.id) }
+    }
+
+    private var laterDays: [Day] {
+        days.filter { !Calendar.current.isDateInToday($0.id) }
+    }
+
     var body: some View {
         AuraPage {
             content
         }
         .metricBackBar("Calendar")
         .task(id: loadKey) { await load() }
+        .sheet(isPresented: $editingHours) {
+            WorkHoursForm(saved: schedule)
+        }
     }
 
     @ViewBuilder
     private var content: some View {
+        zoneLine
+        if let readyDay {
+            ZoneCardSection(title: "Today", padding: 14) {
+                TimelineView(.everyMinute) { context in
+                    ZoneDayGrid(zones: readyDay.zones, events: todayEvents, schedule: schedule, now: context.date)
+                }
+            }
+            ZoneDayList(zones: readyDay.zones)
+            ZoneLegend()
+        } else {
+            eventsState
+            if let todayGroup {
+                dayGroup(todayGroup)
+            }
+        }
+        if scheduleLoaded {
+            WorkHoursRow(title: "Work hours", value: ZoneText.schedule(schedule), identifier: "calendar-work-hours") {
+                editingHours = true
+            }
+        }
+        if readyDay != nil {
+            eventsState
+        }
+        ForEach(laterDays) { day in
+            dayGroup(day)
+        }
+    }
+
+    /// A failed zones load only shows here, so the events still show.
+    @ViewBuilder
+    private var zoneLine: some View {
+        if zonesFailed {
+            AuraCard(padding: 20) {
+                HomeRetryLine(text: "Couldn't load your zones.") { retry += 1 }
+            }
+        } else if let zoneDay, zoneDay.status != .unknown {
+            ZoneLineCard(day: zoneDay) { editingHours = true }
+        }
+    }
+
+    @ViewBuilder
+    private var eventsState: some View {
         if failed {
             HomeRetryLine(text: "Couldn't load your calendar.") { retry += 1 }
         } else if events == nil {
             ProgressView()
                 .frame(maxWidth: .infinity)
-        } else if days.isEmpty {
+        } else if days.isEmpty && readyDay == nil {
             Text("Nothing in the next 7 days")
                 .font(.system(size: 15))
                 .foregroundStyle(AuraColor.footnote)
-        } else {
-            ForEach(days) { day in
-                dayGroup(day)
-            }
         }
     }
 
@@ -96,19 +158,54 @@ private struct HomeCalendarList: View {
         return date.formatted(.dateTime.weekday(.wide).day().month(.wide))
     }
 
+    /// Events, today's zones and the work hours load together; each can fail on its own.
     private func load() async {
         let now = Date()
         let calendar = Calendar.current
         let today = calendar.startOfDay(for: now)
+        let tomorrow = calendar.date(byAdding: .day, value: 1, to: today) ?? now
         let end = calendar.date(byAdding: .day, value: 7, to: today) ?? now
-        do {
-            let loaded = try await model.api.events(from: now, to: end)
+        let todayKey = DayKey.string(now)
+        let api = model.api
+
+        async let eventsCall = api.events(from: today, to: end)
+        async let zonesCall = api.dayZones(from: todayKey, to: todayKey)
+        async let scheduleCall = api.workSchedule()
+
+        let eventsResult: Result<[CalendarEvent], Error>
+        do { eventsResult = .success(try await eventsCall) } catch { eventsResult = .failure(error) }
+        let zonesResult: Result<[ZoneDay], Error>
+        do { zonesResult = .success(try await zonesCall) } catch { zonesResult = .failure(error) }
+        let scheduleResult: Result<WorkSchedule?, Error>
+        do { scheduleResult = .success(try await scheduleCall) } catch { scheduleResult = .failure(error) }
+
+        if Task.isCancelled { return }
+
+        switch eventsResult {
+        case .success(let loaded):
             events = loaded.filter { $0.end > now && $0.start < end }
+            todayEvents = loaded.filter { $0.end > today && $0.start < tomorrow }
             failed = false
-        } catch {
-            if Task.isCancelled { return }
+        case .failure(let error):
             model.note(error)
             failed = events == nil
+        }
+
+        switch zonesResult {
+        case .success(let loaded):
+            zoneDay = loaded.first(where: { $0.date == todayKey }) ?? loaded.first ?? ZoneDay(date: todayKey, status: .unknown)
+            zonesFailed = false
+        case .failure(let error):
+            model.note(error)
+            zonesFailed = zoneDay == nil
+        }
+
+        switch scheduleResult {
+        case .success(let loaded):
+            schedule = loaded
+            scheduleLoaded = true
+        case .failure(let error):
+            model.note(error)
         }
     }
 }

@@ -53,7 +53,9 @@ final class AppModel {
     static func make() -> AppModel {
         let modes = loadModes()
         if ProcessInfo.processInfo.arguments.contains("--uitesting") {
-            return AppModel(api: StubAPI(), auth: StubAuth(), modes: modes, defaults: UserDefaults(suiteName: "uitesting") ?? .standard)
+            // `--uitesting-no-schedule` starts with no work hours, as a new account does.
+            let stub = StubAPI(workSchedule: ProcessInfo.processInfo.arguments.contains("--uitesting-no-schedule") ? nil : StubAPI.defaultSchedule)
+            return AppModel(api: stub, auth: StubAuth(), modes: modes, defaults: UserDefaults(suiteName: "uitesting") ?? .standard)
         }
         guard let url = Bundle.main.url(forResource: "aura-dev", withExtension: "json"),
               let data = try? Data(contentsOf: url),

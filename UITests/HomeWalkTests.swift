@@ -1,6 +1,7 @@
 import XCTest
 
-/// Home top to bottom, Calendar and Settings. The stub signs in by itself, so sign-in can't be walked here.
+/// Home top to bottom, Calendar, the work hours form and Settings. The stub signs in by itself, so sign-in can't be
+/// walked here.
 final class HomeWalkTests: WalkTestCase {
     func testWalkHome() {
         openTab("Home")
@@ -21,8 +22,21 @@ final class HomeWalkTests: WalkTestCase {
         XCTAssertTrue(calendar.waitForExistence(timeout: 10), "Not found: Calendar row")
         bringIntoView(calendar)
         calendar.tap()
-        _ = app.navigationBars["Calendar"].waitForExistence(timeout: 5)
+        XCTAssertTrue(element("calendar-zone-line").waitForExistence(timeout: 10), "No zone line on Calendar")
         save("13-work-calendar")
+
+        dragPage(fromY: 0.7, toY: 0.2, velocity: .default)
+        save("13b-calendar-lower")
+
+        let hours = element("calendar-work-hours")
+        XCTAssertTrue(hours.waitForExistence(timeout: 10), "Not found: Work hours row")
+        bringIntoView(hours)
+        hours.tap()
+        let saveButton = element("work-hours-save")
+        XCTAssertTrue(saveButton.waitForExistence(timeout: 10), "The work hours form didn't open")
+        save("15-work-hours")
+        tap(element("work-hours-cancel"), "Cancel on the work hours form")
+        waitUntilGone(saveButton, "The work hours form didn't close")
 
         tap(app.navigationBars.buttons.element(boundBy: 0), "Back from Calendar")
 
@@ -36,30 +50,12 @@ final class HomeWalkTests: WalkTestCase {
         }
         settings.tap()
         _ = app.buttons["settings-sign-out"].waitForExistence(timeout: 5)
+        // The row's summary appears once the stub has answered.
+        _ = element("settings-work-hours").waitForExistence(timeout: 5)
         save("14-settings")
     }
 
-    /// Moves the page slowly until the element sits clear of the tab bar and the navigation bar.
-    private func bringIntoView(_ element: XCUIElement) {
-        let height = app.windows.firstMatch.frame.height
-        let lowest = height * 0.7
-        let highest = height * 0.15
-        for _ in 0..<8 {
-            let middle = element.frame.midY
-            if middle >= highest && middle <= lowest && element.isHittable { return }
-            if middle > lowest {
-                dragPage(fromY: 0.6, toY: 0.35, velocity: .slow)
-            } else {
-                dragPage(fromY: 0.35, toY: 0.6, velocity: .slow)
-            }
-        }
-    }
-
-    /// Drags in the page's right margin. `app.swipeUp()` starts mid-screen, where the mood slider's thumb can sit and
-    /// take the touch, so Home's swipes did nothing.
-    private func dragPage(fromY: CGFloat, toY: CGFloat, velocity: XCUIGestureVelocity) {
-        let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.97, dy: fromY))
-        let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.97, dy: toY))
-        start.press(forDuration: 0.05, thenDragTo: end, withVelocity: velocity, thenHoldForDuration: 0.1)
+    private func element(_ identifier: String) -> XCUIElement {
+        app.descendants(matching: .any).matching(identifier: identifier).firstMatch
     }
 }

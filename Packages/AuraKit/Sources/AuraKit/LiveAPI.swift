@@ -59,6 +59,8 @@ public final class LiveAPI: AuraAPI, Sendable {
     /// Longest range `GET /v1/calendar/events` takes.
     private static let maxEventDays = 62
     private static let maxPlannedMinutes = 240
+    /// Longest range `GET /v1/planner/zones` takes.
+    private static let maxZoneDays = 31
 
     init(config: AppConfig, tokens: any AccessTokenSource, session: URLSession, sleep: @escaping AuraSleep,
          now: @escaping @Sendable () -> Date) {
@@ -233,6 +235,40 @@ public final class LiveAPI: AuraAPI, Sendable {
         }
     }
 
+    public func workSchedule() async throws -> WorkSchedule? {
+        let me = try await get(WireMe.self, .identity, "/v1/me", query: [:])
+        return me.workSchedule?.item?.model
+    }
+
+    /// Sends only the work hours, with the version just read; a write in between makes it read again, once.
+    public func setWorkSchedule(_ schedule: WorkSchedule) async throws {
+        let body = try LiveAPI.encodeValue(WireScheduleUpdate(workSchedule: WireWorkSchedule(schedule)))
+        var retried = false
+        while true {
+            let me = try await get(WireMe.self, .identity, "/v1/me", query: [:])
+            do {
+                _ = try await client.send(.identity, "PUT", "/v1/me/profile", body: body,
+                                          headers: ["If-Match": "\"v\(me.version)\""])
+                return
+            } catch AuraError.server(_, _, let status) where status == 412 && !retried {
+                retried = true
+            }
+        }
+    }
+
+    // MARK: Day zones
+
+    /// One entry per day. A range over 31 days is asked in pieces, as the route takes at most 31.
+    public func dayZones(from: String, to: String) async throws -> [ZoneDay] {
+        var days: [ZoneDay] = []
+        for range in DayRanges.split(from: from, to: to, maxDays: LiveAPI.maxZoneDays) {
+            let query = ["from": range.from, "to": range.to]
+            let answer = try await get(WireZoneDays.self, .planner, "/v1/planner/zones", query: query)
+            days.append(contentsOf: (answer.days ?? []).compactMap { $0.item?.model })
+        }
+        return days
+    }
+
     // MARK: Helpers
 
     private static func overlaps(_ event: CalendarEvent, from: Date, to: Date) -> Bool {
@@ -292,6 +328,10 @@ public final class LiveAPI: AuraAPI, Sendable {
 
     private static func encode(_ body: [String: Any]) throws -> Data {
         return try JSONSerialization.data(withJSONObject: body)
+    }
+
+    private static func encodeValue<Body: Encodable>(_ body: Body) throws -> Data {
+        return try JSONEncoder().encode(body)
     }
 
     private static func decode<Answer: Decodable>(_ type: Answer.Type, _ data: Data) throws -> Answer {

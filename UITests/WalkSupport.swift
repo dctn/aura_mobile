@@ -34,4 +34,46 @@ class WalkTestCase: XCTestCase {
         XCTAssertTrue(element.waitForExistence(timeout: 10), "Not found: \(name)")
         element.tap()
     }
+
+    /// Fails with the message when the element is still there after the timeout.
+    func waitUntilGone(_ element: XCUIElement, _ message: String, timeout: TimeInterval = 10) {
+        let gone = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: element)
+        XCTAssertEqual(XCTWaiter().wait(for: [gone], timeout: timeout), .completed, message)
+    }
+
+    /// Moves the page slowly until the element sits clear of the tab bar and the navigation bar.
+    func bringIntoView(_ element: XCUIElement) {
+        let height = app.windows.firstMatch.frame.height
+        let lowest = height * 0.7
+        let highest = height * 0.15
+        for _ in 0..<8 {
+            let middle = element.frame.midY
+            if middle >= highest && middle <= lowest && element.isHittable { return }
+            if middle > lowest {
+                dragPage(fromY: 0.6, toY: 0.35, velocity: .slow)
+            } else {
+                dragPage(fromY: 0.35, toY: 0.6, velocity: .slow)
+            }
+        }
+    }
+
+    /// Drags in the page's right margin. `app.swipeUp()` starts mid-screen, where Home's mood slider thumb can sit
+    /// and take the touch, so Home's swipes did nothing.
+    func dragPage(fromY: CGFloat, toY: CGFloat, velocity: XCUIGestureVelocity) {
+        let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.97, dy: fromY))
+        let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.97, dy: toY))
+        start.press(forDuration: 0.05, thenDragTo: end, withVelocity: velocity, thenHoldForDuration: 0.1)
+    }
+
+    /// Scrolls Home down to the Calendar row and opens it.
+    func openCalendarFromHome() {
+        openTab("Home")
+        XCTAssertTrue(app.staticTexts["Insights"].waitForExistence(timeout: 20), "Home didn't open")
+        let calendar = app.buttons["home-work-calendar"]
+        XCTAssertTrue(calendar.waitForExistence(timeout: 10), "Not found: Calendar row")
+        dragPage(fromY: 0.7, toY: 0.2, velocity: .default)
+        dragPage(fromY: 0.7, toY: 0.2, velocity: .default)
+        bringIntoView(calendar)
+        calendar.tap()
+    }
 }

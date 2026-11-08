@@ -35,6 +35,14 @@ public protocol AuraAPI: Sendable {
     // Profile
     /// Sets the profile's time zone when it has none. One already there is never changed.
     func setTimeZoneIfMissing(_ identifier: String) async throws
+    /// The profile's work hours, or nil when none are set.
+    func workSchedule() async throws -> WorkSchedule?
+    /// Writes only the work hours to the profile. Every other profile field is kept.
+    func setWorkSchedule(_ schedule: WorkSchedule) async throws
+
+    // Day zones
+    /// `from` and `to` are `DayKey`s, at most 31 days apart. One entry per day.
+    func dayZones(from: String, to: String) async throws -> [ZoneDay]
 }
 
 public enum AuthState: Sendable, Equatable {

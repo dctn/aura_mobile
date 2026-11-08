@@ -2,7 +2,19 @@ import Foundation
 
 /// Answers without a network, with the Figma's numbers, for UI tests and CI. Holds no real data.
 public final class StubAPI: AuraAPI, @unchecked Sendable {
-    public init() {}
+    /// Every day of the week, so CI screenshots show zones on a weekend too.
+    public static let defaultSchedule = WorkSchedule(workdayStart: "09:00", workdayEnd: "18:00", lunchStart: "13:00",
+                                                     lunchMinutes: 60, workDays: [1, 2, 3, 4, 5, 6, 7])
+    /// The score every stub work day has: a steady day, so 2 h of heavy work.
+    static let zoneScore = 62
+
+    private let lock = NSLock()
+    private var held: WorkSchedule?
+
+    /// Nil starts with no work hours set, as a new account does.
+    public init(workSchedule: WorkSchedule? = StubAPI.defaultSchedule) {
+        held = workSchedule
+    }
 
     private func day(_ offset: Int) -> String {
         DayKey.string(Calendar.current.date(byAdding: .day, value: offset, to: Date()) ?? Date())
@@ -89,6 +101,160 @@ public final class StubAPI: AuraAPI, @unchecked Sendable {
     public func addTask(title: String, plannedFor: String) async throws {}
     public func grantHealthConsent() async throws {}
     public func setTimeZoneIfMissing(_ identifier: String) async throws {}
+
+    // MARK: Work hours and day zones
+
+    /// The lock is only taken here, outside any async code.
+    private var current: WorkSchedule? {
+        get {
+            lock.lock()
+            defer { lock.unlock() }
+            return held
+        }
+        set {
+            lock.lock()
+            defer { lock.unlock() }
+            held = newValue
+        }
+    }
+
+    public func workSchedule() async throws -> WorkSchedule? {
+        return current
+    }
+
+    public func setWorkSchedule(_ schedule: WorkSchedule) async throws {
+        current = schedule
+    }
+
+    /// One day per date, both ends included, at most 62. Work days are all ready with the same score.
+    public func dayZones(from: String, to: String) async throws -> [ZoneDay] {
+        let schedule = current
+        let calendar = DayKey.calendar
+        guard let first = DayKey.date(from, calendar: calendar), let last = DayKey.date(to, calendar: calendar) else { return [] }
+        var days: [ZoneDay] = []
+        var date = first
+        while date <= last && days.count < 62 {
+            days.append(StubZones.day(DayKey.string(date, calendar: calendar), schedule: schedule, score: StubAPI.zoneScore,
+                                      calendar: calendar))
+            guard let next = calendar.date(byAdding: .day, value: 1, to: date) else { break }
+            date = next
+        }
+        return days
+    }
+}
+
+/// The Planner's zone placement (services/planner/src/service/zones/classify.ts), for the stub only. The real app
+/// draws what the backend sends.
+enum StubZones {
+    private static let maxHeavyBlock = 90
+    private static let shortRecovery = 15
+    private static let longStretch = 180
+    private static let minHeavy = 15
+    private static let snap = 15
+
+    private struct Placed {
+        let kind: ZoneKind
+        let start: Int
+        let end: Int
+    }
+
+    static func day(_ key: String, schedule: WorkSchedule?, score: Int, calendar: Calendar) -> ZoneDay {
+        guard let schedule = schedule else { return ZoneDay(date: key, status: .needsSchedule) }
+        guard let date = DayKey.date(key, calendar: calendar) else { return ZoneDay(date: key, status: .unknown) }
+        // Calendar weekdays run 1 = Sunday ... 7 = Saturday; the schedule's run 1 = Monday ... 7 = Sunday.
+        let weekday = (calendar.component(.weekday, from: date) + 5) % 7 + 1
+        if !schedule.workDays.contains(weekday) { return ZoneDay(date: key, status: .dayOff) }
+        let placed = classify(schedule, heavyMinutes: heavyMinutes(score))
+        let heavy = placed.filter { $0.kind == .heavyWork }.reduce(0) { $0 + $1.end - $1.start }
+        let parts = calendar.dateComponents([.year, .month, .day], from: date)
+        let zones = placed.compactMap { zone -> Zone? in
+            guard let start = at(zone.start, parts, calendar), let end = at(zone.end, parts, calendar) else { return nil }
+            return Zone(kind: zone.kind, start: start, end: end)
+        }
+        return ZoneDay(date: key, status: .ready, score: score, level: level(score), heavyMinutes: heavy,
+                       reason: reason(score, heavyMinutes: heavy), zones: zones)
+    }
+
+    /// The Planner's levels and heavy minutes (evidence.ts ZONE_LEVELS, ZONES.heavyMinutes).
+    static func level(_ score: Int) -> String {
+        if score >= 85 { return "peak" }
+        if score >= 70 { return "focused" }
+        if score >= 55 { return "steady" }
+        if score >= 40 { return "shallow" }
+        return "depleted"
+    }
+
+    static func heavyMinutes(_ score: Int) -> Int {
+        switch level(score) {
+        case "peak": return 240
+        case "focused": return 180
+        case "steady": return 120
+        default: return 0
+        }
+    }
+
+    /// The Planner's `zoneReason` wording.
+    static func reason(_ score: Int, heavyMinutes: Int) -> String {
+        let base = "Your capacity score is \(score)"
+        if heavyMinutes > 0 { return "\(base), so about \(hoursText(heavyMinutes)) of heavy work today, first thing." }
+        if level(score) == "depleted" { return "\(base), so today is for recovery and light work only." }
+        return "\(base), so keep to lighter work today."
+    }
+
+    private static func hoursText(_ minutes: Int) -> String {
+        let h = minutes / 60
+        let m = minutes % 60
+        if h == 0 { return "\(m) min" }
+        return m == 0 ? "\(h) h" : "\(h) h \(m) min"
+    }
+
+    /// The wall-clock time `minute` after midnight on that day.
+    private static func at(_ minute: Int, _ day: DateComponents, _ calendar: Calendar) -> Date? {
+        var parts = day
+        parts.hour = minute / 60
+        parts.minute = minute % 60
+        return calendar.date(from: parts)
+    }
+
+    /// Lunch, heavy work from the start of the day in blocks with a short recovery between, then light work, split
+    /// when a stretch is long. A low day's extra recovery is left out: stub days are never low.
+    private static func classify(_ schedule: WorkSchedule, heavyMinutes: Int) -> [Placed] {
+        let start = WorkSchedule.minutes(schedule.workdayStart) ?? 0
+        let end = WorkSchedule.minutes(schedule.workdayEnd) ?? 0
+        let lunch = WorkSchedule.minutes(schedule.lunchStart) ?? start
+        let lunchEnd = lunch + schedule.lunchMinutes
+        var zones: [Placed] = []
+        var free: [(Int, Int)] = []
+        var wanted = heavyMinutes
+        for (from, to) in [(start, lunch), (lunchEnd, end)] {
+            var cursor = from
+            while wanted >= minHeavy && to - cursor >= minHeavy {
+                let block = min(maxHeavyBlock, wanted, to - cursor)
+                zones.append(Placed(kind: .heavyWork, start: cursor, end: cursor + block))
+                cursor += block
+                wanted -= block
+                if wanted < minHeavy || to - cursor < shortRecovery + minHeavy { break }
+                zones.append(Placed(kind: .shortRecovery, start: cursor, end: cursor + shortRecovery))
+                cursor += shortRecovery
+            }
+            if to > cursor { free.append((cursor, to)) }
+        }
+        for (from, to) in free {
+            zones.append(contentsOf: lightWork(from, to))
+        }
+        if schedule.lunchMinutes > 0 {
+            zones.append(Placed(kind: .heavyRecovery, start: lunch, end: lunchEnd))
+        }
+        return zones.sorted { $0.start < $1.start }
+    }
+
+    private static func lightWork(_ from: Int, _ to: Int) -> [Placed] {
+        if to <= from { return [] }
+        if to - from <= longStretch { return [Placed(kind: .lightWork, start: from, end: to)] }
+        let middle = from + (to - from - shortRecovery) / 2 / snap * snap
+        return lightWork(from, middle) + [Placed(kind: .shortRecovery, start: middle, end: middle + shortRecovery)]
+            + lightWork(middle + shortRecovery, to)
+    }
 }
 
 /// Always signed in, for UI tests and CI.

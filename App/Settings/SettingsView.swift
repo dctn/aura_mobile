@@ -1,11 +1,15 @@
 import AuraKit
 import SwiftUI
 
-/// The account, the version and Sign out. The Figma has no frame for this page.
+/// Work hours, the account, the version and Sign out. The Figma has no frame for this page.
 struct SettingsView: View {
     @Environment(AppModel.self) private var model
     @State private var confirmingSignOut = false
     @State private var signingOut = false
+    @State private var schedule: WorkSchedule?
+    @State private var scheduleLoaded = false
+    @State private var scheduleFailed = false
+    @State private var editingHours = false
 
     private var email: String? {
         guard case .some(.signedIn(let address?)) = model.authState, !address.isEmpty else { return nil }
@@ -19,8 +23,18 @@ struct SettingsView: View {
         return "\(short) (\(build))"
     }
 
+    /// "09:00–18:00 · Mon–Fri · Lunch 13:00", "Not set", or nothing while it loads.
+    private var workHoursText: String? {
+        if scheduleLoaded {
+            guard let schedule else { return ZoneText.schedule(nil) }
+            return "\(ZoneText.schedule(schedule)) · Lunch \(schedule.lunchStart)"
+        }
+        return scheduleFailed ? "Couldn't load" : nil
+    }
+
     var body: some View {
         AuraPage {
+            workHoursSection
             AuraCard {
                 VStack(alignment: .leading, spacing: 14) {
                     if let email {
@@ -33,6 +47,35 @@ struct SettingsView: View {
             signOutButton
         }
         .metricBackBar("Settings")
+        .task(id: model.dataVersion) { await loadSchedule() }
+        .sheet(isPresented: $editingHours) {
+            WorkHoursForm(saved: schedule)
+        }
+    }
+
+    private var workHoursSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Work hours")
+                .font(.system(size: 20, weight: .bold))
+                .foregroundStyle(.black)
+                .accessibilityAddTraits(.isHeader)
+            WorkHoursRow(title: "Work and lunch", value: workHoursText, identifier: "settings-work-hours") {
+                editingHours = true
+            }
+        }
+    }
+
+    /// Runs again after the form saves, since saving bumps `dataVersion`.
+    private func loadSchedule() async {
+        do {
+            schedule = try await model.api.workSchedule()
+            scheduleLoaded = true
+            scheduleFailed = false
+        } catch {
+            if Task.isCancelled { return }
+            model.note(error)
+            scheduleFailed = !scheduleLoaded
+        }
     }
 
     private func row(label: String, value: String) -> some View {

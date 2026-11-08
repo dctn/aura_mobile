@@ -62,6 +62,23 @@ enum WireValue: Decodable, Equatable {
     }
 }
 
+/// A value that comes through as nil instead of failing everything around it when it can't be read.
+struct WireLossy<Item: Decodable>: Decodable {
+    let item: Item?
+
+    init(from decoder: Decoder) throws {
+        item = try? Item(from: decoder)
+    }
+}
+
+/// A whole number sent as any JSON number, rounded. Nil when it's missing or too big to be one.
+enum WireWhole {
+    static func from(_ value: Double?) -> Int? {
+        guard let value = value, value.isFinite, abs(value) < 1_000_000_000 else { return nil }
+        return Int(value.rounded())
+    }
+}
+
 /// A list route that hands back `cursor` until it's null.
 protocol CursorPage: Decodable {
     associatedtype Item
@@ -280,12 +297,77 @@ struct WireTrace: Decodable {
     let stressDrop: Double?
 }
 
-// MARK: Profile: GET /v1/me
+// MARK: Day zones: GET /v1/planner/zones?from&to
+
+struct WireZone: Decodable {
+    let kind: String?
+    let start: String?
+    let end: String?
+
+    /// Nil for a kind this app doesn't know or a time it can't read: that zone is left out.
+    var model: Zone? {
+        guard let name = kind, let zoneKind = ZoneKind(rawValue: name),
+              let startDate = WireDate.parse(start), let endDate = WireDate.parse(end) else { return nil }
+        return Zone(kind: zoneKind, start: startDate, end: endDate)
+    }
+}
+
+struct WireZoneDay: Decodable {
+    let date: String
+    let status: String?
+    let score: Double?
+    let level: String?
+    let heavyMinutes: Double?
+    let reason: String?
+    let zones: [WireLossy<WireZone>]?
+
+    var model: ZoneDay {
+        let known = status.flatMap { ZoneStatus(rawValue: $0) } ?? .unknown
+        let placed = (zones ?? []).compactMap { $0.item?.model }
+        return ZoneDay(date: date, status: known, score: WireWhole.from(score), level: level,
+                       heavyMinutes: WireWhole.from(heavyMinutes) ?? 0, reason: reason, zones: placed)
+    }
+}
+
+struct WireZoneDays: Decodable {
+    let days: [WireLossy<WireZoneDay>]?
+}
+
+// MARK: Profile: GET /v1/me, PUT /v1/me/profile
 
 struct WireMe: Decodable {
     let timezone: String?
+    /// Null until the person sets it. One the app can't read counts as none, so the rest of the profile still reads.
+    let workSchedule: WireLossy<WireWorkSchedule>?
     /// Not optional: a profile write has to name the version it read.
     let version: Int
+}
+
+struct WireWorkSchedule: Codable {
+    let workdayStart: String?
+    let workdayEnd: String?
+    let lunchStart: String?
+    let lunchMinutes: Int?
+    let workDays: [Int]?
+
+    init(_ schedule: WorkSchedule) {
+        workdayStart = schedule.workdayStart
+        workdayEnd = schedule.workdayEnd
+        lunchStart = schedule.lunchStart
+        lunchMinutes = schedule.lunchMinutes
+        workDays = schedule.workDays
+    }
+
+    var model: WorkSchedule? {
+        guard let start = workdayStart, let end = workdayEnd, let lunch = lunchStart, let minutes = lunchMinutes,
+              let days = workDays else { return nil }
+        return WorkSchedule(workdayStart: start, workdayEnd: end, lunchStart: lunch, lunchMinutes: minutes, workDays: days)
+    }
+}
+
+/// The profile write for the work hours alone: fields not sent are kept.
+struct WireScheduleUpdate: Encodable {
+    let workSchedule: WireWorkSchedule
 }
 
 // MARK: Consent: GET /v1/me/consent

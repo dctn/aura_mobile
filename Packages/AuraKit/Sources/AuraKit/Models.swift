@@ -178,6 +178,97 @@ public struct SessionTrace: Sendable, Equatable {
     public init(status: String, stressDrop: Double? = nil) { self.status = status; self.stressDrop = stressDrop }
 }
 
+// MARK: Day zones
+
+/// The four shades behind the calendar. The backend places them; the app only draws them.
+public enum ZoneKind: String, Sendable, CaseIterable {
+    case heavyWork, lightWork, shortRecovery, heavyRecovery
+}
+
+public struct Zone: Identifiable, Sendable, Equatable {
+    public var kind: ZoneKind
+    public var start: Date
+    public var end: Date
+    public var id: String { "\(kind.rawValue)-\(start.timeIntervalSince1970)" }
+    public init(kind: ZoneKind, start: Date, end: Date) { self.kind = kind; self.start = start; self.end = end }
+}
+
+/// Only `ready` days have zones. `unknown` is a status this app version doesn't know yet.
+public enum ZoneStatus: String, Sendable {
+    case ready, needsSchedule, noScore, dayOff, unknown
+}
+
+/// One day from `GET /v1/planner/zones`. The score is the day's morning capacity score, which the Planner reads from
+/// Capacity: the app never asks for it on its own.
+public struct ZoneDay: Identifiable, Sendable, Equatable {
+    /// yyyy-MM-dd (a `DayKey`).
+    public var date: String
+    public var status: ZoneStatus
+    public var score: Int?
+    /// peak, focused, steady, shallow or depleted.
+    public var level: String?
+    public var heavyMinutes: Int
+    public var reason: String?
+    public var zones: [Zone]
+    public var id: String { date }
+    public init(date: String, status: ZoneStatus, score: Int? = nil, level: String? = nil, heavyMinutes: Int = 0,
+                reason: String? = nil, zones: [Zone] = []) {
+        self.date = date; self.status = status; self.score = score; self.level = level
+        self.heavyMinutes = heavyMinutes; self.reason = reason; self.zones = zones
+    }
+}
+
+/// The profile's work hours, which the zones are placed inside. Times are "HH:MM" on the person's own clock.
+public struct WorkSchedule: Sendable, Equatable {
+    public var workdayStart: String
+    public var workdayEnd: String
+    public var lunchStart: String
+    /// 0 to 240.
+    public var lunchMinutes: Int
+    /// 1 = Monday ... 7 = Sunday, sorted, no repeats.
+    public var workDays: [Int]
+
+    public init(workdayStart: String, workdayEnd: String, lunchStart: String, lunchMinutes: Int, workDays: [Int]) {
+        self.workdayStart = workdayStart; self.workdayEnd = workdayEnd; self.lunchStart = lunchStart
+        self.lunchMinutes = lunchMinutes; self.workDays = workDays
+    }
+
+    /// What the form opens with when nothing is set: the website's default.
+    public static let suggested = WorkSchedule(workdayStart: "09:00", workdayEnd: "18:00", lunchStart: "13:00",
+                                               lunchMinutes: 60, workDays: [1, 2, 3, 4, 5])
+
+    /// Minutes after midnight for "HH:MM", or nil when it isn't a clock time. Two digits each, as the backend wants.
+    public static func minutes(_ clock: String) -> Int? {
+        let parts = clock.split(separator: ":", omittingEmptySubsequences: false)
+        let twoDigits = parts.allSatisfy { part in part.count == 2 && part.allSatisfy { c in c.isASCII && c.isNumber } }
+        guard parts.count == 2, twoDigits, let h = Int(parts[0]), let m = Int(parts[1]), (0..<24).contains(h),
+              (0..<60).contains(m)
+        else { return nil }
+        return h * 60 + m
+    }
+
+    /// "HH:MM" for minutes after midnight.
+    public static func clock(_ minutes: Int) -> String {
+        String(format: "%02d:%02d", minutes / 60, minutes % 60)
+    }
+
+    /// What's wrong, in words for the form, or nil when the backend will take it. Same rules and wording as the
+    /// website's `scheduleProblem`, plus the backend's 240-minute lunch limit.
+    public var problem: String? {
+        guard let start = Self.minutes(workdayStart), let end = Self.minutes(workdayEnd),
+              let lunch = Self.minutes(lunchStart) else { return "Choose every time." }
+        if end <= start { return "Work must end after it starts." }
+        if lunchMinutes < 0 { return "Lunch can't have a negative length." }
+        if lunchMinutes > 240 { return "Lunch can be at most 4 hours." }
+        if lunch < start || lunch + lunchMinutes > end { return "Lunch must fit inside your work hours." }
+        if workDays.isEmpty { return "Choose at least one work day." }
+        if workDays.contains(where: { !(1...7).contains($0) }) || Set(workDays).count != workDays.count {
+            return "Choose each work day once."
+        }
+        return nil
+    }
+}
+
 // MARK: Errors
 
 public enum AuraError: Error, Equatable, Sendable {
