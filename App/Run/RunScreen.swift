@@ -14,6 +14,7 @@ struct RunScreen: View {
                 AuraColor.background.ignoresSafeArea()
             }
         }
+        .otherSessionAlert(showsHere: true)
         .onAppear { UIApplication.shared.isIdleTimerDisabled = true }
         .onDisappear { UIApplication.shared.isIdleTimerDisabled = false }
     }

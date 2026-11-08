@@ -47,6 +47,7 @@ struct MainTabs: View {
             }
         }
         .tint(AuraColor.blue)
+        .otherSessionAlert(showsHere: !run.isExpanded)
         .fullScreenCover(isPresented: $run.isExpanded) {
             RunScreen()
         }

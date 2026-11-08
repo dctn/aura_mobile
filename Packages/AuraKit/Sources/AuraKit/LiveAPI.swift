@@ -172,8 +172,10 @@ public final class LiveAPI: AuraAPI, Sendable {
         let encoded = try LiveAPI.encode(body)
         let data = try await client.send(.session, "POST", "/v1/sessions", body: encoded)
         let started = try LiveAPI.decode(WireStartedSession.self, data)
-        return StartedSession(id: started.session.id, joined: started.joined ?? false,
-                              plannedMinutes: started.session.plannedMinutes)
+        let session = started.session
+        return StartedSession(id: session.id, joined: started.joined ?? false, plannedMinutes: session.plannedMinutes,
+                              title: session.title, kind: session.kind, device: session.device,
+                              endsAt: WireDate.parse(session.endsAt))
     }
 
     public func sessionAction(id: String, action: SessionAction) async throws {

@@ -27,6 +27,9 @@ struct ActiveRun: Codable, Equatable {
     var completeDelivered = false
     /// Wind-down: the lines still to go out as tasks. Nil until the run ends.
     var tomorrowLeft: [String]?
+    /// The session that was already running when this run asked for one, maybe on another device. Set until the
+    /// person picks in the alert; meanwhile no action goes to either session.
+    var otherSession: OtherSession?
 
     /// The Done sheet only says "Saved" when this is true.
     var isSaved: Bool {
@@ -40,6 +43,15 @@ struct ActiveRun: Codable, Equatable {
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty }
     }
+}
+
+/// What the backend said about the session it joined instead of starting one.
+struct OtherSession: Codable, Equatable {
+    var id: String
+    var title: String?
+    var kind: String?
+    var device: String?
+    var endsAt: Date?
 }
 
 /// Drives every run from `RunEngine`, which works from the clock. Nothing counts: one task sleeps until the next thing
@@ -147,6 +159,34 @@ final class RunController {
         }
         for await _ in stream {}
         timer.cancel()
+    }
+
+    /// The alert's "Stop it and start mine": ends the other session, then asks again with a new id, so the answer is
+    /// this run's own session. Whatever this run already missed (a pause, the final complete) goes out after.
+    func stopOtherAndStart() {
+        guard var run = active, let other = run.otherSession else { return }
+        run.otherSession = nil
+        run.startId = UUID().uuidString.lowercased()
+        active = run
+        save()
+        let api = self.api
+        let previous = lastAction
+        lastAction = Task<Void, Never> { [weak self] in
+            _ = await previous?.value
+            do {
+                try await api.sessionAction(id: other.id, action: .stop)
+            } catch {
+                // It already ended another way: the start below goes through all the same.
+                if (error as? AuraError)?.serverCode != "action_not_allowed" { self?.report(error) }
+            }
+        }
+        retryWhatFailed()
+    }
+
+    /// The alert's "Keep it": the other session carries on untouched, and this run ends on the phone.
+    func keepOtherSession() {
+        guard active?.otherSession != nil else { return }
+        close()
     }
 
     /// Cancel during the 3-2-1 starts nothing and calls nothing.
@@ -289,7 +329,8 @@ final class RunController {
             do {
                 let session = try await api.startSession(id: id, kind: mode.kind, mode: mode.sessionMode, plannedMinutes: planned, title: title)
                 self?.sessionStarted(session, startsAt: startsAt)
-                return session.id
+                // A joined session belongs to another run, so this run's actions mustn't reach it.
+                return session.joined ? nil : session.id
             } catch {
                 self?.startFailed(error, startsAt: startsAt)
                 return nil
@@ -300,6 +341,13 @@ final class RunController {
     private func sessionStarted(_ session: StartedSession, startsAt: Date) {
         if startingFor == startsAt { startingFor = nil }
         guard var run = active, run.engine.startsAt == startsAt else { return }
+        if session.joined {
+            run.otherSession = OtherSession(id: session.id, title: session.title, kind: session.kind,
+                                            device: session.device, endsAt: session.endsAt)
+            active = run
+            save()
+            return
+        }
         run.sessionId = session.id
         let isShortened = applyGrantedLength(session, to: &run)
         active = run
@@ -415,7 +463,7 @@ final class RunController {
     }
 
     private func retryStart() {
-        guard let run = active, run.sessionBegun, run.sessionId == nil, !run.workLimitReached,
+        guard let run = active, run.sessionBegun, run.sessionId == nil, run.otherSession == nil, !run.workLimitReached,
               startingFor != run.engine.startsAt else { return }
         requestSession(run)
         // The pause that went out with no session was skipped.

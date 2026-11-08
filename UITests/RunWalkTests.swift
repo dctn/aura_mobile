@@ -90,6 +90,21 @@ final class RunWalkTests: WalkTestCase {
         XCTAssertTrue(element("mode-start").waitForExistence(timeout: 10), "Done didn't go back to the page")
     }
 
+    /// A session already running elsewhere: the start joins it, the alert asks, and stopping it starts this run's own.
+    func testOtherSessionAlert() {
+        app.terminate()
+        app.launchArguments = ["--uitesting", "--uitesting-joined-session"]
+        app.launch()
+        startMode("nap-10", search: "ten-minute")
+        let alert = app.alerts["Another session is running"]
+        XCTAssertTrue(alert.waitForExistence(timeout: 15), "No alert for the session already running")
+        save("34-other-session")
+        tap(alert.buttons["Stop it and start mine"], "Stop it and start mine")
+        XCTAssertTrue(element("run-pause").waitForExistence(timeout: 10), "The run didn't carry on")
+        // The second start isn't joined, so the alert mustn't come back.
+        XCTAssertFalse(alert.waitForExistence(timeout: 3), "The alert came back after stopping the other session")
+    }
+
     private func element(_ identifier: String) -> XCUIElement {
         return app.descendants(matching: .any).matching(identifier: identifier).firstMatch
     }

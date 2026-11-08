@@ -632,6 +632,30 @@ final class LiveAPIBodyTests: XCTestCase {
         XCTAssertEqual(started, StartedSession(id: "one", joined: false, plannedMinutes: 15))
     }
 
+    func testJoinedSessionCarriesTheRunningSession() async throws {
+        let rig = TestRig()
+        let answer = """
+        {"session":{"id":"desk-1","kind":"focus","mode":"timer","state":"running","device":"desktop","title":"Deep work",\
+        "plannedMinutes":50,"startedAt":"2030-03-17T17:21:40.000Z","endsAt":"2030-03-17T18:11:40.000Z"},"joined":true}
+        """
+        rig.server.on("/v1/sessions", [.json(201, answer)])
+        let started = try await rig.api.startSession(id: "mine", kind: "focus", mode: "timer", plannedMinutes: 25, title: "Work")
+        XCTAssertEqual(started, StartedSession(id: "desk-1", joined: true, plannedMinutes: 50, title: "Deep work",
+                                               kind: "focus", device: "desktop",
+                                               endsAt: TestRig.now.addingTimeInterval(25 * 60)))
+    }
+
+    func testStartAnswerWithoutTheNewFieldsStillDecodes() async throws {
+        let rig = TestRig()
+        rig.server.on("/v1/sessions", [.json(201, "{\"session\":{\"id\":\"one\",\"title\":null,\"endsAt\":null},\"joined\":false}")])
+        let started = try await rig.api.startSession(id: "one", kind: "focus", mode: "flowtime", plannedMinutes: nil, title: "Flow")
+        XCTAssertEqual(started, StartedSession(id: "one", joined: false))
+        XCTAssertNil(started.title)
+        XCTAssertNil(started.kind)
+        XCTAssertNil(started.device)
+        XCTAssertNil(started.endsAt)
+    }
+
     func testOpenEndedSessionHasNoMinutes() async throws {
         let rig = TestRig()
         rig.server.on("/v1/sessions", [.json(201, "{\"session\":{\"id\":\"one\",\"plannedMinutes\":null},\"joined\":false}")])
@@ -780,6 +804,31 @@ final class StubAPITests: XCTestCase {
         XCTAssertEqual(timer, StartedSession(id: "chosen", joined: false, plannedMinutes: 25))
         let flow = try await stub.startSession(id: "open", kind: "focus", mode: "flowtime", plannedMinutes: 25, title: "Flow")
         XCTAssertEqual(flow, StartedSession(id: "open"))
+    }
+
+    func testJoinsTheSessionRunningElsewhereUntilItIsStopped() async throws {
+        let stub = StubAPI(joinsRunningSession: true)
+        let before = Date()
+        let joined = try await stub.startSession(id: "mine", kind: "focus", mode: "timer", plannedMinutes: 25, title: "Work")
+        XCTAssertEqual(joined.id, "running-elsewhere")
+        XCTAssertTrue(joined.joined)
+        XCTAssertEqual(joined.plannedMinutes, 50)
+        XCTAssertEqual(joined.title, "Deep work")
+        XCTAssertEqual(joined.kind, "focus")
+        XCTAssertEqual(joined.device, "desktop")
+        let endsAt = try XCTUnwrap(joined.endsAt)
+        XCTAssertGreaterThanOrEqual(endsAt.timeIntervalSince(before), 25 * 60)
+        XCTAssertLessThan(endsAt.timeIntervalSince(before), 26 * 60)
+
+        // Pausing it, or acting on another id, leaves it running.
+        try await stub.sessionAction(id: "running-elsewhere", action: .pause)
+        try await stub.sessionAction(id: "mine", action: .stop)
+        let still = try await stub.startSession(id: "mine", kind: "focus", mode: "timer", plannedMinutes: 25, title: "Work")
+        XCTAssertTrue(still.joined)
+
+        try await stub.sessionAction(id: "running-elsewhere", action: .stop)
+        let mine = try await stub.startSession(id: "mine", kind: "focus", mode: "timer", plannedMinutes: 25, title: "Work")
+        XCTAssertEqual(mine, StartedSession(id: "mine", joined: false, plannedMinutes: 25))
     }
 
     func testNewCallsDoNothing() async throws {

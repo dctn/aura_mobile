@@ -8,12 +8,19 @@ public final class StubAPI: AuraAPI, @unchecked Sendable {
     /// The score every stub work day has: a steady day, so 2 h of heavy work.
     static let zoneScore = 62
 
+    /// The id of the session the stub pretends is running on the person's computer.
+    public static let runningElsewhereId = "running-elsewhere"
+
     private let lock = NSLock()
     private var held: WorkSchedule?
+    /// True while the other device's session is still running and a start joins it.
+    private var otherRunning: Bool
 
-    /// Nil starts with no work hours set, as a new account does.
-    public init(workSchedule: WorkSchedule? = StubAPI.defaultSchedule) {
+    /// Nil starts with no work hours set, as a new account does. `joinsRunningSession` starts with a session already
+    /// running on the desktop, which the first start joins until it is stopped.
+    public init(workSchedule: WorkSchedule? = StubAPI.defaultSchedule, joinsRunningSession: Bool = false) {
         held = workSchedule
+        otherRunning = joinsRunningSession
     }
 
     private func day(_ offset: Int) -> String {
@@ -89,13 +96,23 @@ public final class StubAPI: AuraAPI, @unchecked Sendable {
         return MetricSeries(field: field, unit: "km", points: points)
     }
 
-    /// Grants what was asked, open-ended for flowtime as the backend does.
+    /// Grants what was asked, open-ended for flowtime as the backend does. While the other device's session runs,
+    /// answers with that one instead, joined, as the backend's one-running-session rule does.
     public func startSession(id: String, kind: String, mode: String, plannedMinutes: Int?, title: String) async throws -> StartedSession {
+        if otherSessionRunning {
+            return StartedSession(id: StubAPI.runningElsewhereId, joined: true, plannedMinutes: 50, title: "Deep work",
+                                  kind: "focus", device: "desktop", endsAt: Date().addingTimeInterval(25 * 60))
+        }
         let granted: Int? = mode == "flowtime" ? nil : plannedMinutes
         return StartedSession(id: id, plannedMinutes: granted)
     }
 
-    public func sessionAction(id: String, action: SessionAction) async throws {}
+    /// Stopping or completing the other device's session lets the next start go through.
+    public func sessionAction(id: String, action: SessionAction) async throws {
+        if id == StubAPI.runningElsewhereId && (action == .stop || action == .complete) {
+            otherSessionRunning = false
+        }
+    }
     public func sessionTrace(id: String) async throws -> SessionTrace { SessionTrace(status: "noData") }
     public func addEvent(title: String, start: Date, end: Date, kind: String) async throws {}
     public func addTask(title: String, plannedFor: String) async throws {}
@@ -115,6 +132,20 @@ public final class StubAPI: AuraAPI, @unchecked Sendable {
             lock.lock()
             defer { lock.unlock() }
             held = newValue
+        }
+    }
+
+    /// Same locking as `current`: only here, outside any async code.
+    private var otherSessionRunning: Bool {
+        get {
+            lock.lock()
+            defer { lock.unlock() }
+            return otherRunning
+        }
+        set {
+            lock.lock()
+            defer { lock.unlock() }
+            otherRunning = newValue
         }
     }
 

@@ -286,6 +286,11 @@ struct WireStartedSession: Decodable {
     struct Session: Decodable {
         let id: String
         let plannedMinutes: Int?
+        let title: String?
+        let kind: String?
+        let device: String?
+        /// An ISO instant, parsed with WireDate.parse; nil when open-ended.
+        let endsAt: String?
     }
 
     let session: Session

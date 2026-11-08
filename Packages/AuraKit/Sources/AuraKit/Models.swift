@@ -164,8 +164,18 @@ public struct StartedSession: Sendable, Equatable {
     public var joined: Bool
     /// What the backend granted, which a tired-day limit can make shorter than asked. Nil when open-ended.
     public var plannedMinutes: Int?
-    public init(id: String, joined: Bool = false, plannedMinutes: Int? = nil) {
+    /// The running session's title when `joined` is true. Nil when it has none.
+    public var title: String?
+    /// The running session's kind when `joined` is true: focus, meeting, recovery, walk or brainstorm.
+    public var kind: String?
+    /// The device the running session was started on when `joined` is true: phone, desktop, web.
+    public var device: String?
+    /// When the running session ends when `joined` is true. Nil when open-ended.
+    public var endsAt: Date?
+    public init(id: String, joined: Bool = false, plannedMinutes: Int? = nil, title: String? = nil, kind: String? = nil,
+                device: String? = nil, endsAt: Date? = nil) {
         self.id = id; self.joined = joined; self.plannedMinutes = plannedMinutes
+        self.title = title; self.kind = kind; self.device = device; self.endsAt = endsAt
     }
 }
 
