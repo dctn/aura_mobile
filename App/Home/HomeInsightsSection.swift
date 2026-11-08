@@ -170,10 +170,6 @@ private struct HomeUpcomingList: View {
 struct HomeEventRow: View {
     let event: CalendarEvent
 
-    private static let timeStyle = Date.FormatStyle()
-        .hour(.twoDigits(amPM: .omitted))
-        .minute(.twoDigits)
-
     private var barColor: Color {
         switch event.kind {
         case "recovery": return AuraColor.green
@@ -183,7 +179,8 @@ struct HomeEventRow: View {
     }
 
     private var timeRange: String {
-        "\(event.start.formatted(Self.timeStyle)) - \(event.end.formatted(Self.timeStyle))"
+        // Always 24-hour: a 12-hour locale with the AM/PM left off showed 15:51 as "03:51".
+        "\(ZoneText.clock(event.start)) - \(ZoneText.clock(event.end))"
     }
 
     private var spokenLabel: String {

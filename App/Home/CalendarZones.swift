@@ -518,7 +518,9 @@ private struct ZoneEventBlock: View {
             Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        // A white base under the tint, so a shade's label behind the block doesn't show through the text.
         .background(color.opacity(0.2))
+        .background(AuraColor.card)
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 }
