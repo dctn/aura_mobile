@@ -20,9 +20,7 @@ final class HomeWalkTests: WalkTestCase {
 
         let calendar = app.buttons["home-work-calendar"]
         XCTAssertTrue(calendar.waitForExistence(timeout: 10), "Not found: Calendar row")
-        bringIntoView(calendar)
-        calendar.tap()
-        XCTAssertTrue(element("calendar-zone-line").waitForExistence(timeout: 10), "No zone line on Calendar")
+        open(calendar, until: element("calendar-zone-line"), "No zone line on Calendar")
         save("13-work-calendar")
 
         dragPage(fromY: 0.7, toY: 0.2, velocity: .default)
@@ -30,10 +28,8 @@ final class HomeWalkTests: WalkTestCase {
 
         let hours = element("calendar-work-hours")
         XCTAssertTrue(hours.waitForExistence(timeout: 10), "Not found: Work hours row")
-        bringIntoView(hours)
-        hours.tap()
         let saveButton = element("work-hours-save")
-        XCTAssertTrue(saveButton.waitForExistence(timeout: 10), "The work hours form didn't open")
+        open(hours, until: saveButton, "The work hours form didn't open")
         save("15-work-hours")
         tap(element("work-hours-cancel"), "Cancel on the work hours form")
         waitUntilGone(saveButton, "The work hours form didn't close")

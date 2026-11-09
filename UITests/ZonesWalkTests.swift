@@ -8,7 +8,7 @@ final class ZonesWalkTests: WalkTestCase {
         app.launchArguments = ["--uitesting", "--uitesting-no-schedule"]
         app.launch()
 
-        openCalendarFromHome()
+        openCalendarFromHome(until: "calendar-set-hours")
         let setHours = element("calendar-set-hours")
         XCTAssertTrue(setHours.waitForExistence(timeout: 10), "No Set work hours button")
         save("16-calendar-no-schedule")

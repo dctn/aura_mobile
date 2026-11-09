@@ -47,6 +47,8 @@ class WalkTestCase: XCTestCase {
         let lowest = height * 0.7
         let highest = height * 0.15
         for _ in 0..<8 {
+            // A tap on a page that's still gliding only stops it, so every check waits for the page to settle.
+            waitUntilStill(element)
             let middle = element.frame.midY
             if middle >= highest && middle <= lowest && element.isHittable { return }
             if middle > lowest {
@@ -57,6 +59,28 @@ class WalkTestCase: XCTestCase {
         }
     }
 
+    /// Waits, up to about 3 s, until the element's frame stops changing between two looks a quarter second apart.
+    func waitUntilStill(_ element: XCUIElement) {
+        var last = element.frame
+        for _ in 0..<12 {
+            Thread.sleep(forTimeInterval: 0.25)
+            let now = element.frame
+            if now == last { return }
+            last = now
+        }
+    }
+
+    /// Brings the row into view and taps it until `target` shows, up to 3 tries; a tap that lands mid-scroll does nothing.
+    func open(_ element: XCUIElement, until target: XCUIElement, _ message: String) {
+        for _ in 0..<3 {
+            bringIntoView(element)
+            if target.exists { return }
+            if element.isHittable { element.tap() }
+            if target.waitForExistence(timeout: 4) { return }
+        }
+        XCTFail(message)
+    }
+
     /// Drags in the page's right margin. `app.swipeUp()` starts mid-screen, where Home's mood slider thumb can sit
     /// and take the touch, so Home's swipes did nothing.
     func dragPage(fromY: CGFloat, toY: CGFloat, velocity: XCUIGestureVelocity) {
@@ -65,15 +89,15 @@ class WalkTestCase: XCTestCase {
         start.press(forDuration: 0.05, thenDragTo: end, withVelocity: velocity, thenHoldForDuration: 0.1)
     }
 
-    /// Scrolls Home down to the Calendar row and opens it.
-    func openCalendarFromHome() {
+    /// Scrolls Home down to the Calendar row and opens it, until the element with `identifier` shows.
+    func openCalendarFromHome(until identifier: String = "calendar-zone-line") {
         openTab("Home")
         XCTAssertTrue(app.staticTexts["Insights"].waitForExistence(timeout: 20), "Home didn't open")
         let calendar = app.buttons["home-work-calendar"]
         XCTAssertTrue(calendar.waitForExistence(timeout: 10), "Not found: Calendar row")
         dragPage(fromY: 0.7, toY: 0.2, velocity: .default)
         dragPage(fromY: 0.7, toY: 0.2, velocity: .default)
-        bringIntoView(calendar)
-        calendar.tap()
+        let target = app.descendants(matching: .any).matching(identifier: identifier).firstMatch
+        open(calendar, until: target, "Calendar didn't open")
     }
 }

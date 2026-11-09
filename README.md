@@ -30,3 +30,9 @@ heavy recovery, shaded behind the hours. The Planner places them inside the prof
 comes from the morning capacity score, which the Planner reads from Capacity itself, so the app never asks for the score.
 A day with no score shows "No score yet", and with no work hours it shows "Set work hours". Work hours are edited in a
 sheet opened from Calendar or Settings. UI tests pass `--uitesting-no-schedule` to start with none.
+
+## A session already running
+The backend keeps one running session per person. When a run's start answers `joined: true`, the session belongs to
+another run, maybe on another device. The app doesn't adopt it: an alert names it ("“Deep work” on your computer is
+still going, until 16:30") and offers "Stop it and start mine" (stops that session, then starts this run's own with a
+new id) or "Keep it" (this run closes on the phone and nothing is sent). UI tests pass `--uitesting-joined-session`.
