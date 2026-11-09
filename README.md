@@ -84,6 +84,33 @@ A session running on another device would show in Sessions, but the demo account
 Recovery lists one alert per feature (its newest). The app lists every open day, but the demo's month was sent all
 at once, which would leave about 95 rows.
 
+## The calendar coach (Auto-allocate)
+
+The full calendar (`src/calendar/CalendarCard.tsx`, `ZonesPage.tsx`) shades each work day with a recovery rhythm
+read from a **capacity score** and the person's work and lunch hours (`src/calendar/dayZones.ts`): light and heavy
+work, short and heavy (lunch) recovery. **Auto-allocate** (the button shows while there are open to-dos) plans the
+day around that rhythm (`src/calendar/allocate.ts`, shown in `AllocateSheet.tsx`):
+
+- **Recovery zones are fixed rest.** No task is placed on one. A to-do **too big** for any single free gap is split
+  into pieces that fit around the recovery zones and before its deadline. An **already-committed** work/focus block
+  that crosses a recovery zone is **split in place** around it (its hidden source is tagged `auto:'split-src'`, its
+  pieces shown as amber `auto:'part'` work sessions). A **meeting** on a recovery zone is left alone with a warning —
+  a meeting can't be moved.
+- **Tough work goes first, and earns a break.** After each heavy task (`demand ≥ DEEP_DEMAND` 67) the coach slots a
+  short recovery break and projects a capacity gain. Tapping that break on the day raises the capacity score
+  (`RECOVERY_RESTORE`), so a re-run fits a little more in.
+- Each run is **idempotent**: prior `auto:'part'`/recovery events are cleared and recomputed from scratch.
+
+**Adding a task asks what the coach needs** (`src/calendar/ItemSheet.tsx`, written by `src/calendar/rows.ts`):
+
+- **Duration** → `estimateMinutes` (how long to reserve).
+- **Toughness** — Light / Focused / Hard / Deep → `demand` 25 / 55 / 72 / 88 (Deep ≥ 67 earns a recovery break).
+- **Deadline** — a day, optionally with a "finish before" time. Stored as `deadlineAt` / `deadlineHasTime`, kept
+  **apart** from `dueAt`/`hasTime` (a scheduled time), so an untimed to-do can carry a hard deadline and still be
+  auto-allocated. A time is a hard cap; a day-only deadline just orders the queue (`deadlineOf` in `allocate.ts`).
+
+All of this is a browser-only overlay — nothing is written back to AWS.
+
 ## Today, Recovery and Logging
 
 - **Home → Today** shows only what is due today (`todayItems` in `src/calendar/homeParts.ts`), in this order:
