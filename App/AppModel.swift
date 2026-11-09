@@ -55,9 +55,11 @@ final class AppModel {
         if ProcessInfo.processInfo.arguments.contains("--uitesting") {
             // `--uitesting-no-schedule` starts with no work hours, as a new account does.
             // `--uitesting-joined-session`: a session is already running elsewhere, so a run's start joins it.
+            // `--uitesting-needs-check`: Find a time for today asks for the Quick check first, until "Plan anyway".
             let arguments = ProcessInfo.processInfo.arguments
             let stub = StubAPI(workSchedule: arguments.contains("--uitesting-no-schedule") ? nil : StubAPI.defaultSchedule,
-                               joinsRunningSession: arguments.contains("--uitesting-joined-session"))
+                               joinsRunningSession: arguments.contains("--uitesting-joined-session"),
+                               needsQuickCheck: arguments.contains("--uitesting-needs-check"))
             return AppModel(api: stub, auth: StubAuth(), modes: modes, defaults: UserDefaults(suiteName: "uitesting") ?? .standard)
         }
         guard let url = Bundle.main.url(forResource: "aura-dev", withExtension: "json"),

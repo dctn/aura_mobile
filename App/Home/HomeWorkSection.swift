@@ -25,7 +25,7 @@ struct HomeWorkSection: View {
     }
 }
 
-/// Today's zones and events, the work hours, then the events of the next 6 days by day.
+/// Today's zones, Find a time and today's events, the work hours, then the events of the next 6 days by day.
 private struct HomeCalendarList: View {
     private struct Day: Identifiable {
         let id: Date
@@ -43,6 +43,7 @@ private struct HomeCalendarList: View {
     @State private var schedule: WorkSchedule?
     @State private var scheduleLoaded = false
     @State private var editingHours = false
+    @State private var findingTime = false
     @State private var retry = 0
 
     private var loadKey: String { "\(model.dataVersion)-\(retry)" }
@@ -77,11 +78,23 @@ private struct HomeCalendarList: View {
         .sheet(isPresented: $editingHours) {
             WorkHoursForm(saved: schedule)
         }
+        // A confirmed plan reloads every screen through `dataVersion`, so its blocks show on the hour grid.
+        .sheet(isPresented: $findingTime) {
+            FindATimeSheet(date: DayKey.string(Date())) {
+                model.dataVersion += 1
+            }
+        }
     }
 
     @ViewBuilder
     private var content: some View {
         zoneLine
+        if events != nil || failed {
+            PillButton(title: "Find a time", fills: true) {
+                findingTime = true
+            }
+            .accessibilityIdentifier("calendar-find-time")
+        }
         if let readyDay {
             ZoneCardSection(title: "Today", padding: 14) {
                 TimelineView(.everyMinute) { context in
