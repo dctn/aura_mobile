@@ -71,8 +71,126 @@ public struct TaskItem: Identifiable, Sendable, Equatable {
     /// Its time when it has one (a block or a timed due date).
     public var at: Date?
     public var done: Bool
-    public init(id: String, title: String, at: Date? = nil, done: Bool = false) {
-        self.id = id; self.title = title; self.at = at; self.done = done
+    /// The person asked Find a time to place it (Task's `autoAllocate`).
+    public var autoAllocate: Bool
+    public init(id: String, title: String, at: Date? = nil, done: Bool = false, autoAllocate: Bool = false) {
+        self.id = id; self.title = title; self.at = at; self.done = done; self.autoAllocate = autoAllocate
+    }
+}
+
+// MARK: Find a time: POST /v1/planner/allocate, GET /v1/planner/plan/{date}
+
+/// A day's plan from Find a time. With work hours, a morning band and a work day it follows the recovery rhythm
+/// (zones kept free, a break after deep work, tasks split to fit, recovery moved around the person's own blocks).
+public struct DayPlan: Sendable, Equatable {
+    public var date: String
+    public var generatedAt: Date
+    public var basis: PlanBasis
+    /// In time order.
+    public var placed: [PlanBlock]
+    public var unplaced: [UnplacedTask]
+    public var warnings: PlanWarnings
+    public var version: Int
+    public init(date: String, generatedAt: Date, basis: PlanBasis = PlanBasis(), placed: [PlanBlock] = [],
+                unplaced: [UnplacedTask] = [], warnings: PlanWarnings = PlanWarnings(), version: Int = 1) {
+        self.date = date; self.generatedAt = generatedAt; self.basis = basis; self.placed = placed
+        self.unplaced = unplaced; self.warnings = warnings; self.version = version
+    }
+}
+
+/// What the plan was built on.
+public struct PlanBasis: Sendable, Equatable {
+    public var quickCheckAt: Date?
+    public var attention: Double?
+    public var sleepMinutes: Double?
+    public var sharpestHours: SharpestHours?
+    public var capacityOpening: Double?
+    public var workLimitMinutes: Int?
+    public init(quickCheckAt: Date? = nil, attention: Double? = nil, sleepMinutes: Double? = nil,
+                sharpestHours: SharpestHours? = nil, capacityOpening: Double? = nil, workLimitMinutes: Int? = nil) {
+        self.quickCheckAt = quickCheckAt; self.attention = attention; self.sleepMinutes = sleepMinutes
+        self.sharpestHours = sharpestHours; self.capacityOpening = capacityOpening; self.workLimitMinutes = workLimitMinutes
+    }
+}
+
+public struct SharpestHours: Sendable, Equatable {
+    public var startHour: Int
+    public var endHour: Int
+    public init(startHour: Int, endHour: Int) {
+        self.startHour = startHour; self.endHour = endHour
+    }
+}
+
+/// One block of the plan. `kind` "recovery" is a 10-min rest after deep work: no task, rest only, not work.
+public struct PlanBlock: Sendable, Equatable {
+    public var taskId: String?
+    public var blockId: String?
+    public var start: Date
+    public var end: Date
+    public var demand: Double
+    public var workType: String?
+    public var reason: String
+    /// focus, meeting or recovery. An older Planner sends none, which reads as focus.
+    public var kind: String
+    /// Set on the pieces of a task split around recovery zones.
+    public var part: PlanPart?
+    public init(taskId: String?, blockId: String?, start: Date, end: Date, demand: Double, workType: String? = nil,
+                reason: String, kind: String = "focus", part: PlanPart? = nil) {
+        self.taskId = taskId; self.blockId = blockId; self.start = start; self.end = end; self.demand = demand
+        self.workType = workType; self.reason = reason; self.kind = kind; self.part = part
+    }
+
+    public var isRecovery: Bool { kind == "recovery" }
+
+    /// "Recovery" for a rest block, "Title (1/2)" for a piece, else the task's title.
+    public func title(taskTitle: String) -> String {
+        if isRecovery { return "Recovery" }
+        if let part { return "\(taskTitle) (\(part.index)/\(part.of))" }
+        return taskTitle
+    }
+}
+
+public struct PlanPart: Sendable, Equatable {
+    public var index: Int
+    public var of: Int
+    public init(index: Int, of: Int) {
+        self.index = index; self.of = of
+    }
+}
+
+/// A task that didn't fit. `reason` is the Planner's code (noFreeTime, overCapacity, workLimit, dueLater, tooLong,
+/// missingEstimate), kept as sent so a new code still reads; `detail` is the sentence to show.
+public struct UnplacedTask: Sendable, Equatable {
+    public var taskId: String
+    public var reason: String
+    public var detail: String
+    public init(taskId: String, reason: String, detail: String) {
+        self.taskId = taskId; self.reason = reason; self.detail = detail
+    }
+}
+
+/// committedOnRecovery: recovery zones that one of the person's own blocks (a meeting, their own focus) sat on.
+/// recoveryMoved: how many of those recoveries moved to free time; the rest were skipped.
+public struct PlanWarnings: Sendable, Equatable {
+    public var committedOnRecovery: Int
+    public var recoveryMoved: Int
+    public init(committedOnRecovery: Int = 0, recoveryMoved: Int = 0) {
+        self.committedOnRecovery = committedOnRecovery; self.recoveryMoved = recoveryMoved
+    }
+
+    /// The short note to show, or nil when nothing sat on recovery time.
+    public var note: String? {
+        guard committedOnRecovery > 0 else { return nil }
+        let blocks = committedOnRecovery == 1 ? "1 of your blocks was" : "\(committedOnRecovery) of your blocks were"
+        let moved: String
+        if recoveryMoved == 0 {
+            moved = "no free time to move the recovery"
+        } else if recoveryMoved == committedOnRecovery {
+            moved = committedOnRecovery == 1 ? "the recovery moved to free time" : "the recoveries moved to free time"
+        } else {
+            moved = "\(recoveryMoved) moved to free time"
+        }
+        return "\(blocks) on recovery time; \(moved)."
     }
 }
 

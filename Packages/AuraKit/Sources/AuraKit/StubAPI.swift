@@ -11,22 +11,39 @@ public final class StubAPI: AuraAPI, @unchecked Sendable {
     /// The id of the session the stub pretends is running on the person's computer.
     public static let runningElsewhereId = "running-elsewhere"
 
+    /// The stub's tasks, all marked for Find a time. "Book the dentist" always comes back unplaced, as due later.
+    static let stubTasks = [TaskItem(id: "t1", title: "Reply to Ana", autoAllocate: true),
+                            TaskItem(id: "t2", title: "Book the dentist", autoAllocate: true),
+                            TaskItem(id: "t3", title: "Write the review", autoAllocate: true)]
+
     private let lock = NSLock()
     private var held: WorkSchedule?
     /// True while the other device's session is still running and a start joins it.
     private var otherRunning: Bool
+    /// Find a time's real runs, one per date (a `DayKey`).
+    private var savedPlans: [String: DayPlan] = [:]
+    /// True when today's plan asks for the Quick check first, as the Planner does without `skipCheck`.
+    private let quickCheckNeeded: Bool
 
     /// Nil starts with no work hours set, as a new account does. `joinsRunningSession` starts with a session already
-    /// running on the desktop, which the first start joins until it is stopped.
-    public init(workSchedule: WorkSchedule? = StubAPI.defaultSchedule, joinsRunningSession: Bool = false) {
+    /// running on the desktop, which the first start joins until it is stopped. `needsQuickCheck` makes Find a time
+    /// for today answer 409 `quick_check_required` unless `skipCheck` is sent.
+    public init(workSchedule: WorkSchedule? = StubAPI.defaultSchedule, joinsRunningSession: Bool = false,
+                needsQuickCheck: Bool = false) {
         held = workSchedule
         otherRunning = joinsRunningSession
+        quickCheckNeeded = needsQuickCheck
     }
 
     /// Capacity's band for a score, as the stub stands in for it.
     static func level(_ score: Int) -> String { StubZones.level(score) }
     /// The Planner's heavy minutes for a score's band.
     static func heavyMinutes(_ score: Int) -> Int { StubZones.heavyMinutes(score) }
+
+    /// The title of one of the stub's tasks, or "" for none.
+    static func taskTitle(_ id: String?) -> String {
+        stubTasks.first(where: { $0.id == id })?.title ?? ""
+    }
 
     private func day(_ offset: Int) -> String {
         DayKey.string(Calendar.current.date(byAdding: .day, value: offset, to: Date()) ?? Date())
@@ -37,17 +54,24 @@ public final class StubAPI: AuraAPI, @unchecked Sendable {
                     thinking: Score(name: "Thinking", value: 50), focus: Score(name: "Focus", value: 71))
     }
 
-    /// Always ahead of the clock, so Upcoming shows them whenever CI runs.
+    /// Always ahead of the clock, so Upcoming shows them whenever CI runs. Then the blocks of Find a time's real runs
+    /// that start in [from, to), as the Planner writes them to the calendar. A dry run writes nothing.
     public func events(from: Date, to: Date) async throws -> [CalendarEvent] {
         let now = Date()
         let nap = now.addingTimeInterval(15 * 60)
         let building = nap.addingTimeInterval(15 * 60)
-        return [CalendarEvent(id: "e1", title: "10 Min nap", start: nap, end: building, kind: "recovery"),
-                CalendarEvent(id: "e2", title: "Xcode Building", start: building, end: building.addingTimeInterval(60 * 60), kind: "focus")]
+        let fixed = [CalendarEvent(id: "e1", title: "10 Min nap", start: nap, end: building, kind: "recovery"),
+                     CalendarEvent(id: "e2", title: "Xcode Building", start: building, end: building.addingTimeInterval(60 * 60), kind: "focus")]
+        let blocks = stored.values.flatMap { $0.placed }.filter { $0.start >= from && $0.start < to }.sorted { $0.start < $1.start }
+        let planned = blocks.map { block -> CalendarEvent in
+            CalendarEvent(id: block.blockId ?? UUID().uuidString, title: block.title(taskTitle: StubAPI.taskTitle(block.taskId)),
+                          start: block.start, end: block.end, kind: block.kind)
+        }
+        return fixed + planned
     }
 
     public func tasks() async throws -> [TaskItem] {
-        [TaskItem(id: "t1", title: "Reply to Ana"), TaskItem(id: "t2", title: "Book the dentist")]
+        StubAPI.stubTasks
     }
 
     public func alerts(from: String, to: String) async throws -> [AlertItem] {
@@ -177,6 +201,106 @@ public final class StubAPI: AuraAPI, @unchecked Sendable {
         }
         return days
     }
+
+    // MARK: Find a time
+
+    /// Same locking as `current`: only here, outside any async code.
+    private var stored: [String: DayPlan] {
+        get {
+            lock.lock()
+            defer { lock.unlock() }
+            return savedPlans
+        }
+        set {
+            lock.lock()
+            defer { lock.unlock() }
+            savedPlans = newValue
+        }
+    }
+
+    /// The same plan for every day, inside the stub zones. A past date and, with `needsQuickCheck`, today without
+    /// `skipCheck` are refused as the Planner refuses them. A real run keeps the plan for its date; a dry run doesn't.
+    public func allocate(date: String, dryRun: Bool, skipCheck: Bool, taskIds: [String]?) async throws -> DayPlan {
+        let calendar = DayKey.calendar
+        guard let day = DayKey.date(date, calendar: calendar) else {
+            throw AuraError.server(code: "validation_failed", message: "Send the date as yyyy-MM-dd.", status: 400)
+        }
+        let key = DayKey.string(day, calendar: calendar)
+        let today = DayKey.string(Date(), calendar: calendar)
+        if key < today {
+            throw AuraError.server(code: "date_in_past", message: "Plan today or a later day.", status: 400)
+        }
+        if quickCheckNeeded && !skipCheck && key == today {
+            throw AuraError.server(code: "quick_check_required",
+                                   message: "Take today's Quick check first, or send skipCheck to plan without it.", status: 409)
+        }
+        let version = (stored[key]?.version ?? 0) + 1
+        let plan = StubPlan.build(key: key, day: day, schedule: current, skipCheck: skipCheck, taskIds: taskIds,
+                                  version: version, calendar: calendar)
+        if !dryRun {
+            stored[key] = plan
+        }
+        return plan
+    }
+
+    public func plan(date: String) async throws -> DayPlan? {
+        guard let day = DayKey.date(date) else { return nil }
+        return stored[DayKey.string(day)]
+    }
+}
+
+/// Find a time's answer for the stub: fixed blocks for the stub tasks. With work hours, a band and a work day they
+/// follow the recovery rhythm inside the stub zones; otherwise the plain plan. The real app shows what the Planner sends.
+enum StubPlan {
+    private static let early = "09:00: early in your working day. Your sharpest hours aren't known yet, so hard work goes first."
+
+    static func build(key: String, day: Date, schedule: WorkSchedule?, skipCheck: Bool, taskIds: [String]?,
+                      version: Int, calendar: Calendar) -> DayPlan {
+        let parts = calendar.dateComponents([.year, .month, .day], from: day)
+        func time(_ hour: Int, _ minute: Int) -> Date {
+            return StubZones.at(hour * 60 + minute, parts, calendar) ?? day
+        }
+        let zoneDay = StubZones.day(key, schedule: schedule, score: StubAPI.zoneScore, calendar: calendar)
+        let rhythm = zoneDay.status == .ready && zoneDay.heavyMinutes > 0
+        // Each block with the task it belongs to, so a rest goes when its task is left out.
+        let blocks: [(owner: String, block: PlanBlock)]
+        let warnings: PlanWarnings
+        if rhythm {
+            blocks = [
+                (owner: "t3", block: PlanBlock(taskId: "t3", blockId: "plan-\(key)-t3-p1", start: time(9, 0), end: time(10, 30),
+                                               demand: 78, workType: "deepFocus", reason: early,
+                                               part: PlanPart(index: 1, of: 2))),
+                (owner: "t3", block: PlanBlock(taskId: "t3", blockId: "plan-\(key)-t3-p2", start: time(10, 45), end: time(11, 15),
+                                               demand: 78, workType: "deepFocus",
+                                               reason: "10:45: the rest of it, after the short recovery.",
+                                               part: PlanPart(index: 2, of: 2))),
+                (owner: "t3", block: PlanBlock(taskId: nil, blockId: "plan-\(key)-t3-rest", start: time(11, 15), end: time(11, 25),
+                                               demand: 0, reason: "A short rest after deep work.", kind: "recovery")),
+                (owner: "t1", block: PlanBlock(taskId: "t1", blockId: "plan-\(key)-t1", start: time(14, 0), end: time(14, 30),
+                                               demand: 25, workType: "routine",
+                                               reason: "Light enough for any hour: 14:00 keeps the better hours for harder work.")),
+            ]
+            warnings = PlanWarnings(committedOnRecovery: 1, recoveryMoved: 1)
+        } else {
+            blocks = [
+                (owner: "t3", block: PlanBlock(taskId: "t3", blockId: "plan-\(key)-t3", start: time(9, 0), end: time(11, 0),
+                                               demand: 78, workType: "deepFocus", reason: early)),
+                (owner: "t1", block: PlanBlock(taskId: "t1", blockId: "plan-\(key)-t1", start: time(11, 15), end: time(11, 45),
+                                               demand: 25, workType: "routine",
+                                               reason: "Light enough for any hour: 11:15 keeps the better hours for harder work.")),
+            ]
+            warnings = PlanWarnings()
+        }
+        let wanted: Set<String>? = taskIds.map { Set($0) }
+        let placed = blocks.filter { wanted?.contains($0.owner) ?? true }.map { $0.block }
+        let tomorrow = DayKey.string(calendar.date(byAdding: .day, value: 1, to: day) ?? day, calendar: calendar)
+        let unplaced = [UnplacedTask(taskId: "t2", reason: "dueLater", detail: "Planned for \(tomorrow).")]
+            .filter { wanted?.contains($0.taskId) ?? true }
+        let basis = PlanBasis(quickCheckAt: skipCheck ? nil : time(8, 40), attention: 71, sleepMinutes: 432,
+                              sharpestHours: nil, capacityOpening: Double(StubAPI.zoneScore), workLimitMinutes: nil)
+        return DayPlan(date: key, generatedAt: Date(), basis: basis, placed: placed, unplaced: unplaced, warnings: warnings,
+                       version: version)
+    }
 }
 
 /// The Planner's zone placement (services/planner/src/service/zones/classify.ts), for the stub only. The real app
@@ -247,7 +371,7 @@ enum StubZones {
     }
 
     /// The wall-clock time `minute` after midnight on that day.
-    private static func at(_ minute: Int, _ day: DateComponents, _ calendar: Calendar) -> Date? {
+    static func at(_ minute: Int, _ day: DateComponents, _ calendar: Calendar) -> Date? {
         var parts = day
         parts.hour = minute / 60
         parts.minute = minute % 60

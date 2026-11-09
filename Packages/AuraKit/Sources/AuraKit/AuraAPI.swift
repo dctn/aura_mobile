@@ -43,6 +43,14 @@ public protocol AuraAPI: Sendable {
     // Day zones
     /// `from` and `to` are `DayKey`s, at most 31 days apart. One entry per day.
     func dayZones(from: String, to: String) async throws -> [ZoneDay]
+
+    // Find a time
+    /// Places the tasks marked `autoAllocate` on `date` (a `DayKey`). The day window is the profile's work hours when
+    /// set, else the Planner's 09:00-18:00. `dryRun` writes nothing; `skipCheck` plans today without the Quick check
+    /// (otherwise 409 `quick_check_required`). `taskIds` narrows the tasks, at most 200; nil means all of them.
+    func allocate(date: String, dryRun: Bool, skipCheck: Bool, taskIds: [String]?) async throws -> DayPlan
+    /// The stored plan for `date`, or nil when there isn't one yet.
+    func plan(date: String) async throws -> DayPlan?
 }
 
 public enum AuthState: Sendable, Equatable {

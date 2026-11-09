@@ -271,6 +271,32 @@ public final class LiveAPI: AuraAPI, Sendable {
         return days
     }
 
+    // MARK: Find a time
+
+    /// Reads the profile's work hours first and sends them as the day window; without any the Planner uses
+    /// 09:00-18:00. A failed read stops here instead of planning in the wrong hours. Errors come through as the
+    /// Planner sends them: 409 `quick_check_required` (ask, then call again with `skipCheck`), 400 `date_in_past`.
+    public func allocate(date: String, dryRun: Bool, skipCheck: Bool, taskIds: [String]?) async throws -> DayPlan {
+        let schedule = try await workSchedule()
+        let request = WireAllocateRequest(date: date, dryRun: dryRun, skipCheck: skipCheck, taskIds: taskIds,
+                                          workdayStart: schedule?.workdayStart, workdayEnd: schedule?.workdayEnd)
+        let body = try LiveAPI.encodeValue(request)
+        let data = try await client.send(.planner, "POST", "/v1/planner/allocate", body: body)
+        return try LiveAPI.dayPlan(data)
+    }
+
+    /// Nil on a 404, which is how the Planner says no plan has been made for that day yet.
+    public func plan(date: String) async throws -> DayPlan? {
+        let path = "/v1/planner/plan/\(URLEscape.component(date))"
+        let data: Data
+        do {
+            data = try await client.send(.planner, "GET", path)
+        } catch AuraError.server(_, _, let status) where status == 404 {
+            return nil
+        }
+        return try LiveAPI.dayPlan(data)
+    }
+
     // MARK: Helpers
 
     private static func overlaps(_ event: CalendarEvent, from: Date, to: Date) -> Bool {
@@ -340,7 +366,18 @@ public final class LiveAPI: AuraAPI, Sendable {
         do {
             return try JSONDecoder().decode(type, from: data)
         } catch {
-            throw AuraError.server(code: "bad_response", message: "Aura sent an answer this app can't read.", status: 200)
+            throw LiveAPI.badResponse
         }
+    }
+
+    /// The plan in `{"plan": ...}`. One without a readable `generatedAt` is a bad answer, like one that isn't JSON.
+    private static func dayPlan(_ data: Data) throws -> DayPlan {
+        let answer = try decode(WirePlanResponse.self, data)
+        guard let plan = answer.plan.model else { throw LiveAPI.badResponse }
+        return plan
+    }
+
+    private static var badResponse: AuraError {
+        return AuraError.server(code: "bad_response", message: "Aura sent an answer this app can't read.", status: 200)
     }
 }

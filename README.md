@@ -27,7 +27,9 @@ and the work hours when the person saves the Work hours form (`PUT /v1/me/profil
 ## Day zones
 Home → Work → Calendar shows today's zones from `GET /v1/planner/zones`: heavy work, light work, short recovery and
 heavy recovery, shaded behind the hours. The Planner places them inside the profile's work hours. The amount of heavy work
-comes from the morning capacity score, which the Planner reads from Capacity itself, so the app never asks for the score.
+comes from the morning capacity band (Capacity's `openingBand`: peak 89+, focused 79, steady 68, shallow 57, depleted
+under 57, since 9 Nov 2026), which the Planner reads from Capacity itself. The app shows `level` and `heavyMinutes`
+as sent and never works them out from the score.
 A day with no score shows "No score yet", and with no work hours it shows "Set work hours". Work hours are edited in a
 sheet opened from Calendar or Settings. UI tests pass `--uitesting-no-schedule` to start with none.
 
@@ -36,3 +38,12 @@ The backend keeps one running session per person. When a run's start answers `jo
 another run, maybe on another device. The app doesn't adopt it: an alert names it ("“Deep work” on your computer is
 still going, until 16:30") and offers "Stop it and start mine" (stops that session, then starts this run's own with a
 new id) or "Keep it" (this run closes on the phone and nothing is sent). UI tests pass `--uitesting-joined-session`.
+
+## Find a time (AuraKit only so far)
+`AuraAPI.allocate(date:dryRun:skipCheck:taskIds:)` calls Planner `POST /v1/planner/allocate` and `plan(date:)` reads
+`GET /v1/planner/plan/{date}`. Allocation places tasks marked `autoAllocate`, using the profile's work hours as the
+day window (otherwise the Planner uses 09:00-18:00). With work hours, a morning band and a work day, the plan follows
+the recovery rhythm: zones are kept free, a 10-min `recovery` block comes after deep work, a task can be split into
+"Title (1/2)" and "Title (2/2)", and `warnings` counts the person's own blocks that sat on recovery time. A 409
+`quick_check_required` means "Do the Quick check" or "Plan anyway" (retry with `skipCheck`). There's no screen for it
+yet; it's waiting on where it goes in the app.

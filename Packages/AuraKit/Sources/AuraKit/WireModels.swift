@@ -146,12 +146,15 @@ struct WireTask: Decodable {
     let hasTime: Bool?
     let scheduledAt: String?
     let completedAt: String?
+    /// Find a time places it. A Task service from before the flag sends none, which reads as no.
+    let autoAllocate: Bool?
 
     var model: TaskItem {
         // A due date without a time only names the day, so it isn't the task's time.
         let due: Date? = hasTime == true ? WireDate.parse(dueAt) : nil
         let done = status == "completed" || completedAt != nil
-        return TaskItem(id: id, title: title ?? "", at: WireDate.parse(scheduledAt) ?? due, done: done)
+        return TaskItem(id: id, title: title ?? "", at: WireDate.parse(scheduledAt) ?? due, done: done,
+                        autoAllocate: autoAllocate == true)
     }
 }
 
@@ -336,6 +339,121 @@ struct WireZoneDay: Decodable {
 
 struct WireZoneDays: Decodable {
     let days: [WireLossy<WireZoneDay>]?
+}
+
+// MARK: Find a time: POST /v1/planner/allocate, GET /v1/planner/plan/{date}
+
+/// The allocate body. The route is a strict object that takes a value or nothing, never null: the optional fields
+/// are left out when nil, which synthesized Encodable does (it writes optionals with encodeIfPresent).
+struct WireAllocateRequest: Encodable {
+    let date: String
+    let dryRun: Bool
+    let skipCheck: Bool
+    let taskIds: [String]?
+    let workdayStart: String?
+    let workdayEnd: String?
+}
+
+/// `{"plan": planView}`, the answer of both routes.
+struct WirePlanResponse: Decodable {
+    let plan: WirePlan
+}
+
+struct WirePlan: Decodable {
+    struct Hours: Decodable {
+        let startHour: Double?
+        let endHour: Double?
+
+        var model: SharpestHours? {
+            guard let start = WireWhole.from(startHour), let end = WireWhole.from(endHour) else { return nil }
+            return SharpestHours(startHour: start, endHour: end)
+        }
+    }
+
+    struct Basis: Decodable {
+        let quickCheckAt: String?
+        let attention: Double?
+        let sleepMinutes: Double?
+        let sharpestHours: WireLossy<Hours>?
+        let capacityOpening: Double?
+        let workLimitMinutes: Double?
+
+        var model: PlanBasis {
+            return PlanBasis(quickCheckAt: WireDate.parse(quickCheckAt), attention: attention, sleepMinutes: sleepMinutes,
+                             sharpestHours: sharpestHours?.item?.model, capacityOpening: capacityOpening,
+                             workLimitMinutes: WireWhole.from(workLimitMinutes))
+        }
+    }
+
+    struct Part: Decodable {
+        let index: Double?
+        let of: Double?
+
+        var model: PlanPart? {
+            guard let number = WireWhole.from(index), let total = WireWhole.from(of) else { return nil }
+            return PlanPart(index: number, of: total)
+        }
+    }
+
+    struct Placement: Decodable {
+        let taskId: String?
+        let blockId: String?
+        let start: String?
+        let end: String?
+        let demand: Double?
+        let workType: String?
+        let reason: String?
+        /// Missing from a Planner deployed before the recovery rhythm: that reads as focus.
+        let kind: String?
+        let part: WireLossy<Part>?
+
+        /// Nil when a time can't be read: that block is left out.
+        var model: PlanBlock? {
+            guard let startDate = WireDate.parse(start), let endDate = WireDate.parse(end) else { return nil }
+            return PlanBlock(taskId: taskId, blockId: blockId, start: startDate, end: endDate, demand: demand ?? 0,
+                             workType: workType, reason: reason ?? "", kind: kind ?? "focus", part: part?.item?.model)
+        }
+    }
+
+    /// The reason is kept as sent, so a code this app doesn't know yet still reads.
+    struct Unplaced: Decodable {
+        let taskId: String
+        let reason: String?
+        let detail: String?
+
+        var model: UnplacedTask {
+            return UnplacedTask(taskId: taskId, reason: reason ?? "", detail: detail ?? "")
+        }
+    }
+
+    struct Warnings: Decodable {
+        let committedOnRecovery: Double?
+        let recoveryMoved: Double?
+
+        var model: PlanWarnings {
+            return PlanWarnings(committedOnRecovery: WireWhole.from(committedOnRecovery) ?? 0,
+                                recoveryMoved: WireWhole.from(recoveryMoved) ?? 0)
+        }
+    }
+
+    let date: String
+    let generatedAt: String?
+    let basis: WireLossy<Basis>?
+    let placed: [WireLossy<Placement>]?
+    let unplaced: [WireLossy<Unplaced>]?
+    /// Missing from a Planner deployed before the recovery rhythm: that reads as no warnings.
+    let warnings: WireLossy<Warnings>?
+    let version: Double?
+
+    /// Nil when `generatedAt` can't be read, which the caller turns into a bad answer. Every Planner build sends it,
+    /// so an unreadable one means the shape changed, and any time put in its place would show a wrong "planned at".
+    var model: DayPlan? {
+        guard let generated = WireDate.parse(generatedAt) else { return nil }
+        let blocks = (placed ?? []).compactMap { $0.item?.model }.sorted { $0.start < $1.start }
+        return DayPlan(date: date, generatedAt: generated, basis: basis?.item?.model ?? PlanBasis(), placed: blocks,
+                       unplaced: (unplaced ?? []).compactMap { $0.item?.model },
+                       warnings: warnings?.item?.model ?? PlanWarnings(), version: WireWhole.from(version) ?? 0)
+    }
 }
 
 // MARK: Profile: GET /v1/me, PUT /v1/me/profile
