@@ -24,15 +24,25 @@ public final class StubAPI: AuraAPI, @unchecked Sendable {
     private var savedPlans: [String: DayPlan] = [:]
     /// True when today's plan asks for the Quick check first, as the Planner does without `skipCheck`.
     private let quickCheckNeeded: Bool
+    /// True when any Quick check with at least one reaction counts as valid (UI tests run a few-second check).
+    private let shortChecks: Bool
+    /// Quick checks by id, as first answered, so a resend gets the same answer.
+    private var savedChecks: [String: QuickCheckResult] = [:]
+    /// The first valid Quick check of each day (a `DayKey`): it clears the gate and is the plan's `quickCheckAt`.
+    private var firstValidCheck: [String: Date] = [:]
+    /// Valid checks taken here, added to Attention's `checksCounted`.
+    private var countedChecks = 0
 
     /// Nil starts with no work hours set, as a new account does. `joinsRunningSession` starts with a session already
     /// running on the desktop, which the first start joins until it is stopped. `needsQuickCheck` makes Find a time
-    /// for today answer 409 `quick_check_required` unless `skipCheck` is sent.
+    /// for today answer 409 `quick_check_required` unless `skipCheck` is sent or a valid Quick check was taken today.
+    /// `shortChecksCount` makes any Quick check with at least one reaction valid, whatever its length.
     public init(workSchedule: WorkSchedule? = StubAPI.defaultSchedule, joinsRunningSession: Bool = false,
-                needsQuickCheck: Bool = false) {
+                needsQuickCheck: Bool = false, shortChecksCount: Bool = false) {
         held = workSchedule
         otherRunning = joinsRunningSession
         quickCheckNeeded = needsQuickCheck
+        shortChecks = shortChecksCount
     }
 
     /// Capacity's band for a score, as the stub stands in for it.
@@ -49,8 +59,14 @@ public final class StubAPI: AuraAPI, @unchecked Sendable {
         DayKey.string(Calendar.current.date(byAdding: .day, value: offset, to: Date()) ?? Date())
     }
 
+    /// The Figma's numbers. Each valid Quick check taken here adds one to Attention's `checksCounted`.
     public func scoresToday() async throws -> ScoresToday {
-        ScoresToday(attention: Score(name: "Attention", value: 75), memory: Score(name: "Memory", value: 50),
+        StubAPI.scores(counted: checksCountedSoFar)
+    }
+
+    static func scores(counted: Int) -> ScoresToday {
+        ScoresToday(attention: Score(name: "Attention", value: 75, checksCounted: counted),
+                    memory: Score(name: "Memory", value: 50),
                     thinking: Score(name: "Thinking", value: 50), focus: Score(name: "Focus", value: 71))
     }
 
@@ -219,7 +235,8 @@ public final class StubAPI: AuraAPI, @unchecked Sendable {
     }
 
     /// The same plan for every day, inside the stub zones. A past date and, with `needsQuickCheck`, today without
-    /// `skipCheck` are refused as the Planner refuses them. A real run keeps the plan for its date; a dry run doesn't.
+    /// `skipCheck` are refused as the Planner refuses them, until a valid Quick check is taken today; the plan then names
+    /// that check's time. A real run keeps the plan for its date; a dry run doesn't.
     public func allocate(date: String, dryRun: Bool, skipCheck: Bool, taskIds: [String]?) async throws -> DayPlan {
         let calendar = DayKey.calendar
         guard let day = DayKey.date(date, calendar: calendar) else {
@@ -230,13 +247,14 @@ public final class StubAPI: AuraAPI, @unchecked Sendable {
         if key < today {
             throw AuraError.server(code: "date_in_past", message: "Plan today or a later day.", status: 400)
         }
-        if quickCheckNeeded && !skipCheck && key == today {
+        let checkAt = quickCheckTime(day: key)
+        if quickCheckNeeded && !skipCheck && key == today && checkAt == nil {
             throw AuraError.server(code: "quick_check_required",
                                    message: "Take today's Quick check first, or send skipCheck to plan without it.", status: 409)
         }
         let version = (stored[key]?.version ?? 0) + 1
         let plan = StubPlan.build(key: key, day: day, schedule: current, skipCheck: skipCheck, taskIds: taskIds,
-                                  version: version, calendar: calendar)
+                                  version: version, calendar: calendar, quickCheckAt: checkAt)
         if !dryRun {
             stored[key] = plan
         }
@@ -247,6 +265,118 @@ public final class StubAPI: AuraAPI, @unchecked Sendable {
         guard let day = DayKey.date(date) else { return nil }
         return stored[DayKey.string(day)]
     }
+
+    // MARK: Quick check
+
+    /// Scored as Health Data scores it (see `StubCheck`). A resent id answers with the stored result. A valid check
+    /// counts toward the normal here (the stub knows no wake time or sleep) and clears its day's Quick check gate.
+    public func submitCheck(_ run: QuickCheckRun) async throws -> QuickCheckResult {
+        return record(run)
+    }
+
+    /// The lock is taken once for the whole check, outside any async code, so two sends of one id store one result.
+    private func record(_ run: QuickCheckRun) -> QuickCheckResult {
+        lock.lock()
+        defer { lock.unlock() }
+        if let saved = savedChecks[run.id] { return saved }
+        let measured = StubCheck.measure(run, shortChecksCount: shortChecks)
+        let valid = measured.invalidReason == nil
+        if valid {
+            countedChecks += 1
+            // The day's first valid check stays the one the plan names.
+            let key = DayKey.string(run.takenAt)
+            let isFirst: Bool = firstValidCheck[key].map { run.takenAt < $0 } ?? true
+            if isFirst {
+                firstValidCheck[key] = run.takenAt
+            }
+        }
+        let result = QuickCheckResult(id: run.id, valid: valid, invalidReason: measured.invalidReason,
+                                      meanRtMs: measured.meanRtMs, medianRtMs: measured.medianRtMs,
+                                      lapses: measured.lapses, falseStarts: measured.falseStarts,
+                                      performance: measured.performance, qualifiesForNormal: valid,
+                                      scores: StubAPI.scores(counted: countedChecks))
+        savedChecks[run.id] = result
+        return result
+    }
+
+    /// Same locking as `current`: only here, outside any async code.
+    private func quickCheckTime(day key: String) -> Date? {
+        lock.lock()
+        defer { lock.unlock() }
+        return firstValidCheck[key]
+    }
+
+    /// Same locking as `current`: only here, outside any async code.
+    private var checksCountedSoFar: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return countedChecks
+    }
+}
+
+/// Health Data's PVT-B scoring (services/health-data/src/service/attention.ts), for the stub only. The real app shows
+/// what the backend sends.
+enum StubCheck {
+    static let minSeconds = 170
+    static let maxSeconds = 200
+    static let lapseMs = 355.0
+    static let falseStartMs = 100.0
+    static let minResponses = 30
+    static let maxFalseStartShare = 0.2
+
+    struct Measures: Equatable {
+        let meanRtMs: Double
+        let medianRtMs: Double
+        let lapses: Int
+        let falseStarts: Int
+        let performance: Double
+        let invalidReason: String?
+    }
+
+    /// Reactions under 100 ms count as false starts, not reactions. With `shortChecksCount` any run with a reaction is
+    /// valid; otherwise it needs 170-200 s, 30+ answers and false starts at most 20% of answers plus taps.
+    static func measure(_ run: QuickCheckRun, shortChecksCount: Bool) -> Measures {
+        let reactions = run.reactionTimesMs.filter { $0 >= falseStartMs }
+        let falseStarts = run.falseStarts + (run.reactionTimesMs.count - reactions.count)
+        var mean = 0.0
+        var middle = 0.0
+        var lapses = 0
+        var performance = 0.0
+        if !reactions.isEmpty {
+            let count = Double(reactions.count)
+            lapses = reactions.filter { $0 >= lapseMs }.count
+            mean = rounded(reactions.reduce(0, +) / count, 1)
+            middle = rounded(median(reactions), 1)
+            performance = rounded(1 - Double(lapses + falseStarts) / Double(reactions.count + falseStarts), 4)
+        }
+        let reason: String?
+        if shortChecksCount && !run.reactionTimesMs.isEmpty {
+            reason = nil
+        } else {
+            reason = invalidReason(run, answers: reactions.count, falseStarts: falseStarts)
+        }
+        return Measures(meanRtMs: mean, medianRtMs: middle, lapses: lapses, falseStarts: falseStarts,
+                        performance: performance, invalidReason: reason)
+    }
+
+    /// The server's code, checked in the server's order; the screen turns it into words.
+    private static func invalidReason(_ run: QuickCheckRun, answers: Int, falseStarts: Int) -> String? {
+        if run.durationSeconds < minSeconds || run.durationSeconds > maxSeconds { return "not_3_minutes" }
+        if answers < minResponses { return "too_few_responses" }
+        if Double(falseStarts) > maxFalseStartShare * Double(answers + run.falseStarts) { return "too_many_false_starts" }
+        return nil
+    }
+
+    private static func median(_ values: [Double]) -> Double {
+        let sorted = values.sorted()
+        let mid = sorted.count / 2
+        return sorted.count % 2 == 1 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2
+    }
+
+    private static func rounded(_ value: Double, _ digits: Int) -> Double {
+        let scale = pow(10.0, Double(digits))
+        return (value * scale).rounded() / scale
+    }
 }
 
 /// Find a time's answer for the stub: fixed blocks for the stub tasks. With work hours, a band and a work day they
@@ -254,8 +384,10 @@ public final class StubAPI: AuraAPI, @unchecked Sendable {
 enum StubPlan {
     private static let early = "09:00: early in your working day. Your sharpest hours aren't known yet, so hard work goes first."
 
+    /// `quickCheckAt` is the day's first valid Quick check taken on the stub. Without one the basis names 08:40, or
+    /// nothing when `skipCheck` was sent.
     static func build(key: String, day: Date, schedule: WorkSchedule?, skipCheck: Bool, taskIds: [String]?,
-                      version: Int, calendar: Calendar) -> DayPlan {
+                      version: Int, calendar: Calendar, quickCheckAt: Date? = nil) -> DayPlan {
         let parts = calendar.dateComponents([.year, .month, .day], from: day)
         func time(_ hour: Int, _ minute: Int) -> Date {
             return StubZones.at(hour * 60 + minute, parts, calendar) ?? day
@@ -296,7 +428,8 @@ enum StubPlan {
         let tomorrow = DayKey.string(calendar.date(byAdding: .day, value: 1, to: day) ?? day, calendar: calendar)
         let unplaced = [UnplacedTask(taskId: "t2", reason: "dueLater", detail: "Planned for \(tomorrow).")]
             .filter { wanted?.contains($0.taskId) ?? true }
-        let basis = PlanBasis(quickCheckAt: skipCheck ? nil : time(8, 40), attention: 71, sleepMinutes: 432,
+        let checkAt: Date? = quickCheckAt ?? (skipCheck ? nil : time(8, 40))
+        let basis = PlanBasis(quickCheckAt: checkAt, attention: 71, sleepMinutes: 432,
                               sharpestHours: nil, capacityOpening: Double(StubAPI.zoneScore), workLimitMinutes: nil)
         return DayPlan(date: key, generatedAt: Date(), basis: basis, placed: placed, unplaced: unplaced, warnings: warnings,
                        version: version)

@@ -297,6 +297,18 @@ public final class LiveAPI: AuraAPI, Sendable {
         return try LiveAPI.dayPlan(data)
     }
 
+    // MARK: Quick check
+
+    /// The id is the run's own, so a resend answers with the stored check. Errors come through as Health Data sends
+    /// them: 403 `consent_required` is `AuraError.consentRequired`, as on the other Health Data routes.
+    public func submitCheck(_ run: QuickCheckRun) async throws -> QuickCheckResult {
+        let body = try LiveAPI.encodeValue(WireCheckRequest(run))
+        let data = try await client.send(.healthData, "POST", "/v1/checks", body: body)
+        let answer = try LiveAPI.decode(WireCheckResponse.self, data)
+        guard let result = answer.model else { throw LiveAPI.badResponse }
+        return result
+    }
+
     // MARK: Helpers
 
     private static func overlaps(_ event: CalendarEvent, from: Date, to: Date) -> Bool {

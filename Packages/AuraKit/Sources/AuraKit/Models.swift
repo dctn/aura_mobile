@@ -306,6 +306,64 @@ public struct SessionTrace: Sendable, Equatable {
     public init(status: String, stressDrop: Double? = nil) { self.status = status; self.stressDrop = stressDrop }
 }
 
+// MARK: Quick check: POST /v1/checks
+
+/// One Quick check as the phone ran it. The backend works out the measures and whether it counts.
+public struct QuickCheckRun: Sendable, Equatable {
+    public var id: String
+    public var takenAt: Date
+    public var durationSeconds: Int
+    /// One per dot, in order; an unanswered dot holds its timeout.
+    public var reactionTimesMs: [Double]
+    /// Taps while no dot showed.
+    public var falseStarts: Int
+    /// nil when the memory part was skipped.
+    public var memory: SpanResult?
+    /// "full" with the memory part, else "pvtB".
+    public var kind: String { memory == nil ? "pvtB" : "full" }
+
+    public init(id: String = UUID().uuidString, takenAt: Date, durationSeconds: Int, reactionTimesMs: [Double],
+                falseStarts: Int, memory: SpanResult? = nil) {
+        self.id = id; self.takenAt = takenAt; self.durationSeconds = durationSeconds
+        self.reactionTimesMs = reactionTimesMs; self.falseStarts = falseStarts; self.memory = memory
+    }
+}
+
+/// The memory part's result: rounds answered right out of rounds answered.
+public struct SpanResult: Sendable, Equatable {
+    public var spanCorrect: Int
+    public var spanAttempts: Int
+    public init(spanCorrect: Int, spanAttempts: Int) {
+        self.spanCorrect = spanCorrect; self.spanAttempts = spanAttempts
+    }
+}
+
+/// What the backend made of a Quick check.
+public struct QuickCheckResult: Sendable, Equatable {
+    public var id: String
+    public var valid: Bool
+    /// The server's code when not valid: not_3_minutes, too_few_responses or too_many_false_starts. The screen turns
+    /// it into words.
+    public var invalidReason: String?
+    public var meanRtMs: Double
+    public var medianRtMs: Double
+    public var lapses: Int
+    public var falseStarts: Int
+    /// 0-1, Basner's performance score.
+    public var performance: Double
+    /// Counts toward your normal (a morning check 30+ min after waking, after 7+ h of sleep).
+    public var qualifiesForNormal: Bool
+    /// Today's scores after this check.
+    public var scores: ScoresToday
+
+    public init(id: String, valid: Bool, invalidReason: String?, meanRtMs: Double, medianRtMs: Double, lapses: Int,
+                falseStarts: Int, performance: Double, qualifiesForNormal: Bool, scores: ScoresToday) {
+        self.id = id; self.valid = valid; self.invalidReason = invalidReason
+        self.meanRtMs = meanRtMs; self.medianRtMs = medianRtMs; self.lapses = lapses; self.falseStarts = falseStarts
+        self.performance = performance; self.qualifiesForNormal = qualifiesForNormal; self.scores = scores
+    }
+}
+
 // MARK: Day zones
 
 /// The four shades behind the calendar. The backend places them; the app only draws them.

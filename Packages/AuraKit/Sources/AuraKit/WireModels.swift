@@ -456,6 +456,103 @@ struct WirePlan: Decodable {
     }
 }
 
+// MARK: Quick check: POST /v1/checks
+
+/// The check body. The route is a strict object whose nullable keys must all be there, so this writes JSON null for
+/// them; synthesized Encodable would leave them out (it writes optionals with encodeIfPresent).
+struct WireCheckRequest: Encodable {
+    struct Pvt: Encodable {
+        let durationSeconds: Int
+        let reactionTimesMs: [Int]
+        let falseStarts: Int
+    }
+
+    struct Span: Encodable {
+        let spanCorrect: Int
+        let spanAttempts: Int
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id, takenAt, device, kind, minutesSinceWake, pvt, memory, switching
+    }
+
+    let id: String
+    let takenAt: String
+    let kind: String
+    let pvt: Pvt
+    let memory: Span?
+
+    init(_ run: QuickCheckRun) {
+        id = run.id
+        takenAt = WireDate.string(run.takenAt)
+        kind = run.kind
+        pvt = Pvt(durationSeconds: run.durationSeconds, reactionTimesMs: run.reactionTimesMs.map { WireCheckRequest.wholeMs($0) },
+                  falseStarts: run.falseStarts)
+        memory = run.memory.map { Span(spanCorrect: $0.spanCorrect, spanAttempts: $0.spanAttempts) }
+    }
+
+    /// Whole milliseconds inside the route's 0-30000.
+    static func wholeMs(_ value: Double) -> Int {
+        guard value.isFinite else { return 0 }
+        return Int(min(max(value, 0), 30_000).rounded())
+    }
+
+    /// `minutesSinceWake` is always null: the server works it out from the wake time it knows. `switching` is always
+    /// null: the rule-switch part isn't built.
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(takenAt, forKey: .takenAt)
+        try container.encode("phone", forKey: .device)
+        try container.encode(kind, forKey: .kind)
+        try container.encodeNil(forKey: .minutesSinceWake)
+        try container.encode(pvt, forKey: .pvt)
+        if let span = memory {
+            try container.encode(span, forKey: .memory)
+        } else {
+            try container.encodeNil(forKey: .memory)
+        }
+        try container.encodeNil(forKey: .switching)
+    }
+}
+
+/// `{"check": checkView, "scores": scoresToday, "created": bool}`.
+struct WireCheckResponse: Decodable {
+    struct Attention: Decodable {
+        let meanRtMs: Double?
+        let medianRtMs: Double?
+        let lapses: Double?
+        let falseStarts: Double?
+        let performance: Double?
+    }
+
+    struct Check: Decodable {
+        let id: String
+        let valid: Bool?
+        let invalidReason: String?
+        let attention: WireLossy<Attention>?
+        let qualifiesForNormal: Bool?
+    }
+
+    let check: Check
+    let scores: WireLossy<WireScores>?
+    let created: Bool?
+
+    /// Nil without a readable `valid`, which the caller turns into a bad answer: guessing either way would tell the
+    /// person something the server didn't say.
+    var model: QuickCheckResult? {
+        guard let valid = check.valid else { return nil }
+        let attention = check.attention?.item
+        let today = scores?.item ?? WireScores(attention: nil, memory: nil, thinking: nil, focus: nil)
+        return QuickCheckResult(id: check.id, valid: valid, invalidReason: check.invalidReason,
+                                meanRtMs: attention?.meanRtMs ?? 0, medianRtMs: attention?.medianRtMs ?? 0,
+                                lapses: WireWhole.from(attention?.lapses) ?? 0,
+                                falseStarts: WireWhole.from(attention?.falseStarts) ?? 0,
+                                performance: attention?.performance ?? 0,
+                                qualifiesForNormal: check.qualifiesForNormal ?? false, scores: today.model)
+    }
+}
+
 // MARK: Profile: GET /v1/me, PUT /v1/me/profile
 
 struct WireMe: Decodable {

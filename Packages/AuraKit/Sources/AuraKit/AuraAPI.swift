@@ -51,6 +51,10 @@ public protocol AuraAPI: Sendable {
     func allocate(date: String, dryRun: Bool, skipCheck: Bool, taskIds: [String]?) async throws -> DayPlan
     /// The stored plan for `date`, or nil when there isn't one yet.
     func plan(date: String) async throws -> DayPlan?
+
+    // Quick check
+    /// Sends one Quick check's raw results (POST /v1/checks). Resending the same `id` is safe and returns the stored check.
+    func submitCheck(_ run: QuickCheckRun) async throws -> QuickCheckResult
 }
 
 public enum AuthState: Sendable, Equatable {
