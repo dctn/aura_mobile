@@ -18,6 +18,8 @@ final class AppModel {
     let auth: any AuthService
     let modes: [Mode]
     let run: RunController
+    /// UI tests run a few-second Quick check (`ReactionTest.Config.short`, `SpanTest.Config.short`); the app the full one.
+    let quickCheckShort: Bool
 
     /// Nil while the Keychain is being read.
     var authState: AuthState?
@@ -36,10 +38,12 @@ final class AppModel {
     @ObservationIgnored private var timeZoneSent = false
     private static let pinsKey = "pinnedMetrics"
 
-    init(api: any AuraAPI, auth: any AuthService, modes: [Mode], defaults: UserDefaults = .standard) {
+    init(api: any AuraAPI, auth: any AuthService, modes: [Mode], defaults: UserDefaults = .standard,
+         quickCheckShort: Bool = false) {
         self.api = api
         self.auth = auth
         self.modes = modes
+        self.quickCheckShort = quickCheckShort
         self.defaults = defaults
         self.run = RunController(api: api)
         if let data = defaults.data(forKey: Self.pinsKey),
@@ -56,11 +60,15 @@ final class AppModel {
             // `--uitesting-no-schedule` starts with no work hours, as a new account does.
             // `--uitesting-joined-session`: a session is already running elsewhere, so a run's start joins it.
             // `--uitesting-needs-check`: Find a time for today asks for the Quick check first, until "Plan anyway".
+            // `--uitesting-short-check`: the Quick check runs for seconds, and any check with a reaction counts.
             let arguments = ProcessInfo.processInfo.arguments
+            let shortCheck = arguments.contains("--uitesting-short-check")
             let stub = StubAPI(workSchedule: arguments.contains("--uitesting-no-schedule") ? nil : StubAPI.defaultSchedule,
                                joinsRunningSession: arguments.contains("--uitesting-joined-session"),
-                               needsQuickCheck: arguments.contains("--uitesting-needs-check"))
-            return AppModel(api: stub, auth: StubAuth(), modes: modes, defaults: UserDefaults(suiteName: "uitesting") ?? .standard)
+                               needsQuickCheck: arguments.contains("--uitesting-needs-check"),
+                               shortChecksCount: shortCheck)
+            return AppModel(api: stub, auth: StubAuth(), modes: modes, defaults: UserDefaults(suiteName: "uitesting") ?? .standard,
+                            quickCheckShort: shortCheck)
         }
         guard let url = Bundle.main.url(forResource: "aura-dev", withExtension: "json"),
               let data = try? Data(contentsOf: url),

@@ -68,13 +68,11 @@ struct FindATimeSheet: View {
                     .background(AuraColor.background)
             }
             .toolbar(.hidden, for: .navigationBar)
-            .navigationDestination(isPresented: $showingQuickCheck) {
-                // Quick check screen goes here once designed. Until then this is the app's placeholder.
-                NotDesignedYet(title: "Quick check")
-            }
         }
-        // On the stack, not its root, so coming back from the Quick check doesn't run the preview again.
         .task(id: attempt) { await loadPreview() }
+        .fullScreenCover(isPresented: $showingQuickCheck) {
+            QuickCheckScreen { result in quickCheckEnded(result) }
+        }
         .interactiveDismissDisabled(confirming)
         .presentationDetents([.large])
         .presentationDragIndicator(.visible)
@@ -267,7 +265,6 @@ struct FindATimeSheet: View {
     private var checkButtons: some View {
         VStack(spacing: 10) {
             PillButton(title: "Do the Quick check", fills: true) {
-                // Quick check screen goes here once designed: this pushes the placeholder for now.
                 showingQuickCheck = true
             }
             .accessibilityIdentifier("find-time-do-check")
@@ -334,6 +331,14 @@ struct FindATimeSheet: View {
         }
         model.note(error)
         phase = .failed
+    }
+
+    /// A check that counts lets the Planner use it, so the preview runs again with it. Stopping early or a check
+    /// that didn't count leaves the Quick check panel as it was.
+    private func quickCheckEnded(_ result: QuickCheckResult?) {
+        guard let result, result.valid else { return }
+        skipCheck = false
+        attempt += 1
     }
 
     /// Plans without the Quick check, and keeps that for the confirm.
