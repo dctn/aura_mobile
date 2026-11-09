@@ -11,7 +11,8 @@ public final class StubAPI: AuraAPI, @unchecked Sendable {
     /// The id of the session the stub pretends is running on the person's computer.
     public static let runningElsewhereId = "running-elsewhere"
 
-    /// The stub's tasks, all marked for Find a time. "Book the dentist" always comes back unplaced, as due later.
+    /// The stub's tasks, all marked for Find a time. "Book the dentist" comes back unplaced today, as due later, and
+    /// placed at 15:00 on a later day.
     static let stubTasks = [TaskItem(id: "t1", title: "Reply to Ana", autoAllocate: true),
                             TaskItem(id: "t2", title: "Book the dentist", autoAllocate: true),
                             TaskItem(id: "t3", title: "Write the review", autoAllocate: true)]
@@ -236,7 +237,9 @@ public final class StubAPI: AuraAPI, @unchecked Sendable {
 
     /// The same plan for every day, inside the stub zones. A past date and, with `needsQuickCheck`, today without
     /// `skipCheck` are refused as the Planner refuses them, until a valid Quick check is taken today; the plan then names
-    /// that check's time. A real run keeps the plan for its date; a dry run doesn't.
+    /// that check's time. A later day is planned as the Planner plans it: with no Quick check gate whatever `skipCheck`
+    /// says, `quickCheckAt` nil, and "Book the dentist" placed (see `StubPlan.build`). A real run keeps the plan for its
+    /// date, today or later, and `events(from:to:)` shows its blocks in that day's range; a dry run doesn't.
     public func allocate(date: String, dryRun: Bool, skipCheck: Bool, taskIds: [String]?) async throws -> DayPlan {
         let calendar = DayKey.calendar
         guard let day = DayKey.date(date, calendar: calendar) else {
@@ -247,14 +250,16 @@ public final class StubAPI: AuraAPI, @unchecked Sendable {
         if key < today {
             throw AuraError.server(code: "date_in_past", message: "Plan today or a later day.", status: 400)
         }
-        let checkAt = quickCheckTime(day: key)
+        let laterDay = key > today
+        // Only today has the Quick check gate and a check time; a later day records none.
+        let checkAt: Date? = laterDay ? nil : quickCheckTime(day: key)
         if quickCheckNeeded && !skipCheck && key == today && checkAt == nil {
             throw AuraError.server(code: "quick_check_required",
                                    message: "Take today's Quick check first, or send skipCheck to plan without it.", status: 409)
         }
         let version = (stored[key]?.version ?? 0) + 1
         let plan = StubPlan.build(key: key, day: day, schedule: current, skipCheck: skipCheck, taskIds: taskIds,
-                                  version: version, calendar: calendar, quickCheckAt: checkAt)
+                                  version: version, calendar: calendar, quickCheckAt: checkAt, laterDay: laterDay)
         if !dryRun {
             stored[key] = plan
         }
@@ -385,9 +390,11 @@ enum StubPlan {
     private static let early = "09:00: early in your working day. Your sharpest hours aren't known yet, so hard work goes first."
 
     /// `quickCheckAt` is the day's first valid Quick check taken on the stub. Without one the basis names 08:40, or
-    /// nothing when `skipCheck` was sent.
+    /// nothing when `skipCheck` was sent. `laterDay` is a date after today, which the Planner plans without the Quick
+    /// check: the basis names no check time whatever `skipCheck` says, and "Book the dentist" (due tomorrow, so unplaced
+    /// today) is placed 15:00-15:30 in either variant, leaving nothing unplaced.
     static func build(key: String, day: Date, schedule: WorkSchedule?, skipCheck: Bool, taskIds: [String]?,
-                      version: Int, calendar: Calendar, quickCheckAt: Date? = nil) -> DayPlan {
+                      version: Int, calendar: Calendar, quickCheckAt: Date? = nil, laterDay: Bool = false) -> DayPlan {
         let parts = calendar.dateComponents([.year, .month, .day], from: day)
         func time(_ hour: Int, _ minute: Int) -> Date {
             return StubZones.at(hour * 60 + minute, parts, calendar) ?? day
@@ -423,12 +430,20 @@ enum StubPlan {
             ]
             warnings = PlanWarnings()
         }
+        // A later day has room for the task that is only due later when planned today.
+        let dentist: (owner: String, block: PlanBlock) =
+            (owner: "t2", block: PlanBlock(taskId: "t2", blockId: "plan-\(key)-t2", start: time(15, 0), end: time(15, 30),
+                                           demand: 20, workType: "routine",
+                                           reason: "Due soon: 15:00 is a light hour for a short call."))
+        let all: [(owner: String, block: PlanBlock)] = laterDay ? blocks + [dentist] : blocks
         let wanted: Set<String>? = taskIds.map { Set($0) }
-        let placed = blocks.filter { wanted?.contains($0.owner) ?? true }.map { $0.block }
+        let placed = all.filter { wanted?.contains($0.owner) ?? true }.map { $0.block }
         let tomorrow = DayKey.string(calendar.date(byAdding: .day, value: 1, to: day) ?? day, calendar: calendar)
-        let unplaced = [UnplacedTask(taskId: "t2", reason: "dueLater", detail: "Planned for \(tomorrow).")]
-            .filter { wanted?.contains($0.taskId) ?? true }
-        let checkAt: Date? = quickCheckAt ?? (skipCheck ? nil : time(8, 40))
+        let dueLater: [UnplacedTask] = laterDay ? [] : [UnplacedTask(taskId: "t2", reason: "dueLater",
+                                                                     detail: "Planned for \(tomorrow).")]
+        let unplaced = dueLater.filter { wanted?.contains($0.taskId) ?? true }
+        // A later day is planned without the Quick check, so it records no check time.
+        let checkAt: Date? = laterDay ? nil : (quickCheckAt ?? (skipCheck ? nil : time(8, 40)))
         let basis = PlanBasis(quickCheckAt: checkAt, attention: 71, sleepMinutes: 432,
                               sharpestHours: nil, capacityOpening: Double(StubAPI.zoneScore), workLimitMinutes: nil)
         return DayPlan(date: key, generatedAt: Date(), basis: basis, placed: placed, unplaced: unplaced, warnings: warnings,

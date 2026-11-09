@@ -1,10 +1,10 @@
 import AuraKit
 import SwiftUI
 
-/// Find a time, as a sheet opened from Calendar. It first shows a preview of the day's plan, which writes nothing;
-/// "Add to calendar" runs it for real.
+/// Find a time, as a sheet opened from Calendar. A row of day chips picks today or one of the next six days; the
+/// sheet first shows a preview of that day's plan, which writes nothing, and "Add to calendar" runs it for real.
 struct FindATimeSheet: View {
-    /// The day to plan, as a `DayKey`.
+    /// The day the sheet opens on, as a `DayKey`. The day row can change it.
     let date: String
     /// Called once the plan is on the calendar, just before the sheet closes.
     let onConfirmed: () -> Void
@@ -29,12 +29,76 @@ struct FindATimeSheet: View {
     @State private var confirming = false
     @State private var confirmError: String?
     @State private var showingQuickCheck = false
+    /// The day being previewed and confirmed, as a `DayKey`.
+    @State private var selectedDate: String
 
     private static let quickCheckCode = "quick_check_required"
+    /// Today plus the next six days.
+    private static let dayCount = 7
+
+    /// One chip in the day row.
+    private struct DayChoice: Identifiable {
+        /// Days after today: 0 is today.
+        let offset: Int
+        /// The `DayKey` sent to the Planner.
+        let key: String
+        /// Midnight of the day, for the labels.
+        let day: Date
+        var id: Int { offset }
+    }
 
     init(date: String, onConfirmed: @escaping () -> Void) {
         self.date = date
         self.onConfirmed = onConfirmed
+        _selectedDate = State(initialValue: date)
+    }
+
+    /// Today and the next six days, keyed the way the backend reads dates.
+    private var dayChoices: [DayChoice] {
+        let calendar = DayKey.calendar
+        let today = calendar.startOfDay(for: Date())
+        return (0..<Self.dayCount).map { offset in
+            let day = calendar.date(byAdding: .day, value: offset, to: today) ?? today
+            return DayChoice(offset: offset, key: DayKey.string(day, calendar: calendar), day: day)
+        }
+    }
+
+    /// Days after today for the selected day, or nil when it isn't in the row.
+    private var selectedOffset: Int? {
+        dayChoices.first { $0.key == selectedDate }?.offset
+    }
+
+    /// "today", "tomorrow" or the long date ("Wednesday, 11 Nov" in the phone's own words), for the sentences.
+    private var selectedDayPhrase: String {
+        switch selectedOffset {
+        case 0?: return "today"
+        case 1?: return "tomorrow"
+        default:
+            guard let day = DayKey.date(selectedDate) else { return selectedDate }
+            return day.formatted(Self.longDayStyle)
+        }
+    }
+
+    /// The labels' calendar: Gregorian in the phone's time zone, like `DayKey`, but in the phone's language.
+    private static var labelCalendar: Calendar {
+        var calendar = DayKey.calendar
+        calendar.locale = Locale.current
+        return calendar
+    }
+
+    /// "Wed 11", or the phone's own order and words.
+    private static var chipStyle: Date.FormatStyle {
+        Date.FormatStyle(locale: Locale.current, calendar: labelCalendar, timeZone: TimeZone.current)
+            .weekday(.abbreviated)
+            .day()
+    }
+
+    /// "Wednesday, 11 Nov", or the phone's own order and words.
+    private static var longDayStyle: Date.FormatStyle {
+        Date.FormatStyle(locale: Locale.current, calendar: labelCalendar, timeZone: TimeZone.current)
+            .weekday(.wide)
+            .day()
+            .month(.abbreviated)
     }
 
     private var needsCheck: Bool {
@@ -52,6 +116,7 @@ struct FindATimeSheet: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
                     header
+                    dayRow
                     content
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -69,7 +134,7 @@ struct FindATimeSheet: View {
             }
             .toolbar(.hidden, for: .navigationBar)
         }
-        .task(id: attempt) { await loadPreview() }
+        .task(id: "\(selectedDate)-\(attempt)") { await loadPreview() }
         .fullScreenCover(isPresented: $showingQuickCheck) {
             QuickCheckScreen { result in quickCheckEnded(result) }
         }
@@ -82,12 +147,73 @@ struct FindATimeSheet: View {
         VStack(alignment: .leading, spacing: 6) {
             SectionTitle("Find a time")
                 .accessibilityIdentifier("find-time-sheet")
-            Text("A preview of today. Nothing is added until you confirm.")
+            Text("A preview of \(selectedDayPhrase). Nothing is added until you confirm.")
                 .font(.system(size: 15))
                 .foregroundStyle(Color.gray)
                 .fixedSize(horizontal: false, vertical: true)
         }
         .padding(.top, 8)
+    }
+
+    // MARK: Day row
+
+    /// Today, Tomorrow, then "Wed 11" and on: seven chips that scroll sideways when they don't fit. It stays above the
+    /// Quick check panel too, so another day can be picked from there.
+    private var dayRow: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(dayChoices) { choice in
+                    dayChip(choice)
+                }
+            }
+            .padding(.horizontal, 22)
+            .padding(.vertical, 2)
+        }
+        // Runs edge to edge, past the page's side margins.
+        .padding(.horizontal, -22)
+    }
+
+    private func dayChip(_ choice: DayChoice) -> some View {
+        let selected = choice.key == selectedDate
+        return Button {
+            select(choice.key)
+        } label: {
+            Text(chipTitle(choice))
+                .font(.system(size: 15, weight: selected ? .semibold : .medium))
+                .foregroundStyle(selected ? Color.white : Color.black)
+                .lineLimit(1)
+                .fixedSize()
+                .padding(.horizontal, 16)
+                .frame(height: 38)
+                .background(selected ? AuraColor.blue : AuraColor.card, in: Capsule())
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .disabled(confirming)
+        .accessibilityLabel(Text(chipSpokenTitle(choice)))
+        .accessibilityAddTraits(selected ? .isSelected : [])
+        .accessibilityIdentifier("find-time-day-\(choice.offset)")
+    }
+
+    private func chipTitle(_ choice: DayChoice) -> String {
+        switch choice.offset {
+        case 0: return "Today"
+        case 1: return "Tomorrow"
+        default: return choice.day.formatted(Self.chipStyle)
+        }
+    }
+
+    /// VoiceOver reads the whole date for the later days.
+    private func chipSpokenTitle(_ choice: DayChoice) -> String {
+        choice.offset < 2 ? chipTitle(choice) : choice.day.formatted(Self.longDayStyle)
+    }
+
+    /// A new day runs its own preview. The old one goes at once, so "Add to calendar" can't confirm it for the new day.
+    private func select(_ key: String) {
+        guard key != selectedDate, !confirming else { return }
+        selectedDate = key
+        confirmError = nil
+        phase = .loading
     }
 
     @ViewBuilder
@@ -114,7 +240,7 @@ struct FindATimeSheet: View {
     private func preview(_ plan: DayPlan) -> some View {
         let blocks = plan.placed.sorted { $0.start < $1.start }
         if blocks.isEmpty {
-            Text("Nothing to place today.")
+            Text(emptyText)
                 .font(.system(size: 17, weight: .semibold))
                 .foregroundStyle(.black)
                 .accessibilityIdentifier("find-time-empty")
@@ -133,6 +259,13 @@ struct FindATimeSheet: View {
         if !plan.unplaced.isEmpty {
             unplacedSection(plan.unplaced)
         }
+    }
+
+    /// "Nothing to place today.", "... tomorrow." or "... on Wednesday, 11 Nov."
+    private var emptyText: String {
+        let phrase = selectedDayPhrase
+        let needsOn = selectedOffset.map { $0 > 1 } ?? true
+        return needsOn ? "Nothing to place on \(phrase)." : "Nothing to place \(phrase)."
     }
 
     /// One block: time, title and the Planner's reason, on a blue tint for work or green for a rest.
@@ -300,7 +433,7 @@ struct FindATimeSheet: View {
         phase = .loading
         confirmError = nil
         let api = model.api
-        let day = date
+        let day = selectedDate
         let skip = skipCheck
 
         async let tasksCall = api.tasks()
@@ -347,10 +480,10 @@ struct FindATimeSheet: View {
         attempt += 1
     }
 
-    /// The real run, with the same `skipCheck` as the preview. The sheet stays open if it fails.
+    /// The real run for the selected day, with the same `skipCheck` as the preview. The sheet stays open if it fails.
     private func confirm() {
         let api = model.api
-        let day = date
+        let day = selectedDate
         let skip = skipCheck
         confirming = true
         confirmError = nil

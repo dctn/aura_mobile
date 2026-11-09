@@ -62,6 +62,34 @@ final class FindTimeWalkTests: WalkTestCase {
         waitUntilGone(confirm, "The sheet didn't close")
     }
 
+    /// Today wants the Quick check first, but tomorrow doesn't: picking Tomorrow from the day row shows its plan, with
+    /// Book the dentist placed, and Add to calendar confirms that day.
+    func testPlanTomorrow() {
+        app.terminate()
+        app.launchArguments = ["--uitesting", "--uitesting-needs-check"]
+        app.launch()
+
+        openCalendarFromHome()
+        let button = element("calendar-find-time")
+        XCTAssertTrue(button.waitForExistence(timeout: 10), "No Find a time button")
+        let tomorrow = element("find-time-day-1")
+        open(button, until: tomorrow, "Find a time didn't open")
+        XCTAssertTrue(element("find-time-plan-anyway").waitForExistence(timeout: 10), "No Quick check panel for today")
+
+        tap(tomorrow, "Tomorrow")
+        let confirm = element("find-time-confirm")
+        XCTAssertTrue(confirm.waitForExistence(timeout: 10), "Tomorrow's preview didn't show")
+        waitUntilGone(element("find-time-plan-anyway"), "The Quick check panel is still there for tomorrow")
+        let dentist = app.descendants(matching: .any).matching(identifier: "find-time-block")
+            .matching(NSPredicate(format: "label CONTAINS %@", "Book the dentist")).firstMatch
+        XCTAssertTrue(dentist.waitForExistence(timeout: 10), "Book the dentist isn't placed tomorrow")
+        save("57-find-time-tomorrow")
+
+        tap(confirm, "Add to calendar")
+        waitUntilGone(confirm, "The Find a time sheet didn't close")
+        save("58-calendar-after-tomorrow")
+    }
+
     private func element(_ identifier: String) -> XCUIElement {
         return app.descendants(matching: .any).matching(identifier: identifier).firstMatch
     }

@@ -84,10 +84,12 @@ final class PlanStubTests: XCTestCase {
         let to = try XCTUnwrap(DayKey.calendar.date(byAdding: .day, value: 1, to: from))
         let events = try await stub.events(from: from, to: to)
         let planned = events.filter { $0.id.hasPrefix("plan-") }
-        XCTAssertEqual(planned.map { $0.title }, ["Write the review (1/2)", "Write the review (2/2)", "Recovery", "Reply to Ana"])
-        XCTAssertEqual(planned.map { $0.kind }, ["focus", "focus", "recovery", "focus"])
+        // A later day also places "Book the dentist".
+        XCTAssertEqual(planned.map { $0.title }, ["Write the review (1/2)", "Write the review (2/2)", "Recovery", "Reply to Ana",
+                                                  "Book the dentist"])
+        XCTAssertEqual(planned.map { $0.kind }, ["focus", "focus", "recovery", "focus", "focus"])
         XCTAssertEqual(planned.map { $0.id }, ["plan-\(monday)-t3-p1", "plan-\(monday)-t3-p2", "plan-\(monday)-t3-rest",
-                                               "plan-\(monday)-t1"])
+                                               "plan-\(monday)-t1", "plan-\(monday)-t2"])
         XCTAssertEqual(planned.map { $0.start }, first.placed.map { $0.start })
         XCTAssertEqual(planned.map { $0.end }, first.placed.map { $0.end })
         // The fixed events are still there.
@@ -130,7 +132,80 @@ final class PlanStubTests: XCTestCase {
 
         // Only today asks for it.
         let later = try await stub.allocate(date: monday, dryRun: true, skipCheck: false, taskIds: nil)
-        XCTAssertEqual(later.placed.count, 4)
+        XCTAssertEqual(later.placed.count, 5)
+        XCTAssertNil(later.basis.quickCheckAt)
+    }
+
+    private func tomorrowKey() throws -> String {
+        return DayKey.string(try XCTUnwrap(DayKey.calendar.date(byAdding: .day, value: 1, to: Date())))
+    }
+
+    func testALaterDayHasNoQuickCheckGate() async throws {
+        let stub = StubAPI(needsQuickCheck: true)
+        let tomorrow = try tomorrowKey()
+        let plan = try await stub.allocate(date: tomorrow, dryRun: true, skipCheck: false, taskIds: nil)
+        XCTAssertEqual(plan.date, tomorrow)
+        XCTAssertNil(plan.basis.quickCheckAt, "A later day is planned without the Quick check")
+        XCTAssertFalse(plan.placed.isEmpty)
+
+        let skipped = try await stub.allocate(date: tomorrow, dryRun: true, skipCheck: true, taskIds: nil)
+        XCTAssertNil(skipped.basis.quickCheckAt)
+    }
+
+    func testALaterDayPlacesTheDentist() async throws {
+        let stub = StubAPI()
+        let tomorrow = try tomorrowKey()
+        let plan = try await stub.allocate(date: tomorrow, dryRun: true, skipCheck: false, taskIds: nil)
+        let tasks = try await stub.tasks()
+
+        let dentist = try XCTUnwrap(plan.placed.first(where: { $0.taskId == "t2" }))
+        XCTAssertEqual(dentist.blockId, "plan-\(tomorrow)-t2")
+        XCTAssertEqual(dentist.start, try time(tomorrow, 15))
+        XCTAssertEqual(dentist.end, try time(tomorrow, 15, 30))
+        XCTAssertEqual(dentist.demand, 20)
+        XCTAssertEqual(dentist.workType, "routine")
+        XCTAssertEqual(dentist.kind, "focus")
+        XCTAssertNil(dentist.part)
+        XCTAssertEqual(dentist.reason, "Due soon: 15:00 is a light hour for a short call.")
+        XCTAssertEqual(titles(plan, tasks).last, "Book the dentist")
+        XCTAssertEqual(plan.unplaced, [])
+        for (earlier, later) in zip(plan.placed, plan.placed.dropFirst()) {
+            XCTAssertLessThanOrEqual(earlier.end, later.start, "Blocks are in time order with no overlap")
+        }
+
+        // Today keeps it unplaced, due later.
+        let today = DayKey.string(Date())
+        let todays = try await stub.allocate(date: today, dryRun: true, skipCheck: false, taskIds: nil)
+        XCTAssertFalse(todays.placed.contains { $0.taskId == "t2" })
+        XCTAssertEqual(todays.unplaced, [UnplacedTask(taskId: "t2", reason: "dueLater", detail: "Planned for \(tomorrow).")])
+    }
+
+    func testARealRunForALaterDayShowsOnThatDay() async throws {
+        let stub = StubAPI()
+        let tomorrow = try tomorrowKey()
+        _ = try await stub.allocate(date: tomorrow, dryRun: false, skipCheck: false, taskIds: nil)
+        let stored = try await stub.plan(date: tomorrow)
+        XCTAssertEqual(stored?.date, tomorrow)
+
+        let from = try time(tomorrow, 0)
+        let to = try XCTUnwrap(DayKey.calendar.date(byAdding: .day, value: 1, to: from))
+        let events = try await stub.events(from: from, to: to)
+        XCTAssertTrue(events.contains { $0.title == "Book the dentist" && $0.id == "plan-\(tomorrow)-t2" })
+
+        let today = try time(DayKey.string(Date()), 0)
+        let todays = try await stub.events(from: today, to: from)
+        XCTAssertFalse(todays.contains { $0.title == "Book the dentist" })
+        XCTAssertFalse(todays.contains { $0.id.hasPrefix("plan-") })
+    }
+
+    func testTaskIdsNarrowALaterDayToTheDentist() async throws {
+        let stub = StubAPI()
+        let tomorrow = try tomorrowKey()
+        let plan = try await stub.allocate(date: tomorrow, dryRun: true, skipCheck: false, taskIds: ["t2"])
+        let tasks = try await stub.tasks()
+        XCTAssertEqual(titles(plan, tasks), ["Book the dentist"])
+        XCTAssertEqual(plan.placed.map { $0.blockId }, ["plan-\(tomorrow)-t2"])
+        XCTAssertEqual(plan.unplaced, [])
     }
 
     func testAPastDateIsRefused() async throws {
@@ -149,23 +224,34 @@ final class PlanStubTests: XCTestCase {
         let stub = StubAPI(workSchedule: nil)
         let plan = try await stub.allocate(date: monday, dryRun: true, skipCheck: false, taskIds: nil)
         let tasks = try await stub.tasks()
-        XCTAssertEqual(titles(plan, tasks), ["Write the review", "Reply to Ana"])
+        // A later day, so "Book the dentist" is placed too.
+        XCTAssertEqual(titles(plan, tasks), ["Write the review", "Reply to Ana", "Book the dentist"])
         XCTAssertFalse(plan.placed.contains { $0.isRecovery })
         XCTAssertTrue(plan.placed.allSatisfy { $0.part == nil })
-        XCTAssertEqual(plan.placed.map { $0.start }, [try time(monday, 9), try time(monday, 11, 15)])
-        XCTAssertEqual(plan.placed.map { $0.end }, [try time(monday, 11), try time(monday, 11, 45)])
+        XCTAssertEqual(plan.placed.map { $0.start }, [try time(monday, 9), try time(monday, 11, 15), try time(monday, 15)])
+        XCTAssertEqual(plan.placed.map { $0.end }, [try time(monday, 11), try time(monday, 11, 45), try time(monday, 15, 30)])
+        XCTAssertEqual(plan.placed.map { $0.blockId }, ["plan-\(monday)-t3", "plan-\(monday)-t1", "plan-\(monday)-t2"])
         XCTAssertEqual(plan.warnings, PlanWarnings())
         XCTAssertNil(plan.warnings.note)
-        XCTAssertEqual(plan.unplaced, [UnplacedTask(taskId: "t2", reason: "dueLater", detail: "Planned for 2030-03-19.")])
+        XCTAssertEqual(plan.unplaced, [])
+
+        // Today's plain plan leaves it unplaced, due later.
+        let today = DayKey.string(Date())
+        let tomorrow = try tomorrowKey()
+        let todays = try await stub.allocate(date: today, dryRun: true, skipCheck: false, taskIds: nil)
+        XCTAssertEqual(titles(todays, tasks), ["Write the review", "Reply to Ana"])
+        XCTAssertEqual(todays.unplaced, [UnplacedTask(taskId: "t2", reason: "dueLater", detail: "Planned for \(tomorrow).")])
     }
 
     func testADayOffGivesThePlainPlan() async throws {
         let stub = StubAPI(workSchedule: .suggested)
         // 16 Mar 2030 is a Saturday.
         let plan = try await stub.allocate(date: "2030-03-16", dryRun: true, skipCheck: false, taskIds: nil)
-        XCTAssertEqual(plan.placed.count, 2)
+        XCTAssertEqual(plan.placed.map { $0.taskId }, ["t3", "t1", "t2"])
         XCTAssertFalse(plan.placed.contains { $0.isRecovery })
         XCTAssertEqual(plan.warnings, PlanWarnings())
+        XCTAssertEqual(plan.unplaced, [])
+        XCTAssertNil(plan.basis.quickCheckAt)
     }
 
     func testTaskIdsNarrowThePlan() async throws {
