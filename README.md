@@ -39,11 +39,22 @@ another run, maybe on another device. The app doesn't adopt it: an alert names i
 still going, until 16:30") and offers "Stop it and start mine" (stops that session, then starts this run's own with a
 new id) or "Keep it" (this run closes on the phone and nothing is sent). UI tests pass `--uitesting-joined-session`.
 
-## Find a time (AuraKit only so far)
-`AuraAPI.allocate(date:dryRun:skipCheck:taskIds:)` calls Planner `POST /v1/planner/allocate` and `plan(date:)` reads
-`GET /v1/planner/plan/{date}`. Allocation places tasks marked `autoAllocate`, using the profile's work hours as the
-day window (otherwise the Planner uses 09:00-18:00). With work hours, a morning band and a work day, the plan follows
-the recovery rhythm: zones are kept free, a 10-min `recovery` block comes after deep work, a task can be split into
-"Title (1/2)" and "Title (2/2)", and `warnings` counts the person's own blocks that sat on recovery time. A 409
-`quick_check_required` means "Do the Quick check" or "Plan anyway" (retry with `skipCheck`). There's no screen for it
-yet; it's waiting on where it goes in the app.
+## Find a time
+On Home → Work → Calendar, the **Find a time** button under the zone line opens a preview of today's plan
+(`allocate(dryRun: true)`, which writes nothing). **Add to calendar** runs it for real and the page reloads with the
+blocks on the hour grid. Allocation places tasks marked `autoAllocate`, using the profile's work hours as the day
+window (otherwise the Planner uses 09:00-18:00). With work hours, a morning band and a work day, the plan follows the
+recovery rhythm: zones are kept free, a 10-min `recovery` block (green) comes after deep work, a task can be split
+into "Title (1/2)" and "Title (2/2)", and `warnings` counts the person's own blocks that sat on recovery time. Tasks
+that didn't fit are listed with the Planner's reason. For today the Planner wants a valid Quick check first (409
+`quick_check_required`): the sheet offers **Do the Quick check**, **Plan anyway** (retry with `skipCheck`) or Not now.
+
+## Quick check
+Opened from Find a time. Dark full screen, after the concepts design: an intro, then the reaction test (the 3-minute
+PVT-B the backend scores: tap the card when it turns green; a dot every 1-4 s, about 62 in all), then the memory part
+(a row of digits to type back, one longer after each right answer; Skip sends reaction only). It goes to Health Data
+`POST /v1/checks` (`kind` pvtB, or full with memory) and the result says whether it counts. A check counts only if
+it ran 170-200 s with 30+ answers and at most 20% early taps. A valid check lets the preview plan with it. Leaving the
+app mid-reaction starts the test again. The rule-switch part (the design's step 3) and the heart recording aren't
+built. UI tests use `--uitesting-needs-check` and `--uitesting-short-check` (an 8-second run that the stub accepts).
+
