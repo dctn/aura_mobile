@@ -19,6 +19,7 @@ import { Sessions } from '../screens/Sessions';
 import { Settings } from '../screens/Settings';
 import { Inbox } from '../screens/Inbox';
 import { ZonesPage } from '../calendar/ZonesPage';
+import { CalendarPage } from '../calendar/CalendarPage';
 import { Countdown, RunView } from '../run/RunView';
 import { useLiveRun } from '../run/live';
 
@@ -48,6 +49,8 @@ function PageView({ page }: { page: Page }) {
       return <Inbox />;
     case 'zones':
       return <ZonesPage />;
+    case 'calendar':
+      return <CalendarPage />;
   }
 }
 

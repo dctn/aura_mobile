@@ -111,6 +111,20 @@ export function dayItems(day: string, events: Json[], tasks: Json[], zone: strin
   return { timed, todo };
 }
 
+/** The first timed item on the day that the block [start, start+length) overlaps, ignoring the item being
+ *  edited (by kind+id); null when the block is clear. Minutes after midnight. */
+export function firstClash(
+  timed: Item[], start: number, length: number, ignore?: { kind: string; id: string },
+): Item | null {
+  const end = start + length;
+  return timed.find((i) =>
+    i.start !== null
+    && !(ignore && i.kind === ignore.kind && i.id === ignore.id)
+    && start < i.start + i.minutes
+    && end > i.start,
+  ) ?? null;
+}
+
 /** Each day's dots: "event" and/or "task" (open tasks only). */
 export function marks(events: Json[], tasks: Json[], zone: string, today: string): Map<string, Set<'event' | 'task'>> {
   const out = new Map<string, Set<'event' | 'task'>>();

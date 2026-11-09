@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { dayItems, taskWhen } from '../lib/agenda';
-import { doneChanges, eventTimes, isLocked, newEvent, newTask, taskChanges, taskFields } from './rows';
+import { dayItems, firstClash, taskWhen, type Item } from '../lib/agenda';
+import { deadlineFields, doneChanges, eventTimes, isLocked, newEvent, newTask, taskChanges, taskFields } from './rows';
 
 const Z = 'Asia/Kolkata';
 const TODAY = '2026-10-24';
@@ -44,10 +44,61 @@ describe('task rows', () => {
     expect(taskChanges(locked, 'C', '2026-10-30', 60, 90, true, Z, TODAY)).toEqual({ title: 'C' });
   });
 
+  it('writes a deadline as a day, or a day with a hard finish-before time', () => {
+    expect(deadlineFields(null, null, Z)).toEqual({ deadlineAt: null, deadlineHasTime: false });
+    expect(deadlineFields('2026-10-27', null, Z)).toEqual({ deadlineAt: '2026-10-27T00:00:00+05:30', deadlineHasTime: false });
+    expect(deadlineFields('2026-10-27', 17 * 60, Z)).toEqual({ deadlineAt: '2026-10-27T17:00:00+05:30', deadlineHasTime: true });
+  });
+
+  it('carries the auto-allocate inputs (duration, toughness, deadline) on a new untimed to-do', () => {
+    const alloc = { estimateMinutes: 60, demand: 72, ...deadlineFields('2026-10-27', 17 * 60, Z) };
+    const t = newTask('Write the report', null, null, null, Z, TODAY, alloc);
+    expect(t).toMatchObject({ title: 'Write the report', status: 'open', hasTime: false, estimateMinutes: 60, demand: 72, deadlineAt: '2026-10-27T17:00:00+05:30', deadlineHasTime: true });
+    // A null deadlineAt from a no-deadline task is dropped, but deadlineHasTime false stays.
+    const none = newTask('Tidy inbox', null, null, null, Z, TODAY, { estimateMinutes: 30, demand: 25, deadlineAt: null, deadlineHasTime: false });
+    expect(none).not.toHaveProperty('deadlineAt');
+    expect(none).toMatchObject({ estimateMinutes: 30, demand: 25, deadlineHasTime: false });
+  });
+
+  it('edits the auto-allocate inputs and can clear a deadline', () => {
+    const task = { id: 'x', title: 'A', horizon: 'today', status: 'open', ...taskFields(null, null, Z), estimateMinutes: 30, demand: 25, deadlineAt: '2026-10-27T17:00:00+05:30', deadlineHasTime: true };
+    // Changing toughness alone shows as a demand change.
+    expect(taskChanges(task, 'A', null, null, 30, false, Z, TODAY, { estimateMinutes: 30, demand: 88, deadlineAt: '2026-10-27T17:00:00+05:30', deadlineHasTime: true })).toEqual({ title: 'A', dueAt: null, hasTime: false, plannedFor: null, horizon: 'today', estimateMinutes: 30, demand: 88, deadlineAt: '2026-10-27T17:00:00+05:30', deadlineHasTime: true });
+    // Clearing the deadline writes deadlineAt: null (a kept null, not dropped).
+    expect(taskChanges(task, 'A', null, null, 30, false, Z, TODAY, { estimateMinutes: 30, demand: 25, deadlineAt: null, deadlineHasTime: false })).toEqual({ title: 'A', dueAt: null, hasTime: false, plannedFor: null, horizon: 'today', estimateMinutes: 30, demand: 25, deadlineAt: null, deadlineHasTime: false });
+    // No change at all stays null.
+    expect(taskChanges(task, 'A', null, null, 30, false, Z, TODAY, { estimateMinutes: 30, demand: 25, deadlineAt: '2026-10-27T17:00:00+05:30', deadlineHasTime: true })).toBeNull();
+  });
+
   it('ticks and unticks', () => {
     const now = new Date('2026-10-24T07:59:00Z');
     expect(doneChanges(true, now, Z)).toEqual({ status: 'completed', completedAt: '2026-10-24T13:29:00+05:30' });
     expect(doneChanges(false, now, Z)).toEqual({ status: 'open', completedAt: null });
+  });
+});
+
+describe('firstClash', () => {
+  const item = (kind: 'event' | 'task', id: string, title: string, start: number, minutes: number): Item =>
+    ({ kind, id, title, day: TODAY, start, minutes, done: false, look: kind === 'event' ? 'focus' : 'task', raw: {} });
+  const timed = [item('event', 'e1', 'Standup', 600, 30), item('task', 't1', 'Review', 660, 45)];
+
+  it('returns the item a block overlaps', () => {
+    expect(firstClash(timed, 615, 30)?.title).toBe('Standup');
+    expect(firstClash(timed, 680, 30)?.title).toBe('Review');
+  });
+
+  it('returns null for a block in a free gap', () => {
+    expect(firstClash(timed, 540, 30)).toBeNull();
+    expect(firstClash(timed, 720, 30)).toBeNull();
+  });
+
+  it('treats end-to-start touching as clear', () => {
+    expect(firstClash([item('event', 'e1', 'Standup', 600, 30)], 630, 30)).toBeNull();
+  });
+
+  it('ignores the item being edited', () => {
+    expect(firstClash(timed, 600, 30, { kind: 'event', id: 'e1' })).toBeNull();
+    expect(firstClash(timed, 600, 90, { kind: 'event', id: 'e1' })?.title).toBe('Review');
   });
 });
 

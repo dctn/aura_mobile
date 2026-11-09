@@ -36,6 +36,14 @@ export interface WorkSchedule {
   workDays: number[];
 }
 
+/**
+ * The schedule the demo falls back to until the visitor sets their own work hours. It covers all seven days on purpose:
+ * the demo should show the zones (and let Auto-allocate fill them) whatever day the snapshot lands on — a weekday or a
+ * weekend — so both features are visible together. A visitor who sets their own hours (e.g. Mon–Fri) overrides this,
+ * and then a day off shades nothing, as it should. The real app gets the schedule from the person's profile instead.
+ */
+export const DEMO_SCHEDULE: WorkSchedule = { workdayStart: '09:00', workdayEnd: '18:00', lunchStart: '13:00', lunchMinutes: 60, workDays: [1, 2, 3, 4, 5, 6, 7] };
+
 export type ScoreLevel = 'peak' | 'focused' | 'steady' | 'shallow' | 'depleted';
 
 // Design choices to tune in the preview, not research results. The levels and their cut-offs are the capacity score's.
@@ -137,7 +145,9 @@ function lightWork(stretch: readonly [number, number]): DayZone[] {
   return [...lightWork(before), zone, ...lightWork(after)];
 }
 
-/** The zones of a work day: lunch, then heavy work from the morning, then any extra recovery, then light work. */
+/** The zones of a work day: lunch, then heavy work from the morning, then any extra recovery, then light work. The
+ *  zones are the day's whole rhythm as a backdrop; committed blocks sit on top of them, so the rhythm is laid across
+ *  the full work hours and is not cut around what is booked. */
 export function dayZones(schedule: WorkSchedule, score: number): DayZone[] {
   const start = clockToMinutes(schedule.workdayStart) ?? 0;
   const end = clockToMinutes(schedule.workdayEnd) ?? 0;

@@ -11,7 +11,7 @@ import { DEFAULT_PREVIEW_SCORE, PREVIEW_SCORES } from '../lib/local';
 import { TitledGroup, useBackLabel } from '../search/parts';
 import { GUTTER, HOUR, PAD, blocks, endOf, lookTone, spanText, yOf } from './layout';
 import { WorkHoursSheet } from './WorkHoursSheet';
-import { ZONE_KINDS, ZONE_MEANING, ZONE_NAMES, asSchedule, hoursRange, zoneDay, zoneReason, type DayZone } from './dayZones';
+import { DEMO_SCHEDULE, ZONE_KINDS, ZONE_MEANING, ZONE_NAMES, asSchedule, hoursRange, zoneDay, zoneReason, type DayZone } from './dayZones';
 import '../search/search.css';
 import './calendar.css';
 
@@ -87,10 +87,11 @@ export function ZonesPage() {
   const back = useBackLabel();
   const { today, zone } = aura;
   const { events, tasks } = aura.data;
-  const schedule = asSchedule(aura.data.me.workSchedule);
+  const schedule = asSchedule(aura.data.me.workSchedule) ?? DEMO_SCHEDULE;
   const score = aura.local.previewScore ?? DEFAULT_PREVIEW_SCORE;
+  // Hide a block the coach has split and stood in for with its "part" pieces (auto:'split-src'); the pieces show instead.
+  const items = useMemo(() => A.dayItems(today, events, tasks, zone, today).timed.filter((i) => i.raw.auto !== 'split-src'), [events, tasks, zone, today]);
   const day = zoneDay(schedule, score, today);
-  const items = useMemo(() => A.dayItems(today, events, tasks, zone, today).timed, [events, tasks, zone, today]);
   const now = A.localParts(aura.now.toISOString(), zone)?.minute ?? null;
   const openHours = () => nav.openSheet({ render: (close) => <WorkHoursSheet close={close} /> });
 

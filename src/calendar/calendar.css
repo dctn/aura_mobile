@@ -225,6 +225,10 @@
 .cal-todohead { display: flex; align-items: center; justify-content: space-between; min-height: 24px; }
 .cal-todohead > span { font-size: var(--t-sub); font-weight: 600; color: var(--label2); }
 .cal-todohead .link { padding: 2px 0; font-size: var(--t-row); }
+.cal-todoacts { display: flex; align-items: center; gap: 14px; }
+.cal-alloc .row { align-items: flex-start; }
+.cal-alloc .cal-tsub { white-space: normal; line-height: 1.35; }
+.cal-allocbtn { margin-top: 14px; }
 .cal-todo { display: flex; flex-direction: column; gap: 8px; }
 
 .cal-taskrow {

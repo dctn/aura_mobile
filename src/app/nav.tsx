@@ -21,6 +21,8 @@ export type Page =
   | { name: 'settings' }
   /** Today's calendar with its zones, on a page of its own. */
   | { name: 'zones' }
+  /** The full calendar on its own page: the whole working day, with Auto-allocate in a big view. */
+  | { name: 'calendar' }
   | { name: 'inbox' };
 
 export const TAB_TITLES: Record<Tab, string> = { home: 'Home', recovery: 'Recovery', search: 'Search' };

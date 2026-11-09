@@ -6,10 +6,10 @@
 import { useState, type CSSProperties, type ReactNode } from 'react';
 import { useAura } from '../app/store';
 import { useNav } from '../app/nav';
-import { addDays, localParts, type Item } from '../lib/agenda';
+import { addDays, clock, dayItems, firstClash, localParts, type Item } from '../lib/agenda';
 import { Icon, Segmented, SheetFrame, Stepper, Switch } from '../kit/kit';
 import { Picker } from '../kit/Picker';
-import { doneChanges, eventTimes, newEvent, newTask, taskChanges } from './rows';
+import { deadlineFields, doneChanges, eventTimes, newEvent, newTask, taskChanges } from './rows';
 import { shortDay } from './zone';
 
 export interface ItemSheetProps {
@@ -29,6 +29,24 @@ export interface ItemSheetProps {
 }
 
 const clampLength = (n: number) => Math.min(480, Math.max(15, Math.round(n) || 30));
+
+// How tough the task feels → its demand (0–100). Deep (≥67) triggers a recovery break after it. The coach reads
+// demand to pace the day's recovery rhythm; see allocate.ts DEEP_DEMAND.
+const TOUGHNESS = [
+  { key: 'light', label: 'Light', demand: 25, hint: 'easy, low effort' },
+  { key: 'focused', label: 'Focused', demand: 55, hint: 'ordinary work' },
+  { key: 'hard', label: 'Hard', demand: 72, hint: 'needs real focus' },
+  { key: 'deep', label: 'Deep', demand: 88, hint: 'draining — earns a break' },
+] as const;
+
+const rawNum = (raw: Record<string, unknown> | undefined, key: string): number | null => {
+  const v = raw?.[key];
+  return typeof v === 'number' && Number.isFinite(v) ? v : null;
+};
+
+/** The toughness level nearest a stored demand, so editing shows the level the task was saved with. */
+const toughnessFor = (demand: number | null) =>
+  demand === null ? 'focused' : TOUGHNESS.reduce((a, b) => (Math.abs(b.demand - demand) < Math.abs(a.demand - demand) ? b : a)).key;
 
 function FormRow({ title, icon, tone, children }: { title: string; icon?: string; tone?: string; children?: ReactNode }) {
   return (
@@ -85,19 +103,38 @@ export function ItemSheet({ close, day: startDay, kind: startKind = 'task', item
   const [day, setDay] = useState(startDay);
   const [hasTime, setHasTime] = useState(at !== null);
   const [start, setStart] = useState(at ?? Math.min(23, Math.floor(nowMinute / 60) + 1) * 60);
-  const [length, setLength] = useState(clampLength(minutes));
+  const [length, setLength] = useState(clampLength(rawNum(item?.raw, 'estimateMinutes') ?? minutes));
+
+  // Auto-allocate inputs (tasks only): how tough it feels, and a deadline the coach plans around.
+  const [tough, setTough] = useState<string>(toughnessFor(rawNum(item?.raw, 'demand')));
+  const dl = localParts(String(item?.raw?.deadlineAt ?? ''), zone);
+  const [hasDeadline, setHasDeadline] = useState(dl !== null);
+  const [deadlineDay, setDeadlineDay] = useState(dl?.day ?? startDay);
+  const [deadlineHasTime, setDeadlineHasTime] = useState(item?.raw?.deadlineHasTime === true);
+  const [deadlineTime, setDeadlineTime] = useState(dl?.minute ?? 17 * 60);
 
   const task = kind === 'task';
   const isDated = !task || hasDay;
   const isTimed = !task || (isDated && hasTime);
   const ok = title.trim().length > 0;
 
+  const clash = isTimed
+    ? firstClash(dayItems(day, aura.data.events, aura.data.tasks, zone, today).timed, start, length, editing ? { kind: item.kind, id: item.id } : undefined)
+    : null;
+
   const pickKind = (k: 'task' | 'event') => {
     setKind(k);
     if (k === 'event') setHasDay(true);
   };
 
-  const save = () => {
+  // The Auto-allocate inputs a task carries: how long it takes, how tough it is, and the deadline to plan around.
+  const allocFields = () => ({
+    estimateMinutes: length,
+    demand: TOUGHNESS.find((t) => t.key === tough)?.demand ?? 55,
+    ...(hasDeadline ? deadlineFields(deadlineDay, deadlineHasTime ? deadlineTime : null, zone) : { deadlineAt: null, deadlineHasTime: false }),
+  });
+
+  const commit = () => {
     const name = title.trim();
     if (!name) return;
     const d = isDated ? day : null;
@@ -108,7 +145,7 @@ export function ItemSheet({ close, day: startDay, kind: startKind = 'task', item
         aura.edit.add('events', newEvent(name, day, start, length, zone));
         nav.showToast('Added 1 to your calendar');
       } else {
-        aura.edit.add('tasks', newTask(name, d, t, t === null ? null : length, zone, today));
+        aura.edit.add('tasks', newTask(name, d, t, t === null ? null : length, zone, today, allocFields()));
         nav.showToast('Task added');
       }
       return;
@@ -117,8 +154,24 @@ export function ItemSheet({ close, day: startDay, kind: startKind = 'task', item
       aura.edit.change('events', item.id, { title: name, ...eventTimes(day, start, length, zone) });
       return;
     }
-    const changes = taskChanges(item.raw, name, d, t, length, locked, zone, today);
+    const changes = taskChanges(item.raw, name, d, t, length, locked, zone, today, locked ? {} : allocFields());
     if (changes) aura.edit.change('tasks', item.id, changes);
+  };
+
+  const save = () => {
+    if (!title.trim()) return;
+    if (clash) {
+      nav.showAlert({
+        title: 'Times overlap',
+        body: `This runs over “${clash.title}” at ${clock(clash.start as number)}. Add it anyway?`,
+        buttons: [
+          { label: 'Cancel', role: 'cancel' },
+          { label: 'Add anyway', role: 'default', onPress: commit },
+        ],
+      });
+      return;
+    }
+    commit();
   };
 
   const toggleDone = () => {
@@ -196,6 +249,42 @@ export function ItemSheet({ close, day: startDay, kind: startKind = 'task', item
                 <Stepper value={length} min={15} max={480} step={15} format={(v) => `${v} min`} onChange={setLength} />
               </FormRow>
             </>
+          )}
+          {task && !isTimed && (
+            <FormRow title="Duration" icon="timer" tone="recovery">
+              <Stepper value={length} min={15} max={480} step={15} format={(v) => `${v} min`} onChange={setLength} />
+            </FormRow>
+          )}
+          {task && (
+            <FormRow title="Toughness" icon="bolt" tone="workout">
+              <Picker label="How tough" value={tough} options={TOUGHNESS.map((t) => ({ value: t.key, label: t.label }))} onChange={setTough} />
+            </FormRow>
+          )}
+          {task && (
+            <FormRow title="Deadline" icon="flag" tone="stress">
+              <Switch on={hasDeadline} onChange={setHasDeadline} label="Give the task a deadline" />
+            </FormRow>
+          )}
+          {task && hasDeadline && (
+            <>
+              <FormRow title="Due by">
+                <DateStepper day={deadlineDay} onChange={setDeadlineDay} />
+              </FormRow>
+              <FormRow title="At a time">
+                <Switch on={deadlineHasTime} onChange={setDeadlineHasTime} label="Finish before a set time" />
+              </FormRow>
+              {deadlineHasTime && (
+                <FormRow title="Before">
+                  <TimePill value={deadlineTime} onChange={setDeadlineTime} />
+                </FormRow>
+              )}
+            </>
+          )}
+          {task && (
+            <div className="muted cal-note">{TOUGHNESS.find((t) => t.key === tough)?.hint}{hasDeadline ? ` · Auto-allocate fits it in before ${deadlineHasTime ? `${clock(deadlineTime)} on ` : ''}${shortDay(deadlineDay)}` : ' · Auto-allocate finds it a time'}.</div>
+          )}
+          {clash && (
+            <div className="muted cal-note warn">Overlaps “{clash.title}” · {clock(clash.start as number)}</div>
           )}
         </div>
       )}

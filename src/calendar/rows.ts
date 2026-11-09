@@ -16,11 +16,20 @@ export function taskFields(day: string | null, at: number | null, zone: string):
   return { dueAt: zonedIso(day, at ?? 0, zone), hasTime: at !== null, plannedFor: null };
 }
 
-/** A new open task on `day` (at `at`, for `minutes`); no day is "Anytime" on today's list. */
-export function newTask(title: string, day: string | null, at: number | null, minutes: number | null, zone: string, today: string): Json {
+/** A task's deadline — the latest it must be done — kept apart from any day/time it is scheduled on, so an untimed
+ *  to-do can still carry a hard "finish by" that Auto-allocate plans around. `deadlineHasTime` false: only the day. */
+export function deadlineFields(day: string | null, at: number | null, zone: string): Json {
+  if (day === null) return { deadlineAt: null, deadlineHasTime: false };
+  return { deadlineAt: zonedIso(day, at ?? 0, zone), deadlineHasTime: at !== null };
+}
+
+/** A new open task on `day` (at `at`, for `minutes`); no day is "Anytime" on today's list. `alloc` carries the
+ *  Auto-allocate inputs (duration, toughness/demand, deadline); its nulls are dropped so a fresh row stays clean. */
+export function newTask(title: string, day: string | null, at: number | null, minutes: number | null, zone: string, today: string, alloc: Json = {}): Json {
   const fields = Object.fromEntries(Object.entries(taskFields(day, at, zone)).filter(([, v]) => v !== null));
   const row: Json = { title, status: 'open', horizon: horizonFor(day, today), ...fields };
   if (at !== null && minutes) row.estimateMinutes = minutes;
+  for (const [k, v] of Object.entries(alloc)) if (v !== null && v !== undefined) row[k] = v;
   return row;
 }
 
@@ -35,7 +44,7 @@ export const newEvent = (title: string, day: string, at: number, minutes: number
 /** What an edit changes on a task; null when nothing does. A task placed by a calendar block (`locked`) keeps its
  *  time: only its title changes. */
 export function taskChanges(
-  task: Json, title: string, day: string | null, at: number | null, minutes: number, locked: boolean, zone: string, today: string,
+  task: Json, title: string, day: string | null, at: number | null, minutes: number, locked: boolean, zone: string, today: string, alloc: Json = {},
 ): Json | null {
   const changes: Json = { title };
   if (!locked) {
@@ -43,7 +52,9 @@ export function taskChanges(
     if (at !== null) changes.estimateMinutes = minutes;
     changes.horizon = horizonFor(day, today);
   }
-  const differs = Object.entries(changes).some(([k, v]) => (task[k] ?? null) !== v);
+  // Auto-allocate inputs: nulls are KEPT (an edit that clears a deadline writes deadlineAt: null).
+  Object.assign(changes, alloc);
+  const differs = Object.entries(changes).some(([k, v]) => (task[k] ?? null) !== (v ?? null));
   return differs ? changes : null;
 }
 
