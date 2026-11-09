@@ -5,8 +5,8 @@ public final class StubAPI: AuraAPI, @unchecked Sendable {
     /// Every day of the week, so CI screenshots show zones on a weekend too.
     public static let defaultSchedule = WorkSchedule(workdayStart: "09:00", workdayEnd: "18:00", lunchStart: "13:00",
                                                      lunchMinutes: 60, workDays: [1, 2, 3, 4, 5, 6, 7])
-    /// The score every stub work day has: a steady day, so 2 h of heavy work.
-    static let zoneScore = 62
+    /// The score every stub work day has: a steady day (68-78), so 2 h of heavy work.
+    static let zoneScore = 72
 
     /// The id of the session the stub pretends is running on the person's computer.
     public static let runningElsewhereId = "running-elsewhere"
@@ -22,6 +22,11 @@ public final class StubAPI: AuraAPI, @unchecked Sendable {
         held = workSchedule
         otherRunning = joinsRunningSession
     }
+
+    /// Capacity's band for a score, as the stub stands in for it.
+    static func level(_ score: Int) -> String { StubZones.level(score) }
+    /// The Planner's heavy minutes for a score's band.
+    static func heavyMinutes(_ score: Int) -> Int { StubZones.heavyMinutes(score) }
 
     private func day(_ offset: Int) -> String {
         DayKey.string(Calendar.current.date(byAdding: .day, value: offset, to: Date()) ?? Date())
@@ -206,15 +211,17 @@ enum StubZones {
                        reason: reason(score, heavyMinutes: heavy), zones: zones)
     }
 
-    /// The Planner's levels and heavy minutes (evidence.ts ZONE_LEVELS, ZONES.heavyMinutes).
+    /// Capacity's `openingBand` cut points since 9 Nov 2026. The Planner no longer cuts the score itself: it reads
+    /// the band Capacity sends (evidence.ts ZONE_LEVELS is gone), so this only stands in for Capacity here.
     static func level(_ score: Int) -> String {
-        if score >= 85 { return "peak" }
-        if score >= 70 { return "focused" }
-        if score >= 55 { return "steady" }
-        if score >= 40 { return "shallow" }
+        if score >= 89 { return "peak" }
+        if score >= 79 { return "focused" }
+        if score >= 68 { return "steady" }
+        if score >= 57 { return "shallow" }
         return "depleted"
     }
 
+    /// The Planner's heavy minutes by band (ZONES.heavyMinutes).
     static func heavyMinutes(_ score: Int) -> Int {
         switch level(score) {
         case "peak": return 240

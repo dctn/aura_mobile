@@ -14,8 +14,8 @@ final class DayZonesLiveTests: XCTestCase {
         let rig = TestRig()
         let sample = """
         {"days":[
-          {"date":"2026-11-09","status":"ready","score":61.6,"level":"steady","heavyMinutes":120,
-           "reason":"Your capacity score is 62, so about 2 h of heavy work today, first thing.",
+          {"date":"2026-11-09","status":"ready","score":71.6,"level":"steady","heavyMinutes":120,
+           "reason":"Your capacity score is 72, so about 2 h of heavy work today, first thing.",
            "zones":[
              {"kind":"heavyWork","start":"2026-11-09T03:30:00.000Z","end":"2026-11-09T05:00:00.000Z"},
              {"kind":"shortRecovery","start":"2026-11-09T05:00:00Z","end":"2026-11-09T05:15:00Z"},
@@ -35,10 +35,10 @@ final class DayZonesLiveTests: XCTestCase {
         let ready = days[0]
         XCTAssertEqual(ready.date, "2026-11-09")
         XCTAssertEqual(ready.status, .ready)
-        XCTAssertEqual(ready.score, 62)
+        XCTAssertEqual(ready.score, 72)
         XCTAssertEqual(ready.level, "steady")
         XCTAssertEqual(ready.heavyMinutes, 120)
-        XCTAssertEqual(ready.reason, "Your capacity score is 62, so about 2 h of heavy work today, first thing.")
+        XCTAssertEqual(ready.reason, "Your capacity score is 72, so about 2 h of heavy work today, first thing.")
         let expected = [
             Zone(kind: .heavyWork, start: try instant("2026-11-09T03:30:00Z"), end: try instant("2026-11-09T05:00:00Z")),
             Zone(kind: .shortRecovery, start: try instant("2026-11-09T05:00:00Z"), end: try instant("2026-11-09T05:15:00Z")),
@@ -49,6 +49,21 @@ final class DayZonesLiveTests: XCTestCase {
 
         XCTAssertEqual(days[1], ZoneDay(date: "2026-11-10", status: .noScore))
         XCTAssertEqual(days[2], ZoneDay(date: "2026-11-11", status: .unknown))
+    }
+
+    /// The level is Capacity's band as the Planner sends it; the app never works it out from the score.
+    func testLevelIsUsedAsSent() async throws {
+        let rig = TestRig()
+        let sample = """
+        {"days":[{"date":"2026-11-09","status":"ready","score":95,"level":"shallow","heavyMinutes":0,
+          "reason":"Your capacity score is 95, so keep to lighter work today.","zones":[]}]}
+        """
+        rig.server.on("/v1/planner/zones", [.json(200, sample)])
+        let days = try await rig.api.dayZones(from: "2026-11-09", to: "2026-11-09")
+        let day = try XCTUnwrap(days.first)
+        XCTAssertEqual(day.score, 95)
+        XCTAssertEqual(day.level, "shallow")
+        XCTAssertEqual(day.heavyMinutes, 0)
     }
 
     func testMissingFieldsStillRead() async throws {
@@ -232,10 +247,10 @@ final class DayZonesStubTests: XCTestCase {
         let day = try XCTUnwrap(days.first)
         XCTAssertEqual(day.date, today)
         XCTAssertEqual(day.status, .ready)
-        XCTAssertEqual(day.score, 62)
+        XCTAssertEqual(day.score, 72)
         XCTAssertEqual(day.level, "steady")
         XCTAssertEqual(day.heavyMinutes, 120)
-        XCTAssertEqual(day.reason, "Your capacity score is 62, so about 2 h of heavy work today, first thing.")
+        XCTAssertEqual(day.reason, "Your capacity score is 72, so about 2 h of heavy work today, first thing.")
 
         let zones = day.zones
         XCTAssertEqual(zones.first?.start, try time(today, 9))
@@ -252,6 +267,17 @@ final class DayZonesStubTests: XCTestCase {
         XCTAssertEqual(zones.map { $0.start }, [try time(today, 9), try time(today, 10, 30), try time(today, 10, 45),
                                                 try time(today, 11, 15), try time(today, 13), try time(today, 14),
                                                 try time(today, 15, 45), try time(today, 16)])
+    }
+
+    /// The stub stands in for Capacity's bands: peak 89+, focused 79, steady 68, shallow 57, depleted under.
+    func testStubBandsFollowCapacityCutPoints() {
+        let cases: [(Int, String, Int)] = [(89, "peak", 240), (88, "focused", 180), (79, "focused", 180),
+                                           (78, "steady", 120), (68, "steady", 120), (67, "shallow", 0),
+                                           (57, "shallow", 0), (56, "depleted", 0)]
+        for (score, level, heavy) in cases {
+            XCTAssertEqual(StubAPI.level(score), level, "score \(score)")
+            XCTAssertEqual(StubAPI.heavyMinutes(score), heavy, "score \(score)")
+        }
     }
 
     func testOneDayPerDate() async throws {
