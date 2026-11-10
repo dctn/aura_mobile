@@ -305,6 +305,162 @@ struct WireTrace: Decodable {
     let stressDrop: Double?
 }
 
+// MARK: Beta day score: Session's sessionView, reviews; Capacity's ledger and recovery options; sleep nights
+
+/// The sessionView keys the app reads.
+struct WireSessionView: Decodable {
+    struct Capacity: Decodable {
+        let cost: Double?
+        let charged: Bool?
+    }
+
+    let id: String
+    let kind: String?
+    let title: String?
+    let startedAt: String?
+    let endedAt: String?
+    let minutes: Double?
+    let activeMinutes: Double?
+    let outcome: String?
+    let difficulty: String?
+    let recoveryType: String?
+    let capacity: WireLossy<Capacity>?
+
+    /// A difficulty or recovery type this app doesn't know reads as none. The cost is only kept once charged.
+    var model: SessionRecord {
+        let charge = capacity?.item
+        let cost: Double? = charge?.charged == true ? charge?.cost : nil
+        let length = WireWhole.from(activeMinutes) ?? WireWhole.from(minutes) ?? 0
+        return SessionRecord(id: id, kind: kind ?? "", title: title, startedAt: WireDate.parse(startedAt),
+                             endedAt: WireDate.parse(endedAt), minutes: length, outcome: outcome,
+                             difficulty: difficulty.flatMap { Difficulty(rawValue: $0) },
+                             recoveryType: recoveryType.flatMap { RecoveryType(rawValue: $0) }, capacityCost: cost)
+    }
+}
+
+/// `{"session": sessionView}`, the answer of PUT /v1/sessions/{id}/difficulty.
+struct WireSessionResponse: Decodable {
+    let session: WireSessionView
+}
+
+/// `{"session": sessionView, "created": bool}`, the answer of POST /v1/sessions/log.
+struct WireLoggedSession: Decodable {
+    let session: WireSessionView
+    let created: Bool?
+}
+
+/// GET /v1/sessions?from&to. A session the app can't read is left out.
+struct WireSessionPage: Decodable {
+    let sessions: [WireLossy<WireSessionView>]?
+    let cursor: String?
+}
+
+/// The log body. `minutes` and the times are the caller's; the route checks them.
+struct WireLogRequest: Encodable {
+    let id: String
+    let kind: String
+    let recoveryType: String
+    let startedAt: String
+    let minutes: Int
+    let device: String
+}
+
+/// Only the review's presence is read: an item with one is already answered.
+struct WireReviewMarker: Decodable {
+    let blockId: String?
+}
+
+struct WireInboxItem: Decodable {
+    let blockId: String
+    let date: String?
+    let title: String?
+    let kind: String?
+    let start: String?
+    let end: String?
+    let minutes: Double?
+    let review: WireLossy<WireReviewMarker>?
+
+    /// Nil when a time can't be read: that item is left out.
+    var model: ReviewItem? {
+        guard let startDate = WireDate.parse(start), let endDate = WireDate.parse(end) else { return nil }
+        let length = WireWhole.from(minutes) ?? Int((endDate.timeIntervalSince(startDate) / 60).rounded())
+        return ReviewItem(blockId: blockId, date: date ?? DayKey.string(startDate), title: title ?? "",
+                          kind: kind ?? "focus", start: startDate, end: endDate, minutes: length)
+    }
+}
+
+/// GET /v1/reviews/inbox?date&days.
+struct WireInbox: Decodable {
+    let items: [WireLossy<WireInboxItem>]?
+}
+
+/// One line of Capacity's ledger. Only the fields that find a session's line are read.
+struct WireLedgerEntry: Decodable {
+    let source: String?
+    let sourceId: String?
+    let detail: String?
+}
+
+/// GET /v1/capacity/today?date: only the ledger is read.
+struct WireCapacityToday: Decodable {
+    let ledger: [WireLossy<WireLedgerEntry>]?
+}
+
+struct WireRecoveryOption: Decodable {
+    let id: String
+    let title: String?
+    let minutes: Double?
+    let maxPoints: Double?
+    let fadesAfterMinutes: Double?
+    let note: String?
+
+    var model: RecoveryOption {
+        return RecoveryOption(id: id, title: title ?? "", minutes: WireWhole.from(minutes) ?? 0,
+                              maxPoints: maxPoints ?? 0, fadesAfterMinutes: WireWhole.from(fadesAfterMinutes) ?? 0,
+                              note: note ?? "")
+    }
+}
+
+/// GET /v1/capacity/recovery-options?minutes.
+struct WireRecoveryOptions: Decodable {
+    let options: [WireLossy<WireRecoveryOption>]?
+}
+
+/// The night body. The route is a strict object whose optional keys take a number or nothing, never null: they are
+/// left out when nil, which synthesized Encodable does (it writes optionals with encodeIfPresent).
+struct WireSleepNightRequest: Encodable {
+    let timeZone: String
+    let bedtimeAt: String
+    let wakeAt: String
+    let totalSleepMin: Int
+    let awakeMin: Int?
+    let inBedMin: Int?
+
+    init(_ night: SleepNight) {
+        timeZone = night.timeZone
+        bedtimeAt = WireDate.string(night.bedtimeAt)
+        wakeAt = WireDate.string(night.wakeAt)
+        totalSleepMin = WireSleepNightRequest.dayMinutes(night.totalSleepMin)
+        awakeMin = night.awakeMin.map { WireSleepNightRequest.dayMinutes($0) }
+        inBedMin = night.inBedMin.map { WireSleepNightRequest.dayMinutes($0) }
+    }
+
+    /// Minutes inside the route's 0-1440.
+    static func dayMinutes(_ value: Int) -> Int {
+        return min(max(value, 0), 1440)
+    }
+}
+
+/// `{"night": sleepNightView, "created": bool}`.
+struct WireSleepNightResponse: Decodable {
+    struct Night: Decodable {
+        let source: String?
+    }
+
+    let night: WireLossy<Night>?
+    let created: Bool?
+}
+
 // MARK: Day zones: GET /v1/planner/zones?from&to
 
 struct WireZone: Decodable {
@@ -559,8 +715,22 @@ struct WireMe: Decodable {
     let timezone: String?
     /// Null until the person sets it. One the app can't read counts as none, so the rest of the profile still reads.
     let workSchedule: WireLossy<WireWorkSchedule>?
+    /// Read for the usual sleep times only. One the app can't read counts as none.
+    let healthGoals: WireLossy<WireHealthGoals>?
     /// Not optional: a profile write has to name the version it read.
     let version: Int
+}
+
+/// The two health goals the app reads: "HH:mm" or null each.
+struct WireHealthGoals: Decodable {
+    let bedtime: String?
+    let wakeTime: String?
+
+    /// Nil when either time is missing or empty.
+    var schedule: SleepSchedule? {
+        guard let bed = bedtime, !bed.isEmpty, let wake = wakeTime, !wake.isEmpty else { return nil }
+        return SleepSchedule(bedtime: bed, wakeTime: wake)
+    }
 }
 
 struct WireWorkSchedule: Codable {

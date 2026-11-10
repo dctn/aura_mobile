@@ -455,6 +455,227 @@ public struct WorkSchedule: Sendable, Equatable {
     }
 }
 
+// MARK: Beta day score
+
+/// The answer to "How hard was this for you?" after a focus session. It sets the work's demand, so its cost.
+public enum Difficulty: String, Sendable, CaseIterable, Identifiable, Equatable {
+    case easy, light, normal, hard, veryHard
+    public var id: String { rawValue }
+
+    /// Easy, Light, Normal, Hard, Very hard.
+    public var label: String {
+        switch self {
+        case .easy: return "Easy"
+        case .light: return "Light"
+        case .normal: return "Normal"
+        case .hard: return "Hard"
+        case .veryHard: return "Very hard"
+        }
+    }
+}
+
+/// What a recovery break was. Each lifts the day score for a while.
+public enum RecoveryType: String, Sendable, CaseIterable, Identifiable, Equatable {
+    case walk, nap, rest, outside, social
+    public var id: String { rawValue }
+
+    /// Walk, Nap, Rest (no screen), Time outside, Talk with someone.
+    public var label: String {
+        switch self {
+        case .walk: return "Walk"
+        case .nap: return "Nap"
+        case .rest: return "Rest (no screen)"
+        case .outside: return "Time outside"
+        case .social: return "Talk with someone"
+        }
+    }
+}
+
+/// One recorded session, as GET /v1/sessions lists it.
+public struct SessionRecord: Sendable, Equatable, Identifiable {
+    public var id: String
+    /// focus, meeting, recovery, walk, brainstorm
+    public var kind: String
+    public var title: String?
+    public var startedAt: Date?
+    public var endedAt: Date?
+    /// activeMinutes when sent, else minutes, else 0.
+    public var minutes: Int
+    /// completed, pending, rescheduled, stopped, logged
+    public var outcome: String?
+    public var difficulty: Difficulty?
+    public var recoveryType: RecoveryType?
+    /// Points the session cost (positive), when charged.
+    public var capacityCost: Double?
+    public var isFocus: Bool { kind == "focus" }
+
+    public init(id: String, kind: String, title: String? = nil, startedAt: Date? = nil, endedAt: Date? = nil,
+                minutes: Int = 0, outcome: String? = nil, difficulty: Difficulty? = nil,
+                recoveryType: RecoveryType? = nil, capacityCost: Double? = nil) {
+        self.id = id; self.kind = kind; self.title = title; self.startedAt = startedAt; self.endedAt = endedAt
+        self.minutes = minutes; self.outcome = outcome; self.difficulty = difficulty
+        self.recoveryType = recoveryType; self.capacityCost = capacityCost
+    }
+}
+
+public struct LoggedBreak: Sendable, Equatable {
+    public var session: SessionRecord
+    /// False when the same id had been sent before.
+    public var created: Bool
+    public init(session: SessionRecord, created: Bool) {
+        self.session = session; self.created = created
+    }
+}
+
+/// One break GET /v1/capacity/recovery-options offers, with the most it lifts the score.
+public struct RecoveryOption: Sendable, Equatable, Identifiable {
+    /// nap, walk, rest, outside, social
+    public var id: String
+    public var title: String
+    public var minutes: Int
+    public var maxPoints: Double
+    /// 0 for a give-back that doesn't fade.
+    public var fadesAfterMinutes: Int
+    public var note: String
+    /// The matching type, nil for an id the app doesn't know.
+    public var type: RecoveryType? { RecoveryType(rawValue: id) }
+
+    /// "+9, fades within 50 min"; "+10, fades within 2 h" (whole hours as h); one decimal kept only when not whole.
+    public var hint: String {
+        let points = "+" + RecoveryOption.pointsText(maxPoints)
+        if fadesAfterMinutes <= 0 { return "\(points), does not fade" }
+        let fades: String
+        if fadesAfterMinutes >= 60 && fadesAfterMinutes % 60 == 0 {
+            fades = "\(fadesAfterMinutes / 60) h"
+        } else {
+            fades = "\(fadesAfterMinutes) min"
+        }
+        return "\(points), fades within \(fades)"
+    }
+
+    public init(id: String, title: String, minutes: Int, maxPoints: Double, fadesAfterMinutes: Int, note: String) {
+        self.id = id; self.title = title; self.minutes = minutes; self.maxPoints = maxPoints
+        self.fadesAfterMinutes = fadesAfterMinutes; self.note = note
+    }
+
+    /// "9" for a whole number, else one decimal, "2.5".
+    static func pointsText(_ value: Double) -> String {
+        guard value.isFinite, abs(value) < 1_000_000 else { return "0" }
+        let tenths = (value * 10).rounded() / 10
+        if tenths == tenths.rounded() { return String(Int(tenths)) }
+        return String(format: "%.1f", tenths)
+    }
+}
+
+/// One block the Review inbox asks about.
+public struct ReviewItem: Sendable, Equatable, Identifiable {
+    public var blockId: String
+    public var id: String { blockId }
+    /// A `DayKey`.
+    public var date: String
+    public var title: String
+    /// focus, meeting, recovery
+    public var kind: String
+    public var start: Date
+    public var end: Date
+    public var minutes: Int
+    public var isRecovery: Bool { kind == "recovery" }
+
+    public init(blockId: String, date: String, title: String, kind: String, start: Date, end: Date, minutes: Int) {
+        self.blockId = blockId; self.date = date; self.title = title; self.kind = kind
+        self.start = start; self.end = end; self.minutes = minutes
+    }
+}
+
+public enum ReviewIntensity: String, Sendable, CaseIterable, Identifiable {
+    case light, steady, deep
+    public var id: String { rawValue }
+
+    /// Light, Steady, Deep.
+    public var label: String {
+        switch self {
+        case .light: return "Light"
+        case .steady: return "Steady"
+        case .deep: return "Deep"
+        }
+    }
+}
+
+/// The answer to one inbox item. A recovery block sends `recoveryType`; others send intensity and drain.
+public struct ReviewAnswer: Sendable, Equatable {
+    public var item: ReviewItem
+    public var happened: Bool
+    public var intensity: ReviewIntensity?
+    /// 1 (gave energy) ... 5 (drained).
+    public var drain: Int?
+    public var recoveryType: RecoveryType?
+
+    public init(item: ReviewItem, happened: Bool, intensity: ReviewIntensity? = nil, drain: Int? = nil,
+                recoveryType: RecoveryType? = nil) {
+        self.item = item; self.happened = happened; self.intensity = intensity; self.drain = drain
+        self.recoveryType = recoveryType
+    }
+}
+
+/// The profile's usual sleep times, "HH:mm" each.
+public struct SleepSchedule: Sendable, Equatable {
+    public var bedtime: String
+    public var wakeTime: String
+    public init(bedtime: String, wakeTime: String) {
+        self.bedtime = bedtime; self.wakeTime = wakeTime
+    }
+}
+
+/// One Apple Health sample, mapped out of HealthKit by the app (AuraKit doesn't import HealthKit).
+public struct SleepSample: Sendable, Equatable {
+    public enum Kind: String, Sendable {
+        case inBed, asleepCore, asleepDeep, asleepREM, asleepUnspecified, awake
+
+        /// True for the four asleep stages.
+        public var isAsleep: Bool {
+            switch self {
+            case .asleepCore, .asleepDeep, .asleepREM, .asleepUnspecified: return true
+            case .inBed, .awake: return false
+            }
+        }
+    }
+
+    public var start: Date
+    public var end: Date
+    public var kind: Kind
+    public init(start: Date, end: Date, kind: Kind) {
+        self.start = start; self.end = end; self.kind = kind
+    }
+}
+
+/// One night for PUT /v1/sleep/nights/{date}.
+public struct SleepNight: Sendable, Equatable {
+    /// The `DayKey` of the wake, in `timeZone`.
+    public var date: String
+    /// An IANA id.
+    public var timeZone: String
+    public var bedtimeAt: Date
+    public var wakeAt: Date
+    public var totalSleepMin: Int
+    public var awakeMin: Int?
+    public var inBedMin: Int?
+
+    public init(date: String, timeZone: String, bedtimeAt: Date, wakeAt: Date, totalSleepMin: Int,
+                awakeMin: Int? = nil, inBedMin: Int? = nil) {
+        self.date = date; self.timeZone = timeZone; self.bedtimeAt = bedtimeAt; self.wakeAt = wakeAt
+        self.totalSleepMin = totalSleepMin; self.awakeMin = awakeMin; self.inBedMin = inBedMin
+    }
+}
+
+public struct SleepNightResult: Sendable, Equatable {
+    public var created: Bool
+    /// band, appleHealth or checkin: a higher source already there is kept.
+    public var source: String
+    public init(created: Bool, source: String) {
+        self.created = created; self.source = source
+    }
+}
+
 // MARK: Errors
 
 public enum AuraError: Error, Equatable, Sendable {

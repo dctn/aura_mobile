@@ -19,8 +19,10 @@ public protocol AuraAPI: Sendable {
 
     // Sessions
     /// `id` is the caller's and is safe to resend: the same id answers with the session it made. The answer's id can
-    /// still differ, when another session was already running and this joined it.
-    func startSession(id: String, kind: String, mode: String, plannedMinutes: Int?, title: String) async throws -> StartedSession
+    /// still differ, when another session was already running and this joined it. `recoveryType` is sent only when
+    /// `kind` is "recovery": the route needs it there and refuses it on any other kind.
+    func startSession(id: String, kind: String, mode: String, plannedMinutes: Int?, title: String,
+                      recoveryType: RecoveryType?) async throws -> StartedSession
     func sessionAction(id: String, action: SessionAction) async throws
     func sessionTrace(id: String) async throws -> SessionTrace
 
@@ -55,6 +57,25 @@ public protocol AuraAPI: Sendable {
     // Quick check
     /// Sends one Quick check's raw results (POST /v1/checks). Resending the same `id` is safe and returns the stored check.
     func submitCheck(_ run: QuickCheckRun) async throws -> QuickCheckResult
+
+    // Beta day score
+    /// Rates an ended focus session (PUT /v1/sessions/{id}/difficulty). A new answer replaces the cost.
+    func setDifficulty(sessionId: String, _ difficulty: Difficulty) async throws -> SessionRecord
+    /// The Capacity ledger's line for a session today ("... You rated it Hard."), or nil when it isn't charged yet.
+    func capacityLine(sessionId: String) async throws -> String?
+    /// Sessions from `from` to `to` (DayKeys), newest first.
+    func sessions(from: String, to: String) async throws -> [SessionRecord]
+    /// Records a break taken earlier (POST /v1/sessions/log). Resending the same id is safe.
+    func logBreak(id: String, type: RecoveryType, startedAt: Date, minutes: Int) async throws -> LoggedBreak
+    func recoveryOptions(minutes: Int) async throws -> [RecoveryOption]
+    /// Blocks to review, `days` back from `date` (a DayKey).
+    func reviewInbox(date: String, days: Int) async throws -> [ReviewItem]
+    func submitReview(_ answer: ReviewAnswer) async throws
+    /// The profile's healthGoals bedtime and wake time, or nil when either is missing.
+    func sleepSchedule() async throws -> SleepSchedule?
+    func putSleepNight(_ night: SleepNight) async throws -> SleepNightResult
+    /// The morning check-in. Both times ("HH:mm") or neither; alertness 1...9.
+    func morningCheckin(alertness: Int?, fellAsleepAt: String?, wokeAt: String?, at: Date) async throws
 }
 
 public enum AuthState: Sendable, Equatable {

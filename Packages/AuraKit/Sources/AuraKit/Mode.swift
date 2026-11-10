@@ -79,6 +79,19 @@ public struct Mode: Codable, Sendable, Identifiable, Equatable {
         }
     }
 
+    /// What a recovery-kind mode sends as recoveryType; nil for other kinds. A nap by its id, then by shelf:
+    /// Outside is time outside, People is talking with someone, Movement is a walk, and the rest is rest.
+    public var recoveryType: RecoveryType? {
+        guard kind == "recovery" else { return nil }
+        if id.contains("nap") { return .nap }
+        switch shelf {
+        case .outside: return .outside
+        case .people: return .social
+        case .movement: return .walk
+        default: return .rest
+        }
+    }
+
     /// The Focus shelf is the only one with the 3-2-1 first (frame 02).
     public var hasCountdown: Bool { shelf == .focus }
 

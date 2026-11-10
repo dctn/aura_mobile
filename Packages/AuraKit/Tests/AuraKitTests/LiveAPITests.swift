@@ -603,7 +603,7 @@ final class LiveAPIBodyTests: XCTestCase {
     func testFlowtimeSessionSendsNullMinutes() async throws {
         let rig = TestRig()
         rig.server.on("/v1/sessions", [.json(201, "{\"session\":{\"id\":\"server-id\",\"status\":\"running\"},\"joined\":true}")])
-        let started = try await rig.api.startSession(id: "chosen-1", kind: "focus", mode: "flowtime", plannedMinutes: 25, title: "Flow")
+        let started = try await rig.api.startSession(id: "chosen-1", kind: "focus", mode: "flowtime", plannedMinutes: 25, title: "Flow", recoveryType: nil)
         XCTAssertEqual(started, StartedSession(id: "server-id", joined: true))
         let call = try XCTUnwrap(rig.server.calls("/v1/sessions").first)
         XCTAssertEqual(call.body["id"] as? String, "chosen-1")
@@ -617,9 +617,9 @@ final class LiveAPIBodyTests: XCTestCase {
     func testTimerSessionSendsMinutesWithinTheLimit() async throws {
         let rig = TestRig()
         rig.server.on("/v1/sessions", [.json(201, "{\"session\":{\"id\":\"one\"}}")])
-        let started = try await rig.api.startSession(id: "one", kind: "recovery", mode: "timer", plannedMinutes: 25, title: "Nap")
+        let started = try await rig.api.startSession(id: "one", kind: "recovery", mode: "timer", plannedMinutes: 25, title: "Nap", recoveryType: .nap)
         XCTAssertEqual(started, StartedSession(id: "one", joined: false))
-        _ = try await rig.api.startSession(id: "two", kind: "recovery", mode: "timer", plannedMinutes: 500, title: "Long")
+        _ = try await rig.api.startSession(id: "two", kind: "recovery", mode: "timer", plannedMinutes: 500, title: "Long", recoveryType: .nap)
         let calls = rig.server.calls("/v1/sessions")
         XCTAssertEqual(calls[0].body["plannedMinutes"] as? Int, 25)
         XCTAssertEqual(calls[1].body["plannedMinutes"] as? Int, 240)
@@ -628,7 +628,7 @@ final class LiveAPIBodyTests: XCTestCase {
     func testSessionAnswersWithTheMinutesGranted() async throws {
         let rig = TestRig()
         rig.server.on("/v1/sessions", [.json(201, "{\"session\":{\"id\":\"one\",\"plannedMinutes\":15},\"joined\":false}")])
-        let started = try await rig.api.startSession(id: "one", kind: "focus", mode: "timer", plannedMinutes: 25, title: "Work")
+        let started = try await rig.api.startSession(id: "one", kind: "focus", mode: "timer", plannedMinutes: 25, title: "Work", recoveryType: nil)
         XCTAssertEqual(started, StartedSession(id: "one", joined: false, plannedMinutes: 15))
     }
 
@@ -639,7 +639,7 @@ final class LiveAPIBodyTests: XCTestCase {
         "plannedMinutes":50,"startedAt":"2030-03-17T17:21:40.000Z","endsAt":"2030-03-17T18:11:40.000Z"},"joined":true}
         """
         rig.server.on("/v1/sessions", [.json(201, answer)])
-        let started = try await rig.api.startSession(id: "mine", kind: "focus", mode: "timer", plannedMinutes: 25, title: "Work")
+        let started = try await rig.api.startSession(id: "mine", kind: "focus", mode: "timer", plannedMinutes: 25, title: "Work", recoveryType: nil)
         XCTAssertEqual(started, StartedSession(id: "desk-1", joined: true, plannedMinutes: 50, title: "Deep work",
                                                kind: "focus", device: "desktop",
                                                endsAt: TestRig.now.addingTimeInterval(25 * 60)))
@@ -648,7 +648,7 @@ final class LiveAPIBodyTests: XCTestCase {
     func testStartAnswerWithoutTheNewFieldsStillDecodes() async throws {
         let rig = TestRig()
         rig.server.on("/v1/sessions", [.json(201, "{\"session\":{\"id\":\"one\",\"title\":null,\"endsAt\":null},\"joined\":false}")])
-        let started = try await rig.api.startSession(id: "one", kind: "focus", mode: "flowtime", plannedMinutes: nil, title: "Flow")
+        let started = try await rig.api.startSession(id: "one", kind: "focus", mode: "flowtime", plannedMinutes: nil, title: "Flow", recoveryType: nil)
         XCTAssertEqual(started, StartedSession(id: "one", joined: false))
         XCTAssertNil(started.title)
         XCTAssertNil(started.kind)
@@ -659,7 +659,7 @@ final class LiveAPIBodyTests: XCTestCase {
     func testOpenEndedSessionHasNoMinutes() async throws {
         let rig = TestRig()
         rig.server.on("/v1/sessions", [.json(201, "{\"session\":{\"id\":\"one\",\"plannedMinutes\":null},\"joined\":false}")])
-        let started = try await rig.api.startSession(id: "one", kind: "focus", mode: "flowtime", plannedMinutes: nil, title: "Flow")
+        let started = try await rig.api.startSession(id: "one", kind: "focus", mode: "flowtime", plannedMinutes: nil, title: "Flow", recoveryType: nil)
         XCTAssertNil(started.plannedMinutes)
     }
 
@@ -667,8 +667,8 @@ final class LiveAPIBodyTests: XCTestCase {
         let rig = TestRig()
         let stored = "{\"session\":{\"id\":\"same\",\"plannedMinutes\":25},\"joined\":false}"
         rig.server.on("/v1/sessions", [.json(201, stored), .json(200, stored)])
-        let first = try await rig.api.startSession(id: "same", kind: "focus", mode: "timer", plannedMinutes: 25, title: "Work")
-        let second = try await rig.api.startSession(id: "same", kind: "focus", mode: "timer", plannedMinutes: 25, title: "Work")
+        let first = try await rig.api.startSession(id: "same", kind: "focus", mode: "timer", plannedMinutes: 25, title: "Work", recoveryType: nil)
+        let second = try await rig.api.startSession(id: "same", kind: "focus", mode: "timer", plannedMinutes: 25, title: "Work", recoveryType: nil)
         XCTAssertEqual(first, second)
         let ids = rig.server.calls("/v1/sessions").map { $0.body["id"] as? String ?? "" }
         XCTAssertEqual(ids, ["same", "same"])
@@ -800,16 +800,16 @@ final class AuraErrorTests: XCTestCase {
 final class StubAPITests: XCTestCase {
     func testStartSessionEchoesWithoutShortening() async throws {
         let stub = StubAPI()
-        let timer = try await stub.startSession(id: "chosen", kind: "focus", mode: "timer", plannedMinutes: 25, title: "Work")
+        let timer = try await stub.startSession(id: "chosen", kind: "focus", mode: "timer", plannedMinutes: 25, title: "Work", recoveryType: nil)
         XCTAssertEqual(timer, StartedSession(id: "chosen", joined: false, plannedMinutes: 25))
-        let flow = try await stub.startSession(id: "open", kind: "focus", mode: "flowtime", plannedMinutes: 25, title: "Flow")
+        let flow = try await stub.startSession(id: "open", kind: "focus", mode: "flowtime", plannedMinutes: 25, title: "Flow", recoveryType: nil)
         XCTAssertEqual(flow, StartedSession(id: "open"))
     }
 
     func testJoinsTheSessionRunningElsewhereUntilItIsStopped() async throws {
         let stub = StubAPI(joinsRunningSession: true)
         let before = Date()
-        let joined = try await stub.startSession(id: "mine", kind: "focus", mode: "timer", plannedMinutes: 25, title: "Work")
+        let joined = try await stub.startSession(id: "mine", kind: "focus", mode: "timer", plannedMinutes: 25, title: "Work", recoveryType: nil)
         XCTAssertEqual(joined.id, "running-elsewhere")
         XCTAssertTrue(joined.joined)
         XCTAssertEqual(joined.plannedMinutes, 50)
@@ -823,11 +823,11 @@ final class StubAPITests: XCTestCase {
         // Pausing it, or acting on another id, leaves it running.
         try await stub.sessionAction(id: "running-elsewhere", action: .pause)
         try await stub.sessionAction(id: "mine", action: .stop)
-        let still = try await stub.startSession(id: "mine", kind: "focus", mode: "timer", plannedMinutes: 25, title: "Work")
+        let still = try await stub.startSession(id: "mine", kind: "focus", mode: "timer", plannedMinutes: 25, title: "Work", recoveryType: nil)
         XCTAssertTrue(still.joined)
 
         try await stub.sessionAction(id: "running-elsewhere", action: .stop)
-        let mine = try await stub.startSession(id: "mine", kind: "focus", mode: "timer", plannedMinutes: 25, title: "Work")
+        let mine = try await stub.startSession(id: "mine", kind: "focus", mode: "timer", plannedMinutes: 25, title: "Work", recoveryType: nil)
         XCTAssertEqual(mine, StartedSession(id: "mine", joined: false, plannedMinutes: 25))
     }
 

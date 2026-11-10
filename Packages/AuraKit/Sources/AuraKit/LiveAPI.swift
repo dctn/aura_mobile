@@ -61,6 +61,8 @@ public final class LiveAPI: AuraAPI, Sendable {
     private static let maxPlannedMinutes = 240
     /// Longest range `GET /v1/planner/zones` takes.
     private static let maxZoneDays = 31
+    /// Most pages `GET /v1/sessions` is followed for.
+    private static let maxSessionPages = 5
 
     init(config: AppConfig, tokens: any AccessTokenSource, session: URLSession, sleep: @escaping AuraSleep,
          now: @escaping @Sendable () -> Date) {
@@ -161,14 +163,19 @@ public final class LiveAPI: AuraAPI, Sendable {
 
     // MARK: Sessions
 
-    public func startSession(id: String, kind: String, mode: String, plannedMinutes: Int?, title: String) async throws -> StartedSession {
+    public func startSession(id: String, kind: String, mode: String, plannedMinutes: Int?, title: String,
+                             recoveryType: RecoveryType?) async throws -> StartedSession {
         // The route wants the key present: null for an open-ended run. A timer without minutes is refused there.
         var planned: Any = NSNull()
         if mode != "flowtime", let minutes = plannedMinutes, minutes > 0 {
             planned = min(minutes, LiveAPI.maxPlannedMinutes)
         }
-        let body: [String: Any] = ["id": id, "kind": kind, "mode": mode, "plannedMinutes": planned,
+        var body: [String: Any] = ["id": id, "kind": kind, "mode": mode, "plannedMinutes": planned,
                                    "title": title, "device": "phone"]
+        // Needed on a recovery session (400 recovery_type_required) and refused on any other kind.
+        if kind == "recovery", let type = recoveryType {
+            body["recoveryType"] = type.rawValue
+        }
         let encoded = try LiveAPI.encode(body)
         let data = try await client.send(.session, "POST", "/v1/sessions", body: encoded)
         let started = try LiveAPI.decode(WireStartedSession.self, data)
@@ -309,7 +316,128 @@ public final class LiveAPI: AuraAPI, Sendable {
         return result
     }
 
+    // MARK: Beta day score
+
+    /// Errors come through as Session sends them: 409 `not_focus_session`, 409 `session_not_ended`.
+    public func setDifficulty(sessionId: String, _ difficulty: Difficulty) async throws -> SessionRecord {
+        let path = "/v1/sessions/\(URLEscape.component(sessionId))/difficulty"
+        let body = try LiveAPI.encode(["difficulty": difficulty.rawValue])
+        let data = try await client.send(.session, "PUT", path, body: body)
+        return try LiveAPI.decode(WireSessionResponse.self, data).session.model
+    }
+
+    /// Today's ledger line with source "work" for the session. A recharge after a new rating adds a line, so the
+    /// last one is the current one. No session answer carries this text.
+    public func capacityLine(sessionId: String) async throws -> String? {
+        let query = ["date": DayKey.string(now())]
+        let today = try await get(WireCapacityToday.self, .capacity, "/v1/capacity/today", query: query)
+        let entries = (today.ledger ?? []).compactMap { $0.item }
+        let line = entries.last(where: { $0.source == "work" && $0.sourceId == sessionId })
+        guard let detail = line?.detail, !detail.isEmpty else { return nil }
+        return detail
+    }
+
+    /// At most `maxSessionPages` pages, then newest first by start.
+    public func sessions(from: String, to: String) async throws -> [SessionRecord] {
+        var records: [SessionRecord] = []
+        var cursor: String?
+        var pages = 0
+        repeat {
+            var query = ["from": from, "to": to]
+            if let current = cursor {
+                query["cursor"] = current
+            }
+            let page = try await get(WireSessionPage.self, .session, "/v1/sessions", query: query)
+            records.append(contentsOf: (page.sessions ?? []).compactMap { $0.item?.model })
+            pages += 1
+            if let next = page.cursor, !next.isEmpty {
+                cursor = next
+            } else {
+                cursor = nil
+            }
+        } while cursor != nil && pages < LiveAPI.maxSessionPages
+        return LiveAPI.newestFirst(records)
+    }
+
+    /// Errors come through as Session sends them: 400 `log_too_old`, 400 `log_in_future`, 409 `log_overlaps`.
+    public func logBreak(id: String, type: RecoveryType, startedAt: Date, minutes: Int) async throws -> LoggedBreak {
+        let request = WireLogRequest(id: id, kind: "recovery", recoveryType: type.rawValue,
+                                     startedAt: WireDate.string(startedAt), minutes: minutes, device: "phone")
+        let body = try LiveAPI.encodeValue(request)
+        let data = try await client.send(.session, "POST", "/v1/sessions/log", body: body)
+        let answer = try LiveAPI.decode(WireLoggedSession.self, data)
+        return LoggedBreak(session: answer.session.model, created: answer.created ?? true)
+    }
+
+    public func recoveryOptions(minutes: Int) async throws -> [RecoveryOption] {
+        let query = ["minutes": String(minutes)]
+        let answer = try await get(WireRecoveryOptions.self, .capacity, "/v1/capacity/recovery-options", query: query)
+        return (answer.options ?? []).compactMap { $0.item?.model }
+    }
+
+    /// Items that already have a review are answered, so they are left out.
+    public func reviewInbox(date: String, days: Int) async throws -> [ReviewItem] {
+        let query = ["date": date, "days": String(days)]
+        let inbox = try await get(WireInbox.self, .session, "/v1/reviews/inbox", query: query)
+        let open = (inbox.items ?? []).compactMap { $0.item }.filter { $0.review == nil }
+        return open.compactMap { $0.model }
+    }
+
+    /// The route is a strict object whose nullable keys must all be there, so empty answers go as JSON null. A
+    /// recovery type goes only with a recovery block (400 `recovery_type_not_allowed` on another kind).
+    public func submitReview(_ answer: ReviewAnswer) async throws {
+        let item = answer.item
+        let type: RecoveryType? = item.isRecovery ? answer.recoveryType : nil
+        var body: [String: Any] = ["date": item.date, "happened": answer.happened, "kind": item.kind,
+                                   "start": WireDate.string(item.start), "end": WireDate.string(item.end),
+                                   "intensity": LiveAPI.orNull(answer.intensity?.rawValue),
+                                   "drain": LiveAPI.orNull(answer.drain),
+                                   "recoveryType": LiveAPI.orNull(type?.rawValue)]
+        if !item.title.isEmpty {
+            body["title"] = String(item.title.prefix(500))
+        }
+        let encoded = try LiveAPI.encode(body)
+        _ = try await client.send(.session, "PUT", "/v1/reviews/\(URLEscape.component(item.blockId))", body: encoded)
+    }
+
+    public func sleepSchedule() async throws -> SleepSchedule? {
+        let me = try await get(WireMe.self, .identity, "/v1/me", query: [:])
+        return me.healthGoals?.item?.schedule
+    }
+
+    /// 403 `consent_required` is `AuraError.consentRequired`, as on the other Health Data routes.
+    public func putSleepNight(_ night: SleepNight) async throws -> SleepNightResult {
+        let body = try LiveAPI.encodeValue(WireSleepNightRequest(night))
+        let path = "/v1/sleep/nights/\(URLEscape.component(night.date))"
+        let data = try await client.send(.healthData, "PUT", path, body: body)
+        let answer = try LiveAPI.decode(WireSleepNightResponse.self, data)
+        return SleepNightResult(created: answer.created ?? false, source: answer.night?.item?.source ?? "appleHealth")
+    }
+
+    /// The route refuses one time without the other, so a lone time is left out with its pair.
+    public func morningCheckin(alertness: Int?, fellAsleepAt: String?, wokeAt: String?, at: Date) async throws {
+        var body: [String: Any] = ["id": LiveAPI.newId(), "kind": "morning", "takenAt": WireDate.string(at)]
+        if let level = alertness {
+            body["alertness"] = level
+        }
+        if let asleep = fellAsleepAt, let woke = wokeAt {
+            body["fellAsleepAt"] = asleep
+            body["wokeAt"] = woke
+        }
+        try await post(.healthData, "/v1/checkins", body)
+    }
+
     // MARK: Helpers
+
+    /// Newest start first; a session without a start goes last.
+    static func newestFirst(_ records: [SessionRecord]) -> [SessionRecord] {
+        return records.sorted { ($0.startedAt ?? Date.distantPast) > ($1.startedAt ?? Date.distantPast) }
+    }
+
+    /// The value, or JSON null for a body key that must be present.
+    private static func orNull(_ value: Any?) -> Any {
+        return value ?? NSNull()
+    }
 
     private static func overlaps(_ event: CalendarEvent, from: Date, to: Date) -> Bool {
         if from == to {

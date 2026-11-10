@@ -33,6 +33,18 @@ public final class StubAPI: AuraAPI, @unchecked Sendable {
     private var firstValidCheck: [String: Date] = [:]
     /// Valid checks taken here, added to Attention's `checksCounted`.
     private var countedChecks = 0
+    /// Sessions started here (not joined), by id; ended ones are listed by `sessions(from:to:)`.
+    private var startedSessions: [String: SessionRecord] = [:]
+    /// Ratings by session id, the seeded session's included.
+    private var ratings: [String: Difficulty] = [:]
+    /// Breaks logged afterwards, by id.
+    private var loggedBreaks: [String: SessionRecord] = [:]
+    /// Review answers by block id.
+    private var reviews: [String: ReviewAnswer] = [:]
+    /// Sleep nights by date.
+    private var nights: [String: SleepNight] = [:]
+    /// The last morning check-in, for tests.
+    private var morning: StubMorningCheckin?
 
     /// Nil starts with no work hours set, as a new account does. `joinsRunningSession` starts with a session already
     /// running on the desktop, which the first start joins until it is stopped. `needsQuickCheck` makes Find a time
@@ -143,20 +155,29 @@ public final class StubAPI: AuraAPI, @unchecked Sendable {
     }
 
     /// Grants what was asked, open-ended for flowtime as the backend does. While the other device's session runs,
-    /// answers with that one instead, joined, as the backend's one-running-session rule does.
-    public func startSession(id: String, kind: String, mode: String, plannedMinutes: Int?, title: String) async throws -> StartedSession {
+    /// answers with that one instead, joined, as the backend's one-running-session rule does. A session of its own is
+    /// kept, so `sessions(from:to:)` lists it once it ends.
+    public func startSession(id: String, kind: String, mode: String, plannedMinutes: Int?, title: String,
+                             recoveryType: RecoveryType?) async throws -> StartedSession {
         if otherSessionRunning {
             return StartedSession(id: StubAPI.runningElsewhereId, joined: true, plannedMinutes: 50, title: "Deep work",
                                   kind: "focus", device: "desktop", endsAt: Date().addingTimeInterval(25 * 60))
         }
         let granted: Int? = mode == "flowtime" ? nil : plannedMinutes
+        let type: RecoveryType? = kind == "recovery" ? recoveryType : nil
+        noteStarted(SessionRecord(id: id, kind: kind, title: title, startedAt: Date(), minutes: granted ?? 0,
+                                  recoveryType: type))
         return StartedSession(id: id, plannedMinutes: granted)
     }
 
-    /// Stopping or completing the other device's session lets the next start go through.
+    /// Stopping or completing the other device's session lets the next start go through. Ending one of its own
+    /// records its outcome and end.
     public func sessionAction(id: String, action: SessionAction) async throws {
         if id == StubAPI.runningElsewhereId && (action == .stop || action == .complete) {
             otherSessionRunning = false
+        }
+        if action == .stop || action == .complete {
+            noteEnded(id: id, outcome: action == .complete ? "completed" : "stopped", at: Date())
         }
     }
     public func sessionTrace(id: String) async throws -> SessionTrace { SessionTrace(status: "noData") }
@@ -317,6 +338,276 @@ public final class StubAPI: AuraAPI, @unchecked Sendable {
         defer { lock.unlock() }
         return countedChecks
     }
+
+    // MARK: Beta day score
+
+    /// The seeded focus session: today 09:00-09:50, "Deep work", not rated yet.
+    static let seededId = "s-deep"
+
+    /// Lists the seeded session, the sessions started here that ended, and the logged breaks, newest first.
+    public func sessions(from: String, to: String) async throws -> [SessionRecord] {
+        let inRange = sessionsSoFar(now: Date()).filter { record in
+            guard let start = record.startedAt else { return false }
+            let key = DayKey.string(start)
+            return key >= from && key <= to
+        }
+        return LiveAPI.newestFirst(inRange)
+    }
+
+    /// Stores the rating and the cost it sets. An unknown id is taken as a focus session the stub just made. Another
+    /// kind is refused as Session refuses it (409 `not_focus_session`).
+    public func setDifficulty(sessionId: String, _ difficulty: Difficulty) async throws -> SessionRecord {
+        return try rate(sessionId, difficulty, now: Date())
+    }
+
+    /// Capacity's wording for a rated or unrated focus session; nil for any other.
+    public func capacityLine(sessionId: String) async throws -> String? {
+        return line(for: sessionId)
+    }
+
+    /// 409 `log_overlaps` when the break overlaps a logged one or the seeded session. A resent id is created false.
+    public func logBreak(id: String, type: RecoveryType, startedAt: Date, minutes: Int) async throws -> LoggedBreak {
+        return try storeBreak(id: id, type: type, start: startedAt, minutes: minutes, now: Date())
+    }
+
+    /// Capacity's five recovery breaks with their real lifts, in Capacity's order.
+    public func recoveryOptions(minutes: Int) async throws -> [RecoveryOption] {
+        return StubAPI.recoveryChoices(minutes: minutes)
+    }
+
+    /// A meeting and a recovery block today; an answered one drops out.
+    public func reviewInbox(date: String, days: Int) async throws -> [ReviewItem] {
+        let answered = answeredBlocks()
+        return StubAPI.inboxItems(now: Date()).filter { !answered.contains($0.blockId) }
+    }
+
+    /// Stored as sent. A recovery block without a type is still taken, as the server takes it.
+    public func submitReview(_ answer: ReviewAnswer) async throws {
+        saveReview(answer)
+    }
+
+    public func sleepSchedule() async throws -> SleepSchedule? {
+        return SleepSchedule(bedtime: "23:00", wakeTime: "07:00")
+    }
+
+    /// Stored by date: created the first time, false for the same date again.
+    public func putSleepNight(_ night: SleepNight) async throws -> SleepNightResult {
+        return SleepNightResult(created: saveNight(night), source: "appleHealth")
+    }
+
+    public func morningCheckin(alertness: Int?, fellAsleepAt: String?, wokeAt: String?, at: Date) async throws {
+        saveMorning(StubMorningCheckin(alertness: alertness, fellAsleepAt: fellAsleepAt, wokeAt: wokeAt, at: at))
+    }
+
+    // MARK: Beta day score: what tests read
+
+    /// The last morning check-in sent.
+    var lastMorningCheckin: StubMorningCheckin? {
+        lock.lock()
+        defer { lock.unlock() }
+        return morning
+    }
+
+    /// Review answers by block id.
+    var savedReviews: [String: ReviewAnswer] {
+        lock.lock()
+        defer { lock.unlock() }
+        return reviews
+    }
+
+    /// Sleep nights by date.
+    var savedNights: [String: SleepNight] {
+        lock.lock()
+        defer { lock.unlock() }
+        return nights
+    }
+
+    // MARK: Beta day score: the stub's rules
+
+    /// Capacity's demand for a rating and what 50 minutes at it cost. No rating counts as normal.
+    static func charge(_ difficulty: Difficulty?) -> (demand: Int, cost: Double) {
+        switch difficulty {
+        case .easy?: return (demand: 20, cost: 0.1)
+        case .light?: return (demand: 40, cost: 0.2)
+        case .hard?: return (demand: 80, cost: 0.8)
+        case .veryHard?: return (demand: 100, cost: 1.3)
+        case .normal?, nil: return (demand: 60, cost: 0.5)
+        }
+    }
+
+    /// "50 min of desk work at demand 80: -0.8. You rated it Hard.", without the last sentence when not rated.
+    static func lineText(_ rating: Difficulty?) -> String {
+        let charged = charge(rating)
+        let base = "50 min of desk work at demand \(charged.demand): -\(String(format: "%.1f", charged.cost))."
+        guard let rating = rating else { return base }
+        return "\(base) You rated it \(rating.label)."
+    }
+
+    /// Today 09:00-09:50 on the phone's calendar.
+    static func seededWindow(now: Date) -> (start: Date, end: Date) {
+        let start = DayKey.calendar.date(bySettingHour: 9, minute: 0, second: 0, of: now) ?? now
+        return (start: start, end: start.addingTimeInterval(50 * 60))
+    }
+
+    static func seeded(now: Date, rating: Difficulty?) -> SessionRecord {
+        let window = seededWindow(now: now)
+        return SessionRecord(id: seededId, kind: "focus", title: "Deep work", startedAt: window.start,
+                             endedAt: window.end, minutes: 50, outcome: "completed", difficulty: rating,
+                             capacityCost: charge(rating).cost)
+    }
+
+    /// Capacity's real values (services/capacity/src/service/views.ts), the full lift at 20 minutes.
+    static func recoveryChoices(minutes: Int) -> [RecoveryOption] {
+        let length = min(max(minutes, 0), 20)
+        return [
+            RecoveryOption(id: "nap", title: "Nap", minutes: length, maxPoints: 10, fadesAfterMinutes: 120,
+                           note: "A 10-20 minute nap gives a small lift for about two hours; longer naps can bring grogginess first."),
+            RecoveryOption(id: "walk", title: "Walk", minutes: length, maxPoints: 9, fadesAfterMinutes: 50,
+                           note: "A walk of about 20 minutes just before hard work gives a short lift. It does not pay back sleep debt."),
+            RecoveryOption(id: "rest", title: "Rest", minutes: length, maxPoints: 5, fadesAfterMinutes: 40,
+                           note: "About 20 minutes of rest away from the screen gives a small lift that fades within about 40 minutes."),
+            RecoveryOption(id: "outside", title: "Time outside", minutes: length, maxPoints: 9, fadesAfterMinutes: 50,
+                           note: "About 20 minutes outside gives a short lift, like a walk. It does not pay back sleep debt."),
+            RecoveryOption(id: "social", title: "Talk with someone", minutes: length, maxPoints: 5, fadesAfterMinutes: 40,
+                           note: "About 20 minutes talking with someone gives a small lift that fades within about 40 minutes."),
+        ]
+    }
+
+    static func inboxItems(now: Date) -> [ReviewItem] {
+        let calendar = DayKey.calendar
+        let today = DayKey.string(now, calendar: calendar)
+        func at(_ hour: Int, _ minute: Int) -> Date {
+            return calendar.date(bySettingHour: hour, minute: minute, second: 0, of: now) ?? now
+        }
+        return [
+            ReviewItem(blockId: "b-sync", date: today, title: "Team sync", kind: "meeting", start: at(10, 0),
+                       end: at(10, 30), minutes: 30),
+            ReviewItem(blockId: "e1-review", date: today, title: "10 Min nap", kind: "recovery", start: at(15, 54),
+                       end: at(16, 4), minutes: 10),
+        ]
+    }
+
+    // The helpers below take the lock, as `current` does: only here, outside any async code.
+
+    /// A resent start keeps the record already there.
+    private func noteStarted(_ record: SessionRecord) {
+        lock.lock()
+        defer { lock.unlock() }
+        if startedSessions[record.id] == nil {
+            startedSessions[record.id] = record
+        }
+    }
+
+    /// The first end counts. An open-ended run gets the minutes it ran; a focus session gets its cost.
+    private func noteEnded(id: String, outcome: String, at end: Date) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard var record = startedSessions[id], record.outcome == nil else { return }
+        record.outcome = outcome
+        record.endedAt = end
+        if record.minutes <= 0, let start = record.startedAt {
+            record.minutes = max(1, Int((end.timeIntervalSince(start) / 60).rounded()))
+        }
+        if record.isFocus {
+            record.capacityCost = StubAPI.charge(ratings[id]).cost
+        }
+        startedSessions[id] = record
+    }
+
+    private func sessionsSoFar(now: Date) -> [SessionRecord] {
+        lock.lock()
+        defer { lock.unlock() }
+        let seeded = StubAPI.seeded(now: now, rating: ratings[StubAPI.seededId])
+        let ended: [SessionRecord] = startedSessions.values.filter { $0.outcome != nil }
+        let logged: [SessionRecord] = Array(loggedBreaks.values)
+        return [seeded] + ended + logged
+    }
+
+    private func rate(_ id: String, _ difficulty: Difficulty, now: Date) throws -> SessionRecord {
+        lock.lock()
+        defer { lock.unlock() }
+        if id == StubAPI.seededId {
+            ratings[id] = difficulty
+            return StubAPI.seeded(now: now, rating: difficulty)
+        }
+        let made = SessionRecord(id: id, kind: "focus", startedAt: now.addingTimeInterval(-50 * 60), endedAt: now,
+                                 minutes: 50, outcome: "completed")
+        var record = startedSessions[id] ?? made
+        guard record.isFocus else {
+            throw AuraError.server(code: "not_focus_session", message: "Only a focus session can be rated.", status: 409)
+        }
+        ratings[id] = difficulty
+        record.difficulty = difficulty
+        record.capacityCost = StubAPI.charge(difficulty).cost
+        startedSessions[id] = record
+        return record
+    }
+
+    private func line(for id: String) -> String? {
+        lock.lock()
+        defer { lock.unlock() }
+        if id != StubAPI.seededId {
+            guard let record = startedSessions[id], record.isFocus, record.outcome != nil else { return nil }
+        }
+        return StubAPI.lineText(ratings[id])
+    }
+
+    private func storeBreak(id: String, type: RecoveryType, start: Date, minutes: Int, now: Date) throws -> LoggedBreak {
+        lock.lock()
+        defer { lock.unlock() }
+        if let saved = loggedBreaks[id] {
+            return LoggedBreak(session: saved, created: false)
+        }
+        let end = start.addingTimeInterval(TimeInterval(minutes) * 60)
+        var taken: [(start: Date, end: Date)] = [StubAPI.seededWindow(now: now)]
+        for record in loggedBreaks.values {
+            if let from = record.startedAt, let to = record.endedAt {
+                taken.append((start: from, end: to))
+            }
+        }
+        if taken.contains(where: { start < $0.end && end > $0.start }) {
+            throw AuraError.server(code: "log_overlaps", message: "This break overlaps another session.", status: 409)
+        }
+        let record = SessionRecord(id: id, kind: "recovery", title: type.label, startedAt: start, endedAt: end,
+                                   minutes: minutes, outcome: "logged", recoveryType: type)
+        loggedBreaks[id] = record
+        return LoggedBreak(session: record, created: true)
+    }
+
+    private func answeredBlocks() -> Set<String> {
+        lock.lock()
+        defer { lock.unlock() }
+        return Set(reviews.keys)
+    }
+
+    private func saveReview(_ answer: ReviewAnswer) {
+        lock.lock()
+        defer { lock.unlock() }
+        reviews[answer.item.blockId] = answer
+    }
+
+    /// True when no night was stored for the date before.
+    private func saveNight(_ night: SleepNight) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        let created = nights[night.date] == nil
+        nights[night.date] = night
+        return created
+    }
+
+    private func saveMorning(_ checkin: StubMorningCheckin) {
+        lock.lock()
+        defer { lock.unlock() }
+        morning = checkin
+    }
+}
+
+/// One morning check-in as the stub got it.
+struct StubMorningCheckin: Sendable, Equatable {
+    let alertness: Int?
+    let fellAsleepAt: String?
+    let wokeAt: String?
+    let at: Date
 }
 
 /// Health Data's PVT-B scoring (services/health-data/src/service/attention.ts), for the stub only. The real app shows
