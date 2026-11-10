@@ -47,6 +47,11 @@ private struct RunStage: View {
     private var isDone: Bool { run.finishedAt != nil }
     private var isNight: Bool { run.mode.night == true }
 
+    /// A focus run's Done sheet also asks how hard it was and shows the capacity line, so it needs more room.
+    private var doneDetent: PresentationDetent {
+        return run.mode.kind == "focus" ? .height(520) : .height(330)
+    }
+
     private var frameInterval: Double {
         if run.mode.run == .breathe, !Self.isUITesting { return 1.0 / 30.0 }
         return 0.25
@@ -73,7 +78,7 @@ private struct RunStage: View {
         }
         .sheet(isPresented: $doneShown, onDismiss: { model.run.close() }) {
             RunDoneSheet(run: run)
-                .presentationDetents([.height(330)])
+                .presentationDetents([doneDetent])
                 .presentationDragIndicator(.visible)
                 .presentationBackground(RunLook.sheet)
         }
@@ -487,7 +492,8 @@ private struct RunCountdownView: View {
 
 // MARK: Done
 
-/// Frame 12. The stress change comes from the session trace, and is only shown when there is one.
+/// Frame 12. The stress change comes from the session trace, and is only shown when there is one. A saved focus run
+/// also asks how hard it was; no pick is a skip, and Done still closes.
 private struct RunDoneSheet: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
@@ -495,8 +501,23 @@ private struct RunDoneSheet: View {
 
     @State private var isLoaded = false
     @State private var trace: SessionTrace? = nil
+    @State private var difficulty: Difficulty? = nil
+    /// The Capacity ledger's line for the session ("50 min of desk work at demand 80: -0.8. You rated it Hard.").
+    @State private var capacityLine: String? = nil
+    @State private var rateError: String? = nil
+    /// Counts the picks, so only the latest one's answer is shown.
+    @State private var rateAttempt = 0
 
     private var accent: Color { run.mode.runAccent }
+
+    /// The run as it is now: the session id and the saved flags arrive after the sheet opens.
+    private var current: ActiveRun { model.run.active ?? run }
+
+    /// The session a rating goes to: a focus run's own, once `.complete` reached the backend. Nil hides the question.
+    private var ratableSessionId: String? {
+        guard isLoaded, run.mode.kind == "focus", current.completeDelivered, !current.workLimitReached else { return nil }
+        return current.sessionId
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -519,6 +540,7 @@ private struct RunDoneSheet: View {
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 44)
                 .padding(.top, 6)
+            ratingSection
             Spacer(minLength: 12)
             doneButton
         }
@@ -526,6 +548,73 @@ private struct RunDoneSheet: View {
         .task {
             trace = await model.run.loadTrace()
             isLoaded = true
+            await loadCapacityLine()
+        }
+    }
+
+    @ViewBuilder
+    private var ratingSection: some View {
+        if let sessionId = ratableSessionId {
+            VStack(spacing: 10) {
+                Text("How hard was this for you?")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(RunLook.ink)
+                DifficultyPicker(selected: difficulty) { picked in
+                    rate(picked, sessionId: sessionId)
+                }
+                .padding(.horizontal, 16)
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("run-difficulty")
+                if let capacityLine {
+                    Text(capacityLine)
+                        .font(.system(size: 15))
+                        .foregroundStyle(RunLook.note)
+                        .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.horizontal, 30)
+                        .accessibilityIdentifier("run-capacity-line")
+                }
+                if let rateError {
+                    Text(rateError)
+                        .font(.system(size: 15))
+                        .foregroundStyle(AuraColor.red)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 30)
+                }
+            }
+            .padding(.top, 20)
+        }
+    }
+
+    /// The line before any rating, when the session is already charged. Nothing shows when it isn't.
+    private func loadCapacityLine() async {
+        guard let sessionId = ratableSessionId else { return }
+        do {
+            let line = try await model.api.capacityLine(sessionId: sessionId)
+            if rateAttempt == 0 { capacityLine = line }
+        } catch {
+            model.note(error)
+        }
+    }
+
+    /// Sends the rating, then reads the new line. Picking again sends again: the new answer replaces the cost.
+    private func rate(_ picked: Difficulty, sessionId: String) {
+        difficulty = picked
+        rateError = nil
+        rateAttempt += 1
+        let attempt = rateAttempt
+        let api = model.api
+        Task {
+            do {
+                _ = try await api.setDifficulty(sessionId: sessionId, picked)
+                let line: String? = try await api.capacityLine(sessionId: sessionId)
+                guard attempt == rateAttempt else { return }
+                capacityLine = line ?? "You rated it \(picked.label)."
+            } catch {
+                guard attempt == rateAttempt else { return }
+                rateError = "Couldn't save your rating. Try again."
+                model.note(error)
+            }
         }
     }
 
@@ -556,7 +645,6 @@ private struct RunDoneSheet: View {
     }
 
     private var saveLine: String {
-        let current = model.run.active ?? run
         if current.workLimitReached { return "Not saved: you've reached today's work limit." }
         return current.isSaved ? "Saved to your sessions." : "Not saved: Aura couldn't be reached."
     }

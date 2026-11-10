@@ -1,9 +1,12 @@
 import AuraKit
 import SwiftUI
 
-/// Today: the mood check-in and today's open alerts. The Figma's second Mood card is filler.
+/// Today: the morning check-in until it's sent, the mood check-in and today's open alerts. The Figma's second Mood
+/// card is filler.
 struct HomeTodaySection: View {
     @Environment(AppModel.self) private var model
+    /// The morning check-in was sent from this card, so it stays to say thanks.
+    @State private var checkinSentHere = false
     @State private var alerts: [AlertItem] = []
     /// Skipped or started here. A reload can't bring them back while the backend catches up.
     @State private var handled: Set<String> = []
@@ -28,6 +31,9 @@ struct HomeTodaySection: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             SectionTitle("Today")
+            if checkinSentHere || !model.morningCheckinSent {
+                MorningCheckinCard(onSent: { checkinSentHere = true })
+            }
             HomeMoodCard()
             ForEach(openAlerts) { alert in
                 alertCard(alert)

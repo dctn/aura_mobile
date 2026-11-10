@@ -13,6 +13,10 @@ struct RecoveryView: View {
     @Environment(AppModel.self) private var model
     @State private var query = ""
     @State private var pageWidth: CGFloat = 402
+    @State private var takingBreak = false
+    @State private var loggingBreak = false
+    /// The break the sheet asked for. It starts once the sheet has gone, since the run screen can't cover a sheet.
+    @State private var pendingBreak: RecoveryBreakChoice? = nil
 
     /// Figma's order, with Focus added first.
     private static let shelves: [Shelf] = [.focus, .sleep, .movement, .breathe, .meditate, .rest, .mind, .outside, .people, .fuel]
@@ -35,6 +39,7 @@ struct RecoveryView: View {
                 if isSearching {
                     RecoverySearchResults(modes: model.modes.filter { $0.matches(search: query) }, tileWidth: tileWidth)
                 } else {
+                    breakButtons
                     nowSection
                     ForEach(Self.shelves) { shelf in
                         RecoveryShelf(shelf: shelf, modes: model.modes.filter { $0.shelf == shelf }, tileWidth: tileWidth)
@@ -47,6 +52,12 @@ struct RecoveryView: View {
         .background(AuraColor.background)
         .onGeometryChange(for: CGFloat.self, of: { $0.size.width }, action: { pageWidth = $0 })
         .toolbar { toolbarItems }
+        .sheet(isPresented: $takingBreak, onDismiss: startPendingBreak) {
+            RecoveryBreakSheet { choice in pendingBreak = choice }
+        }
+        .sheet(isPresented: $loggingBreak) {
+            LogBreakSheet()
+        }
         .navigationDestination(for: RecoveryRoute.self) { route in
             if let mode = model.mode(id: route.modeId) {
                 ModeDetailView(mode: mode, headline: route.headline)
@@ -72,6 +83,31 @@ struct RecoveryView: View {
         }
     }
 
+    /// "Take a recovery break" and "Add a break I took", between search and Now.
+    private var breakButtons: some View {
+        HStack(spacing: 10) {
+            RecoveryBreakButton(title: "Take a recovery break", symbol: "leaf.fill") {
+                takingBreak = true
+            }
+            .accessibilityIdentifier("recovery-take-break")
+            RecoveryBreakButton(title: "Add a break I took", symbol: "plus") {
+                loggingBreak = true
+            }
+            .accessibilityIdentifier("recovery-log-break")
+        }
+        .padding(.horizontal, 22)
+        .padding(.top, 14)
+    }
+
+    /// Runs the Recovery break mode under the picked type's name.
+    private func startPendingBreak() {
+        guard let choice = pendingBreak else { return }
+        pendingBreak = nil
+        guard var mode = model.mode(id: "recovery-break") else { return }
+        if !choice.note.isEmpty { mode.note = choice.note }
+        model.run.start(mode: mode, minutes: choice.minutes, title: choice.title, recoveryType: choice.type)
+    }
+
     private var nowSection: some View {
         let hour = Calendar.current.component(.hour, from: Date())
         let cards = Mode.nowCards(from: model.modes, hour: hour, limit: 4)
@@ -92,6 +128,35 @@ struct RecoveryView: View {
         }
         .padding(.top, 19)
         .padding(.bottom, 13)
+    }
+}
+
+/// One of the two break pills: an icon and a title that may take two lines.
+private struct RecoveryBreakButton: View {
+    let title: String
+    let symbol: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                Image(systemName: symbol)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(AuraColor.blue)
+                Text(title)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(Color.black)
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.85)
+                    .multilineTextAlignment(.leading)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 16)
+            .frame(maxWidth: .infinity, minHeight: 50)
+            .background(AuraColor.card, in: Capsule())
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
     }
 }
 

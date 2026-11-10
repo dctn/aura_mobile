@@ -74,18 +74,25 @@ final class RunWalkTests: WalkTestCase {
         save("32-winddown")
     }
 
-    /// The only run that reaches its end: `--uitesting-short-run` makes it last 3 seconds.
+    /// The only run that reaches its end: `--uitesting-short-run` makes it last 3 seconds. A focus timer, so the Done
+    /// sheet asks how hard it was and shows the capacity line for the rating.
     func testDoneSheet() {
         app.terminate()
         app.launchArguments = ["--uitesting", "--uitesting-short-run"]
         app.launch()
-        startMode("box", search: "box")
+        startMode("timer", search: "timer")
         let done = element("run-done")
-        XCTAssertTrue(done.waitForExistence(timeout: 20), "No Done sheet")
+        XCTAssertTrue(done.waitForExistence(timeout: 25), "No Done sheet")
         // The summary adds its saved line once the backend has answered.
         let saved = app.staticTexts.containing(NSPredicate(format: "label CONTAINS 'Saved'")).firstMatch
         XCTAssertTrue(saved.waitForExistence(timeout: 10), "The Done sheet never said Saved")
-        save("33-done")
+        XCTAssertTrue(element("run-difficulty").waitForExistence(timeout: 10), "No difficulty question")
+        tap(element("difficulty-hard"), "Hard")
+        let line = app.staticTexts.matching(identifier: "run-capacity-line").firstMatch
+        let rated = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label CONTAINS 'You rated it Hard.'"),
+                                              object: line)
+        XCTAssertEqual(XCTWaiter().wait(for: [rated], timeout: 10), .completed, "The capacity line never showed the rating")
+        save("33-run-done")
         done.tap()
         XCTAssertTrue(element("mode-start").waitForExistence(timeout: 10), "Done didn't go back to the page")
     }

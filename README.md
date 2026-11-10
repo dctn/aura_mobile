@@ -48,6 +48,8 @@ recovery rhythm: zones are kept free, a 10-min `recovery` block (green) comes af
 into "Title (1/2)" and "Title (2/2)", and `warnings` counts the person's own blocks that sat on recovery time. Tasks
 that didn't fit are listed with the Planner's reason. For today the Planner wants a valid Quick check first (409
 `quick_check_required`): the sheet offers **Do the Quick check**, **Plan anyway** (retry with `skipCheck`) or Not now.
+A row of day chips (Today, Tomorrow, then the next five days) picks which day to plan; each pick runs a fresh preview.
+A later day has no Quick check gate, so its plan comes straight away.
 
 ## Quick check
 Opened from Find a time. Dark full screen, after the concepts design: an intro, then the reaction test (the 3-minute
@@ -58,3 +60,19 @@ it ran 170-200 s with 30+ answers and at most 20% early taps. A valid check lets
 app mid-reaction starts the test again. The rule-switch part (the design's step 3) and the heart recording aren't
 built. UI tests use `--uitesting-needs-check` and `--uitesting-short-check` (an 8-second run that the stub accepts).
 
+
+## Beta day score
+Beta has no band, so the phone supplies what the day score needs (backend `feature/beta-day-score`, dev only).
+- **How hard was it?** A focus session's Done sheet asks Easy, Light, Normal, Hard or Very hard. The answer goes by
+  `PUT /v1/sessions/{id}/difficulty` (the end action has already gone), and the sheet shows Capacity's ledger line for
+  the session from `GET /v1/capacity/today` ("... You rated it Hard."). Home → Work lists today's and yesterday's
+  sessions, where a rating can be given or changed later.
+- **Recovery breaks.** Recovery → "Take a recovery break" picks Walk, Nap, Rest (no screen), Time outside or Talk with
+  someone, with the lift from `GET /v1/capacity/recovery-options` ("+9, fades within 50 min"), and runs a timer that
+  starts a `recovery` session with that `recoveryType`. Every recovery-kind mode now sends a `recoveryType` too.
+  "Add a break I took" sends `POST /v1/sessions/log` (today or yesterday, 10-240 min).
+- **Review inbox.** Home → Work shows the blocks to review; a recovery block asks the kind of break.
+- **Sleep.** With Apple Health connected (read-only, sleep analysis), last night's asleep samples go to
+  `PUT /v1/sleep/nights/{date}` once each morning; in-bed time alone is no night. Otherwise the morning check-in on Home
+  also asks when you fell asleep and woke up. UI flags: `--uitesting-checkin` shows the check-in,
+  `--uitesting-health-night` gives the stub Apple Health a night.

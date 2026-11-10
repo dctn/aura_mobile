@@ -30,6 +30,16 @@ struct ActiveRun: Codable, Equatable {
     /// The session that was already running when this run asked for one, maybe on another device. Set until the
     /// person picks in the alert; meanwhile no action goes to either session.
     var otherSession: OtherSession?
+    /// The recovery break's type ("walk", "nap", ...) when the person picked one, sent instead of the mode's own.
+    /// Kept as text so a saved run still decodes if the types change.
+    var recoveryTypeRaw: String?
+
+    /// The type a recovery session sends: the one picked, else the mode's. Nil for every other kind.
+    var recoveryType: RecoveryType? {
+        guard mode.kind == "recovery" else { return nil }
+        if let raw = recoveryTypeRaw, let picked = RecoveryType(rawValue: raw) { return picked }
+        return mode.recoveryType
+    }
 
     /// The Done sheet only says "Saved" when this is true.
     var isSaved: Bool {
@@ -104,8 +114,9 @@ final class RunController {
 
     // MARK: Starting and stopping
 
-    /// One run at a time: while one is going, this brings it back instead.
-    func start(mode: Mode, minutes: Int, title: String? = nil) {
+    /// One run at a time: while one is going, this brings it back instead. `recoveryType` only counts for a recovery
+    /// mode; without it the mode's own type is sent.
+    func start(mode: Mode, minutes: Int, title: String? = nil, recoveryType: RecoveryType? = nil) {
         guard mode.run != .plan else { return }
         if active != nil {
             isExpanded = true
@@ -114,7 +125,9 @@ final class RunController {
         var engine = RunEngine(minutes: minutes, hasCountdown: mode.hasCountdown, now: Date())
         if isShortRun, !engine.isOpenEnded { engine.duration = 3 }
         let typed = title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        active = ActiveRun(mode: mode, minutes: minutes, title: typed.isEmpty ? mode.name : typed, engine: engine)
+        var run = ActiveRun(mode: mode, minutes: minutes, title: typed.isEmpty ? mode.name : typed, engine: engine)
+        run.recoveryTypeRaw = recoveryType?.rawValue
+        active = run
         isExpanded = true
         save()
         askThenScheduleEnd()
@@ -320,6 +333,7 @@ final class RunController {
         let id = run.startId
         let mode = run.mode
         let title = run.title
+        let recoveryType: RecoveryType? = run.recoveryType
         let startsAt = run.engine.startsAt
         let planned: Int? = run.engine.isOpenEnded ? nil : run.minutes
         let previous = lastAction
@@ -327,7 +341,8 @@ final class RunController {
         sessionStart = Task<String?, Never> { [weak self] in
             _ = await previous?.value
             do {
-                let session = try await api.startSession(id: id, kind: mode.kind, mode: mode.sessionMode, plannedMinutes: planned, title: title)
+                let session = try await api.startSession(id: id, kind: mode.kind, mode: mode.sessionMode, plannedMinutes: planned,
+                                                         title: title, recoveryType: recoveryType)
                 self?.sessionStarted(session, startsAt: startsAt)
                 // A joined session belongs to another run, so this run's actions mustn't reach it.
                 return session.joined ? nil : session.id

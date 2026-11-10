@@ -32,6 +32,13 @@ targets:
         UIUserInterfaceStyle: Light
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
         ITSAppUsesNonExemptEncryption: false
+        NSHealthShareUsageDescription: "Aura reads your sleep from Apple Health to set your day score."
+    # Reads sleep from Apple Health. CI builds unsigned (CODE_SIGNING_ALLOWED=NO), so this only matters on a phone.
+    entitlements:
+      path: App/Aura.entitlements
+      properties:
+        com.apple.developer.healthkit: true
+        com.apple.developer.healthkit.access: []
   AuraClarusUITests:
     type: bundle.ui-testing
     platform: iOS

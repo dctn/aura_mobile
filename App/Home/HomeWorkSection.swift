@@ -1,7 +1,8 @@
 import AuraKit
 import SwiftUI
 
-/// Work: two rows that open read-only lists. The Figma has no frame for those lists.
+/// Work: two rows that open read-only lists, then yesterday's and today's sessions and the blocks to review.
+/// The Figma has no frame for those lists.
 struct HomeWorkSection: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
@@ -21,6 +22,9 @@ struct HomeWorkSection: View {
             }
             .buttonStyle(.plain)
             .accessibilityIdentifier("home-work-task")
+
+            SessionsList()
+            ReviewInbox()
         }
     }
 }

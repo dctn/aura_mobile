@@ -22,9 +22,13 @@ struct RootView: View {
         .task { await model.restore() }
         .onChange(of: model.authState) { _, _ in
             model.sendTimeZoneIfNeeded()
+            Task { await model.syncSleepIfNeeded() }
         }
+        // Last night is sent the first time the app is opened after waking.
         .onChange(of: scenePhase) { _, phase in
-            if phase == .active { model.reloadIfNewDay() }
+            guard phase == .active else { return }
+            model.reloadIfNewDay()
+            Task { await model.syncSleepIfNeeded() }
         }
     }
 }
