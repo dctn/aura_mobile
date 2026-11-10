@@ -9,12 +9,12 @@ final class RunWalkTests: WalkTestCase {
         XCTAssertTrue(card.waitForExistence(timeout: 20), "No Now cards")
         save("20-recovery-top")
 
-        app.swipeUp()
+        dragPage(fromY: 0.7, toY: 0.3, velocity: .default)
         save("21-recovery-mid")
-        app.swipeDown()
+        dragPage(fromY: 0.3, toY: 0.8, velocity: .default)
 
-        tap(card, "first Now card")
-        XCTAssertTrue(element("mode-start").waitForExistence(timeout: 10), "No Start on the Now card's page")
+        // The page may still be gliding back after the drag, and a tap then only stops it, so tap until it opens.
+        open(card, until: element("mode-start"), "No Start on the Now card's page")
         save("22-detail-now")
         goBack()
 
