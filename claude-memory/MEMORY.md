@@ -23,3 +23,9 @@
 - [Swift reference repo](aura-ios-reference-repo.md) — aura_IOS_app is one macOS app repo with 4 worktrees, no iOS target
 - [Deep focus music](deep-focus-music.md) — 16 Hz AM generator 6.5.1, A/B tester, open items
 - [Old eu-north-1 backend](aws-eu-north-1-snapshot.md) — still running for Mac/Windows; aws_eu-north-1 is its snapshot worktree
+
+## This PC and current work
+- [This PC paths](this-pc-paths.md) — the other machine's D:\intellj\aura is C:\mine\aura here; tools; no AWS CLI on this PC
+- [Day zones feature](day-zones-feature.md) — website live; backend pushed on aws_docs feature/day-zones, deploy from the other machine
+- [GitHub attack Nov 2026](github-attack-nov-2026.md) — 10-12 Nov secret-stealing "ci: refresh build cache/restore" commits on aws backend, window app, Desktop app; never merge or run them
+- [Apple Health Data service](apple-health-data-service.md) — 11th service, live on dev 2026-11-13; iOS sending and Zoho tab still to do
