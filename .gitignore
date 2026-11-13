@@ -6,7 +6,7 @@ App/Info.plist
 DerivedData/
 build/
 *.xcresult
-screenshots/
+/screenshots/
 xcuserdata/
 .DS_Store
 .swiftpm/
