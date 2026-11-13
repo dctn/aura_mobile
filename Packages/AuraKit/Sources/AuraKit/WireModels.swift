@@ -120,11 +120,23 @@ struct WireEvent: Decodable {
     let start: String?
     let end: String?
     let kind: String?
+    let notes: String?
+    let location: String?
+    let source: String?
+    let seriesId: String?
+    let version: Int?
 
     var model: CalendarEvent? {
         guard let startDate = WireDate.parse(start), let endDate = WireDate.parse(end) else { return nil }
-        return CalendarEvent(id: id, title: title ?? "", start: startDate, end: endDate, kind: kind ?? "focus")
+        return CalendarEvent(id: id, title: title ?? "", start: startDate, end: endDate, kind: kind ?? "focus",
+                             notes: notes, location: location, source: source ?? "app", seriesId: seriesId,
+                             version: version)
     }
+}
+
+/// GET /v1/calendar/events/{id}: `{"event": ...}`.
+struct WireEventAnswer: Decodable {
+    let event: WireEvent
 }
 
 struct WireEventPage: CursorPage {

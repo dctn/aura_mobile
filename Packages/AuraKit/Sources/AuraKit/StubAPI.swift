@@ -45,6 +45,10 @@ public final class StubAPI: AuraAPI, @unchecked Sendable {
     private var nights: [String: SleepNight] = [:]
     /// The last morning check-in, for tests.
     private var morning: StubMorningCheckin?
+    /// Events made or changed in the editor, by id; they replace a fixed or planned event with the same id.
+    private var editedEvents: [String: CalendarEvent] = [:]
+    /// Ids deleted in the editor.
+    private var deletedEvents: Set<String> = []
 
     /// Nil starts with no work hours set, as a new account does. `joinsRunningSession` starts with a session already
     /// running on the desktop, which the first start joins until it is stopped. `needsQuickCheck` makes Find a time
@@ -96,7 +100,18 @@ public final class StubAPI: AuraAPI, @unchecked Sendable {
             CalendarEvent(id: block.blockId ?? UUID().uuidString, title: block.title(taskTitle: StubAPI.taskTitle(block.taskId)),
                           start: block.start, end: block.end, kind: block.kind)
         }
-        return fixed + planned
+        let edits = eventEdits
+        return StubAPI.applyEdits(fixed + planned, edited: edits.edited, deleted: edits.deleted, from: from, to: to)
+    }
+
+    /// The editor's changes on top of the stub's events: deleted ones go, changed ones replace theirs, new ones that
+    /// overlap [from, to) are added. Soonest first.
+    static func applyEdits(_ base: [CalendarEvent], edited: [String: CalendarEvent], deleted: Set<String>,
+                           from: Date, to: Date) -> [CalendarEvent] {
+        var result = base.filter { !deleted.contains($0.id) }.map { edited[$0.id] ?? $0 }
+        let known = Set(base.map { $0.id })
+        result += edited.values.filter { !known.contains($0.id) && !deleted.contains($0.id) && $0.start < to && $0.end > from }
+        return result.sorted { $0.start < $1.start }
     }
 
     public func tasks() async throws -> [TaskItem] {
@@ -183,6 +198,67 @@ public final class StubAPI: AuraAPI, @unchecked Sendable {
     public func sessionTrace(id: String) async throws -> SessionTrace { SessionTrace(status: "noData") }
     public func addEvent(title: String, start: Date, end: Date, kind: String) async throws {}
     public func addTask(title: String, plannedFor: String) async throws {}
+
+    // MARK: Event editor
+
+    /// Same locking as `current`: only here, outside any async code.
+    private var eventEdits: (edited: [String: CalendarEvent], deleted: Set<String>) {
+        lock.lock()
+        defer { lock.unlock() }
+        return (editedEvents, deletedEvents)
+    }
+
+    private func keepEvent(_ event: CalendarEvent) {
+        lock.lock()
+        defer { lock.unlock() }
+        editedEvents[event.id] = event
+    }
+
+    private func forgetEvent(_ id: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        deletedEvents.insert(id)
+        editedEvents[id] = nil
+    }
+
+    private static func trimmed(_ text: String) -> String? {
+        let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return value.isEmpty ? nil : value
+    }
+
+    public func createEvent(_ draft: EventDraft) async throws {
+        if let problem = draft.problem {
+            throw AuraError.server(code: "validation_failed", message: problem, status: 400)
+        }
+        let event = CalendarEvent(id: UUID().uuidString.lowercased(), title: StubAPI.trimmed(draft.title) ?? "",
+                                  start: draft.start, end: draft.end, kind: draft.kind,
+                                  notes: StubAPI.trimmed(draft.notes), location: StubAPI.trimmed(draft.location),
+                                  version: 1)
+        keepEvent(event)
+    }
+
+    /// Applies what the draft changed; an Apple event only takes a new kind, as the Calendar service allows.
+    public func updateEvent(_ event: CalendarEvent, to draft: EventDraft) async throws {
+        if draft.changes(from: event).isEmpty { return }
+        var changed = event
+        changed.kind = draft.kind
+        if !event.isFromApple {
+            if let problem = draft.problem {
+                throw AuraError.server(code: "validation_failed", message: problem, status: 400)
+            }
+            changed.title = StubAPI.trimmed(draft.title) ?? ""
+            changed.start = draft.start
+            changed.end = draft.end
+            changed.location = StubAPI.trimmed(draft.location)
+            changed.notes = StubAPI.trimmed(draft.notes)
+        }
+        changed.version = (event.version ?? 1) + 1
+        keepEvent(changed)
+    }
+
+    public func deleteEvent(id: String) async throws {
+        forgetEvent(id)
+    }
     public func grantHealthConsent() async throws {}
     public func setTimeZoneIfMissing(_ identifier: String) async throws {}
 

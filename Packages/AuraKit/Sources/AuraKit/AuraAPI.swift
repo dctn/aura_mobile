@@ -28,6 +28,16 @@ public protocol AuraAPI: Sendable {
 
     // Things a mode adds
     func addEvent(title: String, start: Date, end: Date, kind: String) async throws
+
+    // Event editor
+    /// A new event from the editor (POST /v1/calendar/events). 409 `work_limit_reached` when a focus block would pass
+    /// the day's work limit.
+    func createEvent(_ draft: EventDraft) async throws
+    /// Saves what the editor changed (PATCH /v1/calendar/events/{id} with If-Match). Nothing is sent when nothing
+    /// changed. 412 when the event changed elsewhere since it was read; on an occurrence it detaches that day.
+    func updateEvent(_ event: CalendarEvent, to draft: EventDraft) async throws
+    /// DELETE /v1/calendar/events/{id}. On an occurrence only that day goes. 409 on an Apple event.
+    func deleteEvent(id: String) async throws
     /// A task meant for a day (a `DayKey`), with no time of its own.
     func addTask(title: String, plannedFor: String) async throws
 

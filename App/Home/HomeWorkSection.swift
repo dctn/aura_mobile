@@ -1,7 +1,8 @@
 import AuraKit
 import SwiftUI
 
-/// Work: two rows that open read-only lists, then yesterday's and today's sessions and the blocks to review.
+/// Work: two rows that open the Calendar (events open in the editor) and the read-only task list, then yesterday's and
+/// today's sessions and the blocks to review.
 /// The Figma has no frame for those lists.
 struct HomeWorkSection: View {
     var body: some View {
@@ -29,7 +30,8 @@ struct HomeWorkSection: View {
     }
 }
 
-/// Today's zones, Find a time and today's events, the work hours, then the events of the next 6 days by day.
+/// Today's zones, Find a time and New event, today's events, the work hours, then the events of the next 6 days by
+/// day. Tapping an event opens it in the editor.
 private struct HomeCalendarList: View {
     private struct Day: Identifiable {
         let id: Date
@@ -48,7 +50,14 @@ private struct HomeCalendarList: View {
     @State private var scheduleLoaded = false
     @State private var editingHours = false
     @State private var findingTime = false
+    /// The editor's sheet: a new event, or the one tapped.
+    @State private var editing: EditorTarget?
     @State private var retry = 0
+
+    private struct EditorTarget: Identifiable {
+        let event: CalendarEvent?
+        var id: String { event?.id ?? "new" }
+    }
 
     private var loadKey: String { "\(model.dataVersion)-\(retry)" }
 
@@ -88,16 +97,25 @@ private struct HomeCalendarList: View {
                 model.dataVersion += 1
             }
         }
+        .sheet(item: $editing) { target in
+            EventEditor(event: target.event)
+        }
     }
 
     @ViewBuilder
     private var content: some View {
         zoneLine
         if events != nil || failed {
-            PillButton(title: "Find a time", fills: true) {
-                findingTime = true
+            HStack(spacing: 10) {
+                PillButton(title: "Find a time", fills: true) {
+                    findingTime = true
+                }
+                .accessibilityIdentifier("calendar-find-time")
+                PillButton(title: "New event", style: .secondary, fills: true) {
+                    editing = EditorTarget(event: nil)
+                }
+                .accessibilityIdentifier("calendar-new-event")
             }
-            .accessibilityIdentifier("calendar-find-time")
         }
         if let readyDay {
             ZoneCardSection(title: "Today", padding: 14) {
@@ -120,6 +138,10 @@ private struct HomeCalendarList: View {
         }
         if readyDay != nil {
             eventsState
+            // The hour grid can't be tapped, so today's events are listed too, to open them in the editor.
+            if let todayGroup {
+                dayGroup(todayGroup)
+            }
         }
         ForEach(laterDays) { day in
             dayGroup(day)
@@ -161,7 +183,22 @@ private struct HomeCalendarList: View {
             AuraCard(padding: 20) {
                 VStack(alignment: .leading, spacing: 14) {
                     ForEach(day.events) { event in
-                        HomeEventRow(event: event)
+                        Button {
+                            editing = EditorTarget(event: event)
+                        } label: {
+                            HStack {
+                                HomeEventRow(event: event)
+                                Spacer(minLength: 8)
+                                Image(systemName: "chevron.right")
+                                    .font(.system(size: 13, weight: .semibold))
+                                    .foregroundStyle(AuraColor.footnote)
+                                    .accessibilityHidden(true)
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityHint("Opens the event to change it")
+                        .accessibilityIdentifier("calendar-event-\(event.id)")
                     }
                 }
             }

@@ -60,8 +60,113 @@ public struct CalendarEvent: Identifiable, Sendable, Equatable {
     public var start: Date
     public var end: Date
     public var kind: String
-    public init(id: String, title: String, start: Date, end: Date, kind: String = "focus") {
+    public var notes: String?
+    public var location: String?
+    /// "app", "apple" (read from Apple Calendar on the Mac) or "planner" (placed by Find a time).
+    public var source: String
+    /// The repeating event this occurrence belongs to, or nil for a one-off.
+    public var seriesId: String?
+    /// The version to send as If-Match when changing it. Nil when the answer had none.
+    public var version: Int?
+
+    public init(id: String, title: String, start: Date, end: Date, kind: String = "focus", notes: String? = nil,
+                location: String? = nil, source: String = "app", seriesId: String? = nil, version: Int? = nil) {
         self.id = id; self.title = title; self.start = start; self.end = end; self.kind = kind
+        self.notes = notes; self.location = location; self.source = source; self.seriesId = seriesId
+        self.version = version
+    }
+
+    /// Apple Calendar owns it: only its kind may change here, and it can't be deleted here (409 apple_event_read_only).
+    public var isFromApple: Bool { source == "apple" }
+
+    /// One day of a repeating event: a change or delete applies to that day only.
+    public var isOccurrence: Bool { seriesId != nil }
+}
+
+/// The event editor's fields. The same limits as the Calendar contract (calendar.ts).
+public struct EventDraft: Sendable, Equatable {
+    public static let kinds = ["focus", "meeting", "recovery"]
+    static let maxTitle = 500
+    static let maxLocation = 500
+    static let maxNotes = 20_000
+
+    public var title: String
+    public var start: Date
+    public var end: Date
+    /// "focus", "meeting" or "recovery".
+    public var kind: String
+    public var location: String
+    public var notes: String
+
+    public init(title: String, start: Date, end: Date, kind: String = "focus", location: String = "", notes: String = "") {
+        self.title = title; self.start = start; self.end = end; self.kind = kind
+        self.location = location; self.notes = notes
+    }
+
+    /// The fields of an event as it is now.
+    public init(_ event: CalendarEvent) {
+        let kind = EventDraft.kinds.contains(event.kind) ? event.kind : "focus"
+        self.init(title: event.title, start: event.start, end: event.end, kind: kind,
+                  location: event.location ?? "", notes: event.notes ?? "")
+    }
+
+    /// A new event starting at the next half hour after `now`, an hour long.
+    public static func new(after now: Date, calendar: Calendar = .current) -> EventDraft {
+        let wholeMinute = calendar.dateInterval(of: .minute, for: now)?.start ?? now
+        let minute = calendar.component(.minute, from: wholeMinute)
+        let toNext = minute < 30 ? 30 - minute : 60 - minute
+        let start = wholeMinute.addingTimeInterval(TimeInterval(toNext * 60))
+        return EventDraft(title: "", start: start, end: start.addingTimeInterval(3600))
+    }
+
+    private var trimmedTitle: String { title.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+    /// What stops it being saved, in words, or nil when it can be.
+    public var problem: String? {
+        if trimmedTitle.isEmpty { return "Give it a title." }
+        if trimmedTitle.count > EventDraft.maxTitle { return "The title is too long." }
+        if end <= start { return "It has to end after it starts." }
+        if location.count > EventDraft.maxLocation { return "The location is too long." }
+        if notes.count > EventDraft.maxNotes { return "The notes are too long." }
+        return nil
+    }
+
+    /// The body of POST /v1/calendar/events, without its id. Empty location and notes are left out.
+    func createBody() -> [String: Any] {
+        var body: [String: Any] = ["title": trimmedTitle, "start": WireDate.string(start), "end": WireDate.string(end),
+                                   "kind": kind]
+        if let location = EventDraft.text(location) { body["location"] = location }
+        if let notes = EventDraft.text(notes) { body["notes"] = notes }
+        return body
+    }
+
+    /// The body of PATCH /v1/calendar/events/{id}: only what differs from `event`, so an unchanged kind stays the
+    /// automatic one and an Apple event sends only its kind. Cleared location and notes are sent as null. Empty when
+    /// nothing changed.
+    func changes(from event: CalendarEvent) -> [String: Any] {
+        let before = EventDraft(event)
+        var body: [String: Any] = [:]
+        if event.isFromApple {
+            if kind != event.kind { body["kind"] = kind }
+            return body
+        }
+        if trimmedTitle != event.title { body["title"] = trimmedTitle }
+        if start != event.start { body["start"] = WireDate.string(start) }
+        if end != event.end { body["end"] = WireDate.string(end) }
+        if kind != event.kind { body["kind"] = kind }
+        if EventDraft.text(location) != EventDraft.text(before.location) {
+            body["location"] = EventDraft.text(location) ?? NSNull()
+        }
+        if EventDraft.text(notes) != EventDraft.text(before.notes) {
+            body["notes"] = EventDraft.text(notes) ?? NSNull()
+        }
+        return body
+    }
+
+    /// Trimmed text, or nil when there is none.
+    private static func text(_ value: String) -> String? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 }
 

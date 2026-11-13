@@ -51,6 +51,17 @@ that didn't fit are listed with the Planner's reason. For today the Planner want
 A row of day chips (Today, Tomorrow, then the next five days) picks which day to plan; each pick runs a fresh preview.
 A later day has no Quick check gate, so its plan comes straight away.
 
+## Event editor
+On Home → Work → Calendar, **New event** (next to Find a time) and a tap on any event row open the editor sheet:
+title, start and end, kind (Focus, Meeting, Recovery), location and notes. Today's events are listed under the hour
+grid too, since the grid can't be tapped. A new event starts at the next half hour, an hour long; moving the start
+keeps the length. **Add** sends `POST /v1/calendar/events` with a client id. **Save** sends
+`PATCH /v1/calendar/events/{id}` with only the fields that changed and `If-Match` from the read (a kind that wasn't
+touched stays the automatic one). **Delete event** asks first, then `DELETE /v1/calendar/events/{id}`. An Apple
+Calendar event only takes a new kind and can't be deleted here; for one day of a repeating event a change or delete
+applies to that day only. 409 `work_limit_reached`, 412 (changed elsewhere) and 404 are shown in words. UI walk:
+`EventEditorWalkTests`, screenshots 69-72.
+
 ## Quick check
 Opened from Find a time. Dark full screen, after the concepts design: an intro, then the reaction test (the 3-minute
 PVT-B the backend scores: tap the card when it turns green; a dot every 1-4 s, about 62 in all), then the memory part

@@ -206,6 +206,33 @@ public final class LiveAPI: AuraAPI, Sendable {
         try await post(.calendar, "/v1/calendar/events", body)
     }
 
+    // MARK: Event editor
+
+    public func createEvent(_ draft: EventDraft) async throws {
+        var body = draft.createBody()
+        body["id"] = LiveAPI.newId()
+        try await post(.calendar, "/v1/calendar/events", body)
+    }
+
+    /// Without a version from the read, the event is read again for one (GET /v1/calendar/events/{id}).
+    public func updateEvent(_ event: CalendarEvent, to draft: EventDraft) async throws {
+        let changes = draft.changes(from: event)
+        if changes.isEmpty { return }
+        let path = "/v1/calendar/events/\(URLEscape.component(event.id))"
+        var version = event.version
+        if version == nil {
+            let fresh = try await get(WireEventAnswer.self, .calendar, path, query: [:])
+            version = fresh.event.version
+        }
+        guard let version else { throw LiveAPI.badResponse }
+        let body = try LiveAPI.encode(changes)
+        _ = try await client.send(.calendar, "PATCH", path, body: body, headers: ["If-Match": "\"v\(version)\""])
+    }
+
+    public func deleteEvent(id: String) async throws {
+        _ = try await client.send(.calendar, "DELETE", "/v1/calendar/events/\(URLEscape.component(id))")
+    }
+
     public func addTask(title: String, plannedFor: String) async throws {
         let body: [String: Any] = ["id": LiveAPI.newId(), "title": title, "plannedFor": plannedFor]
         try await post(.task, "/v1/tasks", body)
