@@ -15,8 +15,8 @@ import kotlin.test.assertTrue
 private fun makeRun(
     id: String = UUID.randomUUID().toString().uppercase(Locale.ROOT),
     takenAt: Instant = stubNoon,
-    seconds: Int = 180,
-    answers: Int = 60,
+    seconds: Int = 45,
+    answers: Int = 16,
     ms: Double = 300.0,
     falseStarts: Int = 0,
     memory: SpanResult? = null,
@@ -30,8 +30,8 @@ class StubQuickCheckTest {
     // MARK: Scoring
 
     @Test
-    fun aThreeMinuteRunWithSixtyAnswersIsValid() = runTest {
-        val result = stubApi().submitCheck(makeRun(seconds = 180, answers = 60, ms = 300.0))
+    fun aFortyFiveSecondRunWithSixteenAnswersIsValid() = runTest {
+        val result = stubApi().submitCheck(makeRun(seconds = 45, answers = 16, ms = 300.0))
         assertTrue(result.valid)
         assertNull(result.invalidReason)
         assertEquals(300.0, result.meanRtMs)
@@ -43,20 +43,20 @@ class StubQuickCheckTest {
     }
 
     @Test
-    fun aOneMinuteRunIsNotValid() = runTest {
+    fun aThirtySecondRunIsNotValid() = runTest {
         val stub = stubApi()
-        val result = stub.submitCheck(makeRun(seconds = 60, answers = 20))
+        val result = stub.submitCheck(makeRun(seconds = 30, answers = 20))
         assertFalse(result.valid)
         assertEquals("not_3_minutes", result.invalidReason)
         assertFalse(result.qualifiesForNormal)
 
-        val tooLong = stub.submitCheck(makeRun(seconds = 201, answers = 60))
+        val tooLong = stub.submitCheck(makeRun(seconds = 61, answers = 16))
         assertEquals("not_3_minutes", tooLong.invalidReason, "The length is checked before the answers")
     }
 
     @Test
     fun tooFewAnswersIsNotValid() = runTest {
-        val result = stubApi().submitCheck(makeRun(seconds = 180, answers = 29))
+        val result = stubApi().submitCheck(makeRun(seconds = 45, answers = 7))
         assertFalse(result.valid)
         assertEquals("too_few_responses", result.invalidReason)
     }
@@ -64,22 +64,22 @@ class StubQuickCheckTest {
     @Test
     fun tooManyFalseStartsIsNotValid() = runTest {
         val stub = stubApi()
-        // 20 taps with no dot against 60 answers: more than 20% of 80.
-        val tooMany = stub.submitCheck(makeRun(seconds = 180, answers = 60, falseStarts = 20))
+        // 5 taps with no dot against 16 answers: more than 20% of 21.
+        val tooMany = stub.submitCheck(makeRun(seconds = 45, answers = 16, falseStarts = 5))
         assertFalse(tooMany.valid)
         assertNotNull(tooMany.invalidReason)
         assertEquals("too_many_false_starts", tooMany.invalidReason)
-        assertEquals(20, tooMany.falseStarts)
+        assertEquals(5, tooMany.falseStarts)
 
-        // 12 of 72 is under 20%.
-        val fine = stub.submitCheck(makeRun(seconds = 180, answers = 60, falseStarts = 12))
+        // 4 of 20 is 20%, which is allowed.
+        val fine = stub.submitCheck(makeRun(seconds = 45, answers = 16, falseStarts = 4))
         assertTrue(fine.valid)
     }
 
     /** As the server: reactions under 100 ms are false starts, 355 ms or slower are lapses. */
     @Test
     fun measuresFollowTheServer() {
-        val run = QuickCheckRun(takenAt = stubNoon, durationSeconds = 180, reactionTimesMs = listOf(250.0, 400.0, 90.0, 300.0), falseStarts = 1)
+        val run = QuickCheckRun(takenAt = stubNoon, durationSeconds = 45, reactionTimesMs = listOf(250.0, 400.0, 90.0, 300.0), falseStarts = 1)
         val measured = StubCheck.measure(run, shortChecksCount = false)
         assertEquals(2, measured.falseStarts)
         assertEquals(1, measured.lapses)
@@ -89,7 +89,7 @@ class StubQuickCheckTest {
         assertEquals("too_few_responses", measured.invalidReason)
 
         val none = StubCheck.measure(
-            QuickCheckRun(takenAt = stubNoon, durationSeconds = 180, reactionTimesMs = listOf(50.0), falseStarts = 0),
+            QuickCheckRun(takenAt = stubNoon, durationSeconds = 45, reactionTimesMs = listOf(50.0), falseStarts = 0),
             shortChecksCount = false,
         )
         assertEquals(0.0, none.meanRtMs)
@@ -118,7 +118,7 @@ class StubQuickCheckTest {
         assertEquals("quick_check_required", (before as? AuraError)?.serverCode)
 
         // A check that doesn't count leaves the gate shut.
-        stub.submitCheck(makeRun(seconds = 60))
+        stub.submitCheck(makeRun(seconds = 30))
         val stillShut = caught { stub.allocate(date = today, dryRun = true, skipCheck = false, taskIds = null) }
         assertEquals("quick_check_required", (stillShut as? AuraError)?.serverCode)
 
@@ -142,7 +142,7 @@ class StubQuickCheckTest {
         val result = stub.submitCheck(makeRun())
         assertEquals(1, result.scores.attention.checksCounted)
         assertEquals(75.0, result.scores.attention.value)
-        stub.submitCheck(makeRun(seconds = 60))
+        stub.submitCheck(makeRun(seconds = 30))
         assertEquals(1, stub.scoresToday().attention.checksCounted, "A check that isn't valid doesn't count")
     }
 

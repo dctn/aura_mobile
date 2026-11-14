@@ -62,6 +62,30 @@ internal class HealthConnectReader(private val context: Context) {
 
     suspend fun grantedPermissions(): Set<String> = client.permissionController.getGrantedPermissions()
 
+    /**
+     * Debug builds only: what Health Connect holds for the last 2 days, as counts and source app ids. Never values,
+     * so it is safe for logcat.
+     */
+    suspend fun debugSummary(now: Instant): String {
+        val range = TimeRangeFilter.between(now.minusSeconds(2 * 86_400L), now)
+        val granted = runCatching { grantedPermissions() }.getOrElse { return "status=${sdkStatus()} granted=error(${it.javaClass.simpleName}: ${it.message?.take(300)} / cause=${it.cause?.javaClass?.simpleName}: ${it.cause?.message?.take(200)})" }
+        suspend fun <T : Record> count(type: KClass<T>, perm: String): String {
+            if (perm !in granted) return "no-permission"
+            return runCatching {
+                readAll(type, range)
+                    .let { list -> "${list.size} from ${list.map { it.metadata.dataOrigin.packageName }.distinct()}" }
+            }.getOrElse { "error(${it.javaClass.simpleName}: ${it.message?.take(160)})" }
+        }
+        return buildString {
+            append("status=").append(sdkStatus())
+            append(" granted=").append(granted.size).append("/").append(requestedPermissions().size)
+            append(" sleep=").append(count(SleepSessionRecord::class, SLEEP))
+            append(" steps=").append(count(StepsRecord::class, STEPS))
+            append(" exercise=").append(count(ExerciseSessionRecord::class, EXERCISE))
+            append(" restingHr=").append(count(RestingHeartRateRecord::class, RESTING_HR))
+        }
+    }
+
     // MARK: Sleep
 
     /**
@@ -221,7 +245,8 @@ internal class HealthConnectReader(private val context: Context) {
         }
         return sessions.mapNotNull { session ->
             if (!session.endTime.isAfter(session.startTime)) return@mapNotNull null
-            val totals = if (spanMetrics.isEmpty()) null else runCatching {
+            // One aggregate per workout costs quota, so only the latest few get calories and distance.
+            val totals = if (spanMetrics.isEmpty() || session !in sessions.takeLast(MAX_WORKOUT_TOTALS)) null else runCatching {
                 client.aggregate(AggregateRequest(spanMetrics, TimeRangeFilter.between(session.startTime, session.endTime)))
             }.getOrNull()
             val minutes = java.time.Duration.between(session.startTime, session.endTime).toMinutes().toInt()
@@ -256,7 +281,8 @@ internal class HealthConnectReader(private val context: Context) {
     }
 
     companion object {
-        private const val MAX_RECORDS = 20_000
+        private const val MAX_RECORDS = 5_000
+        private const val MAX_WORKOUT_TOTALS = 10
         private const val MAX_WORKOUTS = 60
 
         val SLEEP = HealthPermission.getReadPermission(SleepSessionRecord::class)

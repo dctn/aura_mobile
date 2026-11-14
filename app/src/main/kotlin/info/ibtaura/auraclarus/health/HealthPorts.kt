@@ -1,6 +1,8 @@
 package info.ibtaura.auraclarus.health
 
 import android.content.Context
+import android.content.pm.ApplicationInfo
+import android.util.Log
 import androidx.health.connect.client.HealthConnectClient
 import info.ibtaura.aura.core.AuraError
 import info.ibtaura.aura.core.AuthState
@@ -33,6 +35,7 @@ internal class HealthAccessRefused : Exception("Health Connect sleep access wasn
 internal class HealthConnectSleepPort(
     private val reader: HealthConnectReader,
     private val asker: HealthPermissionAsker,
+    private val debuggable: Boolean = false,
 ) : HealthSleepSource {
 
     override fun availability(): HealthAvailability = when (reader.sdkStatus()) {
@@ -41,7 +44,11 @@ internal class HealthConnectSleepPort(
         else -> HealthAvailability.Unavailable
     }
 
+    /** No read before this; a night that isn't there yet is looked for again in 15 minutes, not on every resume. */
+    private var nextTry: Instant = Instant.EPOCH
+
     override suspend fun requestAccess() {
+        nextTry = Instant.EPOCH
         if (!reader.isAvailable) throw IllegalStateException("Health Connect isn't available")
         val requested = reader.requestedPermissions()
         if (!reader.grantedPermissions().containsAll(requested)) asker.request(requested)
@@ -49,10 +56,26 @@ internal class HealthConnectSleepPort(
     }
 
     override suspend fun lastNight(from: Instant, to: Instant): SleepNight? {
+        val now = Instant.now()
+        if (now.isBefore(nextTry)) return null
         if (!reader.isAvailable) return null
-        if (HealthConnectReader.SLEEP !in reader.grantedPermissions()) return null
-        val samples = reader.sleepSamples(from, to)
-        return SleepNightBuilder.build(samples, DayKey.zone)
+        nextTry = now.plusSeconds(15 * 60)
+        try {
+            if (HealthConnectReader.SLEEP !in reader.grantedPermissions()) {
+                if (debuggable) Log.i("AuraHealth", "sleep: permission not granted")
+                return null
+            }
+            val samples = reader.sleepSamples(from, to)
+            val night = SleepNightBuilder.build(samples, DayKey.zone)
+            if (debuggable) Log.i("AuraHealth", "sleep: samples=${samples.size} night=${night != null}")
+            return night
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            if (isRateLimit(e)) nextTry = now.plusSeconds(60 * 60)
+            if (debuggable) Log.i("AuraHealth", "sleep read failed: ${e.javaClass.simpleName}${if (isRateLimit(e)) " (rate limited)" else ""}")
+            throw e
+        }
     }
 }
 
@@ -67,57 +90,93 @@ internal class HealthConnectDayPort(
     private val reader: HealthConnectReader,
 ) : HealthPort {
     private val prefs = context.getSharedPreferences("aura_health", Context.MODE_PRIVATE)
-    private var lastSync: Instant? = null
+    private val debuggable = (context.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
+
+    /** Debug builds only, and never a health value: counts, source apps and why a sync stopped. */
+    private fun debugLog(message: String) {
+        if (debuggable) Log.i(TAG, message)
+    }
     private var syncing = false
+    private var summaryLogged = false
 
     override suspend fun isConnected(): Boolean {
+        if (debuggable && !summaryLogged) {
+            summaryLogged = true
+            debugLog("connected=${app.healthConnected} " + runCatching { reader.debugSummary(Instant.now()) }.getOrElse { "summary error ${it.javaClass.simpleName}" })
+        }
         if (!app.healthConnected || !reader.isAvailable) return false
         return try {
             reader.grantedPermissions().any { it in HealthConnectReader.ALL_DAY_PERMISSIONS }
         } catch (e: CancellationException) {
             throw e
-        } catch (_: Throwable) {
+        } catch (e: Throwable) {
+            if (isRateLimit(e)) retryAfter(RATE_LIMIT_WAIT)
             false
         }
     }
 
+    /**
+     * Yesterday and today every time, plus the next 7 older days until 30 are covered, so the first connect never
+     * reads a month in one go. A failure waits before the next try (an hour when Health Connect rate-limits us, 6 hours
+     * when the server has no Health Connect route yet), and the wait is kept across launches. Health Connect has a
+     * request quota per app; trying again on every resume used it up.
+     */
     override suspend fun syncRecentDays() {
         if (syncing) return
         val now = Instant.now()
-        lastSync?.let { if (now.isBefore(it.plusSeconds(15 * 60))) return }
         val account = accountKey() ?: return
+        val retryAt = prefs.getLong("$account-retryAt", 0L)
+        if (now.toEpochMilli() < retryAt) {
+            debugLog("waiting ${(retryAt - now.toEpochMilli()) / 60_000} min before the next Health Connect read")
+            return
+        }
         syncing = true
         try {
-            val backfilled = prefs.getBoolean(account, false)
+            // An older build kept a plain flag for a finished 30-day backfill.
+            val covered = if (prefs.getBoolean(account, false)) BACKFILL_DAYS.toInt() else prefs.getInt("$account-covered", 0)
+            val chunkEnd = minOf(covered + CHUNK_DAYS, BACKFILL_DAYS.toInt())
             val zone = DayKey.zone
             val today = LocalDate.now(zone)
-            val back = if (backfilled) 1L else BACKFILL_DAYS
-            val days = (back downTo 0L).map { today.minusDays(it) }
+            val back = (setOf(0L, 1L) + (covered + 1..chunkEnd).map { it.toLong() }).sortedDescending()
+            val days = back.map { today.minusDays(it) }
             val inputs = try {
                 reader.days(days, zone, reader.grantedPermissions(), now)
             } catch (e: CancellationException) {
                 throw e
-            } catch (_: Throwable) {
-                // Revoked mid-way, rate-limited or not reachable: try on the next resume.
+            } catch (e: Throwable) {
+                val limited = isRateLimit(e)
+                debugLog("day read failed: ${e.javaClass.simpleName}: ${e.message?.take(200)}${if (limited) " (rate limited)" else ""}")
+                retryAfter(if (limited) RATE_LIMIT_WAIT else FAILURE_WAIT)
                 return
             }
             val toSend = inputs.map { DailyTotalsBuilder.build(it) }.filter { it.hasData() }
+            debugLog("days read=${inputs.size} withData=${toSend.size} covered=$covered->$chunkEnd")
             if (toSend.isNotEmpty()) {
                 try {
                     app.api.putHealthDays(toSend)
                 } catch (e: AuraError.Server) {
                     if (e.code == "not_available") {
-                        lastSync = now
+                        debugLog("server has no Health Connect day route yet (not_available); next try in 6 h")
+                        retryAfter(NO_ROUTE_WAIT)
                         return
                     }
+                    retryAfter(FAILURE_WAIT)
                     throw e
                 }
             }
-            prefs.edit().putBoolean(account, true).apply()
-            lastSync = now
+            debugLog("days sent=${toSend.size}")
+            prefs.edit()
+                .putInt("$account-covered", maxOf(chunkEnd, 1))
+                .putLong("$account-retryAt", now.toEpochMilli() + FAILURE_WAIT * 1000)
+                .apply()
         } finally {
             syncing = false
         }
+    }
+
+    private fun retryAfter(seconds: Long) {
+        val account = accountKey() ?: return
+        prefs.edit().putLong("$account-retryAt", System.currentTimeMillis() + seconds * 1000).apply()
     }
 
     /** One key per signed-in account, so the next account gets its own 30 days. Only a hash of the email is kept. */
@@ -129,8 +188,17 @@ internal class HealthConnectDayPort(
 
     companion object {
         const val BACKFILL_DAYS = 30L
+        private const val CHUNK_DAYS = 7
+        private const val FAILURE_WAIT = 15 * 60L
+        private const val RATE_LIMIT_WAIT = 60 * 60L
+        private const val NO_ROUTE_WAIT = 6 * 60 * 60L
+        private const val TAG = "AuraHealth"
     }
 }
+
+/** Health Connect's per-app request quota ran out ("Rate limited request quota has been exceeded"). */
+internal fun isRateLimit(e: Throwable): Boolean =
+    generateSequence(e) { it.cause }.take(4).any { it.message?.contains("rate limit", ignoreCase = true) == true }
 
 /** True when the day has any metric or workout; empty days aren't sent. */
 internal fun HealthDay.hasData(): Boolean = workouts.isNotEmpty() || metrics != HealthMetrics()

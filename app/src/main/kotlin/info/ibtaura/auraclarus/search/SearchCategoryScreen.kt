@@ -32,7 +32,6 @@ import info.ibtaura.auraclarus.design.MetricRetryState
 import info.ibtaura.auraclarus.design.SearchCapsule
 import info.ibtaura.auraclarus.design.SearchCategoryStyle
 import info.ibtaura.auraclarus.design.SearchGroupCard
-import info.ibtaura.auraclarus.design.SearchGroupRow
 import info.ibtaura.auraclarus.design.SearchRowDivider
 import info.ibtaura.auraclarus.design.SectionTitle
 import info.ibtaura.auraclarus.shell.AppState
@@ -152,7 +151,7 @@ private fun SearchAvailableRow(section: CatalogueSection, row: MetricAvailableRo
     val parameter = row.parameter
     val field = parameter.field
     if (parameter.hasSeries && field != null) {
-        SearchGroupRow(
+        SearchListRow(
             parameter.name,
             Modifier.testTag("metric-$field"),
             symbol = style.symbol,
@@ -160,7 +159,7 @@ private fun SearchAvailableRow(section: CatalogueSection, row: MetricAvailableRo
             onClick = { go(metricRoute(parameter, field, section.title)) },
         )
     } else {
-        SearchGroupRow(parameter.name, symbol = style.symbol, symbolColor = style.color, showsChevron = false)
+        SearchListRow(parameter.name, symbol = style.symbol, symbolColor = style.color, showsChevron = false)
     }
 }
 
@@ -168,12 +167,12 @@ private fun SearchAvailableRow(section: CatalogueSection, row: MetricAvailableRo
 private fun SearchNoDataRow(sectionTitle: String, parameter: CatalogueParameter, go: (Route) -> Unit) {
     val field = parameter.field
     if (parameter.hasSeries && field != null) {
-        SearchGroupRow(
+        SearchListRow(
             parameter.name,
             Modifier.testTag("metric-$field"),
             onClick = { go(metricRoute(parameter, field, sectionTitle)) },
         )
     } else {
-        SearchGroupRow(parameter.name, showsChevron = false)
+        SearchListRow(parameter.name, showsChevron = false)
     }
 }

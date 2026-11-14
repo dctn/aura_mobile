@@ -49,7 +49,8 @@ class QuickCheckEngineTest {
     @Test
     fun standardConfig() {
         val config = ReactionTest.Config.standard
-        assertEquals(180.0, config.duration)
+        assertEquals(45.0, REACTION_TEST_SECONDS)
+        assertEquals(REACTION_TEST_SECONDS, config.duration)
         assertEquals(1.0, config.minGap)
         assertEquals(4.0, config.maxGap)
         assertEquals(1.0, config.showResultFor)
@@ -195,13 +196,13 @@ class QuickCheckEngineTest {
     @Test
     fun remainingNeverGoesBelowZero() {
         val test = reaction(listOf(0.5))
-        assertEquals(180.0, test.remaining(0.0))
+        assertEquals(45.0, test.remaining(0.0))
         test.start(100.0)
-        assertEquals(120.0, test.remaining(160.0))
+        assertEquals(15.0, test.remaining(130.0))
         assertEquals(0.0, test.remaining(1_000.0))
         assertEquals(ReactionTest.TapOutcome.Ignored, test.tap(1_000.0))
         assertEquals(0.0, test.remaining(1_000.0))
-        assertEquals(180, test.durationSeconds)
+        assertEquals(45, test.durationSeconds)
     }
 
     @Test
@@ -243,7 +244,7 @@ class QuickCheckEngineTest {
         test.start(0.0)
         var dotSeenAt: Double? = null
         // 100 ticks a second; each dot is tapped about 300 ms after it shows.
-        for (i in 1..18_100) {
+        for (i in 1..4_600) {
             val t = i / 100.0
             test.tick(t)
             if (test.phase == dot && dotSeenAt == null) dotSeenAt = t
@@ -254,10 +255,11 @@ class QuickCheckEngineTest {
             }
         }
         assertTrue(test.isFinished)
-        assertEquals(180, test.durationSeconds)
+        assertEquals(45, test.durationSeconds)
         assertEquals(0, test.falseStarts)
+        // A dot about every 2.8 s (a 2.5 s gap on average, plus the answer): about 16 in 45 s.
         val count = test.reactionTimesMs.size
-        assertTrue(count in 36..90, "$count answers")
+        assertTrue(count in 9..23, "$count answers")
         assertTrue(test.reactionTimesMs.all { it in 290.0..320.0 })
     }
 
@@ -265,8 +267,54 @@ class QuickCheckEngineTest {
 
     @Test
     fun spanConfigs() {
-        assertEquals(SpanTest.Config(startLength = 3, maxLength = 9, showPerDigit = 1.0), SpanTest.Config.standard)
-        assertEquals(SpanTest.Config(startLength = 3, maxLength = 3, showPerDigit = 1.0), SpanTest.Config.short)
+        assertEquals(45.0, MEMORY_TEST_SECONDS)
+        assertEquals(
+            SpanTest.Config(startLength = 3, maxLength = 9, showPerDigit = 1.0, duration = MEMORY_TEST_SECONDS),
+            SpanTest.Config.standard,
+        )
+        assertEquals(
+            SpanTest.Config(startLength = 3, maxLength = 3, showPerDigit = 1.0, duration = MEMORY_TEST_SECONDS),
+            SpanTest.Config.short,
+        )
+    }
+
+    @Test
+    fun spanEndsWhenItsTimeIsUp() {
+        val test = span(digits10)
+        assertEquals(45.0, test.remaining(0.0), "The full time before the start")
+        test.begin(100.0)
+        assertEquals(45.0, test.remaining(100.0))
+        test.hideDigits()
+        assertEquals(true, test.enter(listOf(1, 2, 3)))
+        test.tick(120.0)
+        assertFalse(test.isFinished)
+        assertEquals(25.0, test.remaining(120.0))
+
+        // Half of the next row typed when the time runs out: it is dropped, the answered row stays.
+        test.hideDigits()
+        assertNull(test.type(4))
+        test.tick(145.0)
+        assertTrue(test.isFinished)
+        assertEquals(0.0, test.remaining(145.0))
+        assertEquals(emptyList(), test.entered)
+        assertEquals(SpanResult(spanCorrect = 1, spanAttempts = 1), test.result)
+        assertEquals(3, test.bestSpan)
+        // Nothing more is taken.
+        assertNull(test.type(5))
+        test.tick(200.0)
+        assertEquals(SpanResult(spanCorrect = 1, spanAttempts = 1), test.result)
+    }
+
+    @Test
+    fun spanTicksBeforeTheStartDoNothing() {
+        val test = span(digits10)
+        test.tick(1_000.0)
+        assertFalse(test.isFinished)
+        test.begin(1_000.0)
+        assertEquals(listOf(1, 2, 3), test.digits)
+        test.tick(1_044.9)
+        assertFalse(test.isFinished)
+        assertEquals(0.0, test.remaining(2_000.0), "Never below 0")
     }
 
     @Test

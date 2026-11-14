@@ -7,8 +7,14 @@ import kotlin.random.Random
 
 // A port of AuraKit/QuickCheckEngine.swift. Both tests are mutable state machines the screen keeps one of.
 
+/** How long the reaction test runs, in seconds. The one place to change it. (iOS and Basner's PVT-B use 180 s.) */
+const val REACTION_TEST_SECONDS: Double = 45.0
+
+/** How long the memory test runs at the most, in seconds, from its first row. The one place to change it. */
+const val MEMORY_TEST_SECONDS: Double = 45.0
+
 /**
- * The 3-minute reaction test (PVT-B, Basner 2011) as a state machine.
+ * The reaction test (after PVT-B, Basner 2011, shortened to `REACTION_TEST_SECONDS`) as a state machine.
  * It reads no clock: the screen passes in the time in seconds (e.g. from `SystemClock.uptimeMillis() / 1000.0`), so
  * tests can script every moment. The backend scores the raw times; this only runs the test.
  *
@@ -19,7 +25,7 @@ class ReactionTest(
     private val random: () -> Double = { Random.nextDouble() },
 ) {
     data class Config(
-        /** The whole run, 180 s. */
+        /** The whole run, `REACTION_TEST_SECONDS`. */
         val duration: Double,
         /** From one answer (or the start) to the next dot, at the least: 1 s. */
         val minGap: Double,
@@ -31,7 +37,13 @@ class ReactionTest(
         val timeout: Double,
     ) {
         companion object {
-            val standard = Config(duration = 180.0, minGap = 1.0, maxGap = 4.0, showResultFor = 1.0, timeout = 10.0)
+            val standard = Config(
+                duration = REACTION_TEST_SECONDS,
+                minGap = 1.0,
+                maxGap = 4.0,
+                showResultFor = 1.0,
+                timeout = 10.0,
+            )
 
             /** The same rules over `seconds` (UI tests). */
             fun short(seconds: Double): Config = standard.copy(duration = seconds)
@@ -199,7 +211,9 @@ class ReactionTest(
 }
 
 /**
- * The memory part: digits show, then are typed back; the row grows by one after each right answer.
+ * The memory part: digits show, then are typed back; the row grows by one after each right answer. It ends at the
+ * longest row, after two misses at one length, or when its time (`config.duration`, from the first row) is up.
+ * Like `ReactionTest` it reads no clock: the screen passes the time in seconds to `begin`, `tick` and `remaining`.
  *
  * `digit` gives a digit 0-9 for each place in a row; tests pass a script.
  */
@@ -214,10 +228,12 @@ class SpanTest(
         val maxLength: Int,
         /** The screen shows the row for length * showPerDigit seconds: 1. */
         val showPerDigit: Double,
+        /** The most the test runs, from the first row: `MEMORY_TEST_SECONDS`. A row not answered by then is dropped. */
+        val duration: Double = MEMORY_TEST_SECONDS,
     ) {
         companion object {
             val standard = Config(startLength = 3, maxLength = 9, showPerDigit = 1.0)
-            /** One round of 3 digits (UI tests). */
+            /** One round of 3 digits (UI tests), with the same time. */
             val short = Config(startLength = 3, maxLength = 3, showPerDigit = 1.0)
         }
     }
@@ -248,6 +264,7 @@ class SpanTest(
     private var length: Int = max(1, config.startLength)
     private var wrongAtLength = 0
     private var begun = false
+    private var startedAt = 0.0
 
     /** How long the screen shows the current row, in seconds. */
     val showDuration: Double get() = digits.size * config.showPerDigit
@@ -256,11 +273,38 @@ class SpanTest(
 
     val result: SpanResult get() = SpanResult(spanCorrect = spanCorrect, spanAttempts = spanAttempts)
 
-    /** Starts the first round (phase showing with new digits). Called once; later calls do nothing. */
-    fun begin() {
+    /**
+     * Starts the first round (phase showing with new digits) and the clock, at `at` seconds.
+     * Called once; later calls do nothing.
+     */
+    fun begin(at: Double = 0.0) {
         if (begun) return
         begun = true
+        startedAt = at
+        if (config.duration <= 0) {
+            phase = Phase.finished
+            return
+        }
         newRound()
+    }
+
+    /**
+     * Moves time on: once the time is up the test finishes. A row still showing or half typed is dropped, not
+     * counted; rows already answered stay counted.
+     */
+    fun tick(at: Double) {
+        if (!begun || phase == Phase.finished) return
+        if (at >= startedAt + config.duration) {
+            phase = Phase.finished
+            typed.clear()
+        }
+    }
+
+    /** Time left, never below 0. The full time before `begin`, 0 once finished. */
+    fun remaining(at: Double): Double = when {
+        !begun -> max(0.0, config.duration)
+        phase == Phase.finished -> 0.0
+        else -> max(0.0, startedAt + config.duration - at)
     }
 
     /** The row has been shown long enough: phase entering. */

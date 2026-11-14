@@ -52,7 +52,11 @@ internal class QuickCheckFlow(
     /** The newest reactions first, at most 3. */
     var recentTimes by mutableStateOf<List<Double>>(emptyList())
         private set
+    /** Whole seconds left in the reaction test. */
     var secondsLeft by mutableIntStateOf(0)
+        private set
+    /** Whole seconds left in the memory test (its full time until the first row shows). */
+    var memorySecondsLeft by mutableIntStateOf(0)
         private set
 
     /** The memory test. Its fields aren't Compose state, so `spanVersion` is bumped whenever it changes. */
@@ -75,6 +79,9 @@ internal class QuickCheckFlow(
         private set
     var sendFailed by mutableStateOf(false)
         private set
+    /** The server refused the run itself (a 4xx such as `validation_failed`), so trying again won't help. */
+    var sendRefused by mutableStateOf(false)
+        private set
     var result by mutableStateOf<QuickCheckResult?>(null)
         private set
     /** True when the memory part was done rather than skipped. */
@@ -90,6 +97,7 @@ internal class QuickCheckFlow(
     /** Built once, so "Try again" resends the same id. */
     private var run: QuickCheckRun? = null
     private var ticker: Job? = null
+    private var memoryTicker: Job? = null
     private var readyJob: Job? = null
     private var hideJob: Job? = null
     private var feedbackJob: Job? = null
@@ -101,6 +109,7 @@ internal class QuickCheckFlow(
     init {
         span = SpanTest(spanConfig)
         secondsLeft = ceil(reactionConfig.duration).toInt()
+        memorySecondsLeft = ceil(spanConfig.duration).toInt()
     }
 
     /** True while a part of the check is running, so leaving asks first. */
@@ -165,14 +174,42 @@ internal class QuickCheckFlow(
             // A moment to look away from the card before the first row.
             delay(1_000)
             if (step != Step.memory) return@launch
-            span.begin()
+            // The memory test's time runs from its first row.
+            span.begin(clockNow())
             spanChanged()
             memoryBegun = true
             scheduleHide()
+            startMemoryTicker()
         }
     }
 
     // MARK: Memory
+
+    /** A few times a second: counts the memory test down, and sends the check when its time is up. */
+    private fun startMemoryTicker() {
+        memoryTicker?.cancel()
+        memoryTicker = scope.launch {
+            while (isActive && step == Step.memory) {
+                memoryTick()
+                delay(200)
+            }
+        }
+    }
+
+    /** Returns true when the time is up and the check was sent. */
+    private fun memoryTick(): Boolean {
+        if (step != Step.memory) return false
+        val now = clockNow()
+        span.tick(now)
+        val left = ceil(span.remaining(now)).toInt()
+        if (left != memorySecondsLeft) memorySecondsLeft = left
+        if (!span.isFinished) return false
+        // Time is up: a row still showing or half typed is dropped; the rows answered are sent.
+        feedback = null
+        spanChanged()
+        send(span.result)
+        return true
+    }
 
     /** Hides the row after `length * showPerDigit` seconds. */
     private fun scheduleHide() {
@@ -189,6 +226,8 @@ internal class QuickCheckFlow(
     }
 
     fun type(digit: Int) {
+        // A key pressed after the time ran out (before the ticker saw it) ends the test instead.
+        if (step == Step.memory && memoryBegun && memoryTick()) return
         if (step != Step.memory || feedback != null || span.phase != SpanTest.Phase.entering) return
         val row = span.entered + digit
         val right = span.type(digit)
@@ -250,6 +289,7 @@ internal class QuickCheckFlow(
         val run = run ?: return
         if (stopped) return
         sendFailed = false
+        sendRefused = false
         step = Step.sending
         sendJob?.cancel()
         sendJob = scope.launch {
@@ -263,6 +303,7 @@ internal class QuickCheckFlow(
             } catch (e: Throwable) {
                 if (stopped) return@launch
                 onError(e)
+                sendRefused = e is info.ibtaura.aura.core.AuraError.Server && e.status in 400..499 && e.status != 401 && e.status != 403
                 sendFailed = true
             }
         }
@@ -270,7 +311,7 @@ internal class QuickCheckFlow(
 
     /**
      * The app was left: the reaction test's timing no longer holds, so it starts again from the intro. The memory
-     * part isn't timed and carries on.
+     * part carries on, and its time keeps running.
      */
     fun interrupt() {
         if (step != Step.reaction || stopped) return
@@ -295,6 +336,8 @@ internal class QuickCheckFlow(
     }
 
     private fun cancelMemoryJobs() {
+        memoryTicker?.cancel()
+        memoryTicker = null
         readyJob?.cancel()
         readyJob = null
         hideJob?.cancel()

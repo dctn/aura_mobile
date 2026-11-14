@@ -9,9 +9,12 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -108,11 +111,15 @@ private fun MainTabs(app: AppState) {
     val nav = remember(app) { AuraNav(app) }
     val holder = rememberSaveableStateHolder()
     val density = LocalDensity.current
-    var barHeight by remember { mutableStateOf(0.dp) }
+    // The floating bars' own height (tab bar, plus the mini run bar while it shows), measured without the navigation
+    // bar under them; starts at the tab bar's size so the first frame already clears it.
+    var barsHeight by remember { mutableStateOf(TabBarHeight) }
+    val navBarHeight = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
     val covered = app.runExpanded || nav.quickCheckOpen
 
     Box(Modifier.fillMaxSize().background(AuraColors.background)) {
-        CompositionLocalProvider(LocalBottomInset provides barHeight) {
+        // Every tab page pads its bottom by this (bottomPadding() adds the gap), so its last item scrolls clear.
+        CompositionLocalProvider(LocalBottomInset provides barsHeight + navBarHeight) {
             // One back stack per tab: each tab's controller is saved with its pages while another tab shows.
             val tab = nav.tab
             holder.SaveableStateProvider(tab.name) {
@@ -120,16 +127,17 @@ private fun MainTabs(app: AppState) {
             }
         }
 
-        Column(
-            Modifier
-                .align(Alignment.BottomCenter)
-                .fillMaxWidth()
-                .onSizeChanged { barHeight = with(density) { it.height.toDp() } }
-                .navigationBarsPadding(),
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
-            if (app.run?.showsMiniBar == true && !app.runExpanded) MiniRunBar(app, nav)
-            AuraTabBar(selected = nav.tab, onSelect = nav::selectTab)
+        Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().navigationBarsPadding()) {
+            // Measured inside the navigation-bar padding, so this is the bars alone; the inset is added above.
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .onSizeChanged { barsHeight = with(density) { it.height.toDp() } },
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                if (app.run?.showsMiniBar == true && !app.runExpanded) MiniRunBar(app, nav)
+                AuraTabBar(selected = nav.tab, onSelect = nav::selectTab)
+            }
         }
 
         OtherSessionAlert(app, showsHere = !app.runExpanded)
@@ -210,6 +218,9 @@ private fun NavGraphBuilder.auraDestinations(app: AppState, nav: AuraNav) {
     composable<Route.SearchCategory> { SearchCategoryScreen(app, nav, it.toRoute()) }
     composable<Route.NotDesigned> { NotDesignedYet(it.toRoute<Route.NotDesigned>().title, onBack = { nav.pop() }) }
 }
+
+/** AuraTabBar's laid-out height: 4 top + 62 pill + 8 bottom. Only a first-frame estimate; the real height is measured. */
+private val TabBarHeight = 74.dp
 
 /** The floating capsule tab bar of iOS 26: icon over label, the selected tab blue on a grey pill. */
 @Composable

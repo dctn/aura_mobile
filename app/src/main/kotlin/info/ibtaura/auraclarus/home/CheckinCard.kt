@@ -8,8 +8,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.size
 import androidx.compose.material3.Icon
-import androidx.compose.material3.Slider
-import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -32,6 +30,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import info.ibtaura.auraclarus.design.AuraCard
 import info.ibtaura.auraclarus.design.AuraColors
+import info.ibtaura.auraclarus.design.AuraSlider
 import info.ibtaura.auraclarus.design.AuraType
 import info.ibtaura.auraclarus.design.CardDivider
 import info.ibtaura.auraclarus.design.PillButton
@@ -159,25 +158,16 @@ internal fun CheckinCard(app: AppState, onSent: () -> Unit) {
                     Text("${alertness.roundToInt()} of 9", style = AuraType.calloutSemibold, color = AuraColors.blue)
                 }
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text("1", style = AuraType.calloutMedium, color = AuraColors.gray)
-                    Slider(
+                    AuraSlider(
                         value = alertness,
                         onValueChange = { alertness = it.roundToInt().toFloat() },
                         valueRange = 1f..9f,
                         steps = 7,
-                        colors = SliderDefaults.colors(
-                            thumbColor = Color.White,
-                            activeTrackColor = AuraColors.blue,
-                            inactiveTrackColor = AuraColors.track,
-                            activeTickColor = Color.Transparent,
-                            inactiveTickColor = Color.Transparent,
-                        ),
                         modifier = Modifier
                             .weight(1f)
                             .semantics { contentDescription = "Alertness" }
                             .testTag("checkin-alertness"),
                     )
-                    Text("9", style = AuraType.calloutMedium, color = AuraColors.gray)
                 }
             }
 

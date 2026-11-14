@@ -45,6 +45,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -76,12 +77,26 @@ import java.util.Locale
 // Compose ports of DesignSystem/Components.swift and Search/SearchStyle.swift, with the same names and sizes
 // (iOS points = dp/sp). Test tags go on the `modifier` you pass: `PillButton("Save", ..., Modifier.testTag("x"))`.
 
-/** How much of the bottom the floating tab bar (and mini run bar) covers. RootScreen sets it; pages pad by it. */
+/**
+ * How much of the bottom edge the floating bars cover: the tab bar's measured height (plus the mini run bar's while
+ * it shows) plus the navigation bar under them. RootScreen provides it around the tab pages only; covers (run,
+ * Quick check), sheets and screens outside the tabs see 0 and pad by the navigation bar alone.
+ */
 val LocalBottomInset = compositionLocalOf { 0.dp }
 
-/** The bottom padding a scrolling page needs: the tab bar's height inside the tabs, else the navigation bar. */
+/** The space left between a page's last item and the top of the floating tab bar. */
+val TabBarGap = 12.dp
+
+/**
+ * The bottom padding a scrolling page needs so its last item scrolls fully clear of the floating bars: inside the
+ * tabs, the covered height plus [TabBarGap]; elsewhere just the navigation bar.
+ */
 @Composable
-fun bottomPadding(): Dp = max(LocalBottomInset.current, WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding())
+fun bottomPadding(): Dp {
+    val tabs = LocalBottomInset.current
+    val nav = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+    return if (tabs > 0.dp) max(tabs, nav) + TabBarGap else nav
+}
 
 private val cardShape = RoundedCornerShape(30.dp)
 
@@ -577,8 +592,10 @@ fun AuraSheet(
         sheetState = state,
         containerColor = AuraColors.background,
         modifier = modifier.semantics { testTagsAsResourceId = true },
-        content = content,
-    )
+    ) {
+        // The sheet covers the tab bar, so nothing inside pads for it.
+        CompositionLocalProvider(LocalBottomInset provides 0.dp) { content() }
+    }
 }
 
 /**

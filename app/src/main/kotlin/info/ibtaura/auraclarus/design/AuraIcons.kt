@@ -176,6 +176,6 @@ private val symbols: Map<String, ImageVector> = mapOf(
     "exclamationmark.circle.fill" to Icons.Filled.Error,
 
     // The mood slider's ends
-    "tortoise.fill" to Icons.Filled.SlowMotionVideo,
-    "hare.fill" to Icons.Filled.FastForward,
+    "tortoise.fill" to Icons.AutoMirrored.Filled.DirectionsWalk,
+    "hare.fill" to Icons.AutoMirrored.Filled.DirectionsRun,
 )

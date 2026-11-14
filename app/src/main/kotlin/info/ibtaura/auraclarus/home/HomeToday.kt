@@ -12,8 +12,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
-import androidx.compose.material3.Slider
-import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -38,6 +36,7 @@ import info.ibtaura.aura.core.DayKey
 import info.ibtaura.aura.core.Mode
 import info.ibtaura.auraclarus.design.AuraCard
 import info.ibtaura.auraclarus.design.AuraColors
+import info.ibtaura.auraclarus.design.AuraSlider
 import info.ibtaura.auraclarus.design.AuraType
 import info.ibtaura.auraclarus.design.PillButton
 import info.ibtaura.auraclarus.design.PillStyle
@@ -197,32 +196,26 @@ private fun HomeMoodCard(app: AppState) {
             Icon(auraIcon("brain.head.profile"), contentDescription = null, tint = AuraColors.orange, modifier = Modifier.size(20.dp))
             Text("Mood", style = AuraType.calloutMedium, color = AuraColors.orange)
         }
-        Text("How are you feeling right now?", style = AuraType.calloutMedium, color = Color.Black)
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Icon(auraIcon("tortoise.fill"), contentDescription = null, tint = AuraColors.gray, modifier = Modifier.size(26.dp))
-            Slider(
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("How are you feeling right now?", style = AuraType.calloutMedium, color = Color.Black, modifier = Modifier.weight(1f))
+            Text(
+                when (value.roundToInt()) { 1 -> "Very low"; 2 -> "Low"; 3 -> "Okay"; 4 -> "Good"; else -> "Great" },
+                style = AuraType.calloutSemibold,
+                color = AuraColors.blue,
+            )
+        }
+        // Top-aligned so the icons sit level with the track, not with the track plus the scale under it.
+        Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Icon(auraIcon("tortoise.fill"), contentDescription = null, tint = AuraColors.gray, modifier = Modifier.padding(top = 9.dp).size(26.dp))
+            AuraSlider(
                 value = value,
                 onValueChange = { value = it },
                 onValueChangeFinished = { logMood() },
                 valueRange = 1f..5f,
                 steps = 3,
-                colors = SliderDefaults.colors(
-                    thumbColor = Color.White,
-                    activeTrackColor = AuraColors.blue,
-                    inactiveTrackColor = AuraColors.track,
-                    activeTickColor = Color.White.copy(alpha = 0.6f),
-                    inactiveTickColor = AuraColors.footnote,
-                ),
-                thumb = {
-                    Box(
-                        Modifier.size(width = 34.dp, height = 24.dp)
-                            .shadow(3.dp, CircleShape, ambientColor = Color.Black.copy(alpha = 0.1f), spotColor = Color.Black.copy(alpha = 0.2f))
-                            .background(Color.White, CircleShape),
-                    )
-                },
                 modifier = Modifier.weight(1f).testTag("home-mood-slider").semantics { contentDescription = "Mood" },
             )
-            Icon(auraIcon("hare.fill"), contentDescription = null, tint = AuraColors.gray, modifier = Modifier.size(26.dp))
+            Icon(auraIcon("hare.fill"), contentDescription = null, tint = AuraColors.gray, modifier = Modifier.padding(top = 9.dp).size(26.dp))
         }
         if (statusText != null) {
             Text(statusText, style = AuraType.caption, color = AuraColors.gray)

@@ -70,7 +70,9 @@ import androidx.compose.ui.unit.sp
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
+import info.ibtaura.aura.core.MEMORY_TEST_SECONDS
 import info.ibtaura.aura.core.QuickCheckResult
+import info.ibtaura.aura.core.REACTION_TEST_SECONDS
 import info.ibtaura.aura.core.ReactionTest
 import info.ibtaura.aura.core.SpanTest
 import info.ibtaura.auraclarus.design.AuraType
@@ -79,13 +81,14 @@ import info.ibtaura.auraclarus.design.hex
 import info.ibtaura.auraclarus.shell.AppState
 import info.ibtaura.auraclarus.shell.AuraNav
 import java.util.Locale
+import kotlin.math.ceil
 import kotlin.math.max
 import kotlin.math.roundToInt
 
 /**
- * The Quick check cover (iOS QuickCheckScreen.swift), full screen and dark like the design: an intro, the 3-minute
- * reaction test, the memory part, then what the backend made of it. Ends with `nav.finishQuickCheck(result)`: the
- * backend's answer after Done, or null when the person left without one.
+ * The Quick check cover (iOS QuickCheckScreen.swift), full screen and dark like the design: an intro, the reaction
+ * test, the memory part (45 s each: `REACTION_TEST_SECONDS`, `MEMORY_TEST_SECONDS`), then what the backend made of it.
+ * Ends with `nav.finishQuickCheck(result)`: the backend's answer after Done, or null when the person left without one.
  */
 @Composable
 fun QuickCheckScreen(app: AppState, nav: AuraNav) {
@@ -211,7 +214,7 @@ private fun QuickCheckStage(flow: QuickCheckFlow, onClose: (QuickCheckResult?) -
                 QuickCheckFlow.Step.intro -> QuickCheckIntro(flow.interrupted) { flow.startReaction() }
                 QuickCheckFlow.Step.reaction -> QuickCheckReaction(flow)
                 QuickCheckFlow.Step.memory -> QuickCheckMemory(flow)
-                QuickCheckFlow.Step.sending -> QuickCheckSending(flow.sendFailed) { flow.submit() }
+                QuickCheckFlow.Step.sending -> QuickCheckSending(flow.sendFailed, flow.sendRefused) { flow.submit() }
                 QuickCheckFlow.Step.result -> flow.result?.let { result ->
                     QuickCheckResultView(result, bestSpan = if (flow.memoryDone) flow.span.bestSpan else null) {
                         onClose(result)
@@ -257,17 +260,20 @@ private fun infoTitle(step: QuickCheckFlow.Step): String = when (step) {
 
 private fun infoText(step: QuickCheckFlow.Step): String = when (step) {
     QuickCheckFlow.Step.intro ->
-        "Two short tests of how alert you are right now: a 3-minute reaction test, then a memory test. " +
+        "Two short tests of how alert you are right now: a ${lengthAdjective(REACTION_TEST_SECONDS)} reaction test, " +
+            "then a ${lengthAdjective(MEMORY_TEST_SECONDS)} memory test. " +
             "Aura uses it to plan your day. Hide closes this; nothing is sent."
     QuickCheckFlow.Step.reaction ->
         "Tap the card the moment it turns green. A tap before green is a false start, " +
-            "and an answer of 355 ms or slower counts as a slow answer. It runs for 3 minutes."
+            "and an answer of 355 ms or slower counts as a slow answer. " +
+            "It runs for ${spokenLength(REACTION_TEST_SECONDS)}."
     QuickCheckFlow.Step.memory ->
         "Digits show for a moment; type them back in order. A right answer adds a digit, " +
-            "and two misses at the same length end it. Skip sends the check without this part."
+            "and two misses at the same length end it. It runs for up to ${spokenLength(MEMORY_TEST_SECONDS)}. " +
+            "Skip sends the check without this part."
     QuickCheckFlow.Step.sending, QuickCheckFlow.Step.result ->
-        "Aura scores the check. It counts when it ran about 3 minutes, with at least 30 answers " +
-            "and few false starts. Your normal uses morning checks taken 30+ minutes after waking, " +
+        "Aura scores the check. It counts when the reaction test ran the full ${spokenLength(REACTION_TEST_SECONDS)}, " +
+            "with enough answers and few false starts. Your normal uses morning checks taken 30+ minutes after waking, " +
             "after 7+ hours of sleep."
 }
 
@@ -364,7 +370,7 @@ private fun QuickCheckIntro(interrupted: Boolean, onStart: () -> Unit) {
                     color = Color.White,
                     modifier = Modifier.semantics { heading() }.testTag("quick-check-intro"),
                 )
-                Text("About 4 minutes, in two steps.", style = AuraType.body, color = Color.White.copy(alpha = 0.85f))
+                Text("Under ${spokenLength(totalMinutes * 60.0)}, in two steps.", style = AuraType.body, color = Color.White.copy(alpha = 0.85f))
             }
             if (interrupted) {
                 Text(
@@ -374,8 +380,8 @@ private fun QuickCheckIntro(interrupted: Boolean, onStart: () -> Unit) {
                     modifier = Modifier.testTag("quick-check-interrupted"),
                 )
             }
-            StepRow(1, QuickCheckLook.green, "Reaction", "Tap the card the moment it turns green. For 3 minutes.")
-            StepRow(2, QuickCheckLook.purple, "Memory", "A row of digits shows for a moment. Type them back.")
+            StepRow(1, QuickCheckLook.green, "Reaction", "Tap the card the moment it turns green. For ${spokenLength(REACTION_TEST_SECONDS)}.")
+            StepRow(2, QuickCheckLook.purple, "Memory", "A row of digits shows for a moment. Type them back. For ${spokenLength(MEMORY_TEST_SECONDS)}.")
             Text("Best in the morning, 30+ minutes after waking.", style = AuraType.callout, color = QuickCheckLook.dim)
         }
         QuickCheckPill(
@@ -425,8 +431,7 @@ private fun QuickCheckReaction(flow: QuickCheckFlow) {
         ReactionTest.Phase.NotStarted, ReactionTest.Phase.Waiting -> "Waiting"
         ReactionTest.Phase.Finished -> "Done"
     }
-    val seconds = max(0, flow.secondsLeft)
-    val leftText = "${seconds / 60}:${String.format(Locale.ROOT, "%02d", seconds % 60)} left"
+    val leftText = leftText(flow.secondsLeft)
 
     Column(Modifier.fillMaxSize().padding(top = 16.dp)) {
         QuickCheckHeading("QUICK CHECK · 1 OF 2", "Reaction", QuickCheckLook.green)
@@ -503,6 +508,31 @@ private fun QuickCheckReaction(flow: QuickCheckFlow) {
     }
 }
 
+/** Both tests and a little over, in whole minutes: 2 for 45 s + 45 s. */
+private val totalMinutes: Int = ceil((REACTION_TEST_SECONDS + MEMORY_TEST_SECONDS) / 60.0).toInt()
+
+/** "45 seconds", "1 minute", "3 minutes": whole minutes as minutes, anything else in seconds. */
+private fun spokenLength(seconds: Double): String {
+    val whole = seconds.roundToInt()
+    return when {
+        whole >= 60 && whole % 60 == 0 -> if (whole == 60) "1 minute" else "${whole / 60} minutes"
+        whole == 1 -> "1 second"
+        else -> "$whole seconds"
+    }
+}
+
+/** "45-second", "3-minute". */
+private fun lengthAdjective(seconds: Double): String {
+    val whole = seconds.roundToInt()
+    return if (whole >= 60 && whole % 60 == 0) "${whole / 60}-minute" else "$whole-second"
+}
+
+/** "0:45 left". */
+private fun leftText(secondsLeft: Int): String {
+    val seconds = max(0, secondsLeft)
+    return "${seconds / 60}:${String.format(Locale.ROOT, "%02d", seconds % 60)} left"
+}
+
 // MARK: Memory
 
 private val keyWidth = 86.dp
@@ -517,10 +547,16 @@ private fun QuickCheckMemory(flow: QuickCheckFlow) {
 
     Column(Modifier.fillMaxSize().padding(top = 16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         QuickCheckHeading("QUICK CHECK · 2 OF 2", "Memory", QuickCheckLook.purple)
+        Text(
+            leftText(flow.memorySecondsLeft),
+            style = AuraType.callout.copy(fontFeatureSettings = "tnum"),
+            color = QuickCheckLook.dim,
+            modifier = Modifier.padding(top = 6.dp).testTag("quick-check-memory-left"),
+        )
 
         // The prompt.
         Column(
-            Modifier.padding(top = 36.dp).height(104.dp).fillMaxWidth(),
+            Modifier.padding(top = 14.dp).height(104.dp).fillMaxWidth(),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(14.dp, Alignment.CenterVertically),
         ) {
@@ -655,7 +691,7 @@ private fun Key(digit: Int, enabled: Boolean, onType: (Int) -> Unit) {
 // MARK: Sending
 
 @Composable
-private fun QuickCheckSending(failed: Boolean, onRetry: () -> Unit) {
+private fun QuickCheckSending(failed: Boolean, refused: Boolean, onRetry: () -> Unit) {
     Column(
         Modifier.fillMaxSize(),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -675,7 +711,11 @@ private fun QuickCheckSending(failed: Boolean, onRetry: () -> Unit) {
                 modifier = Modifier.testTag("quick-check-send-failed"),
             )
             Text(
-                "Your results are still here. Try again when you're online.",
+                if (refused) {
+                    "The server doesn't take this check yet, so it wasn't saved. Shorter checks will count once the backend is updated."
+                } else {
+                    "Your results are still here. Try again when you're online."
+                },
                 style = AuraType.callout,
                 color = QuickCheckLook.dim,
                 textAlign = TextAlign.Center,
@@ -707,7 +747,8 @@ private const val NORMAL_NOTE = "This one won't count toward your normal, which 
 
 /** The server sends a code, not words. */
 private fun reasonText(code: String?): String = when (code.orEmpty()) {
-    "not_3_minutes" -> "It wasn't the full 3 minutes."
+    // The server's code still says 3 minutes; the test is shorter now.
+    "not_3_minutes" -> "It didn't run the full time."
     "too_few_responses" -> "Too few taps were answered."
     "too_many_false_starts" -> "Too many taps came before the green."
     else -> "It didn't meet the rules for a check."

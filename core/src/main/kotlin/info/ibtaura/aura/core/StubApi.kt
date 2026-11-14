@@ -649,13 +649,21 @@ internal data class StubMorningCheckin(
 /**
  * Health Data's PVT-B scoring (services/health-data/src/service/attention.ts), for the stub only. The real app shows
  * what the backend sends.
+ *
+ * The length rules follow the app's `REACTION_TEST_SECONDS` (45 s), not the backend's current 170-200 s / 30 answers,
+ * so the stub's checks keep counting; the backend is to change to match.
  */
 internal object StubCheck {
-    const val minSeconds = 170
-    const val maxSeconds = 200
+    /** `REACTION_TEST_SECONDS` with a little slack for the device's timing, as the backend's 170-200 s around 180 s. */
+    const val minSeconds = 40
+    const val maxSeconds = 60
     const val lapseMs = 355.0
     const val falseStartMs = 100.0
-    const val minResponses = 30
+    /**
+     * A 45 s run shows about 16 dots (a dot every 1-4 s, about 2.8 s with the answer); fewer than half that answered
+     * means the person stopped, as the backend's 30 of about 62 dots in 3 minutes.
+     */
+    const val minResponses = 8
     const val maxFalseStartShare = 0.2
 
     data class Measures(
@@ -669,7 +677,7 @@ internal object StubCheck {
 
     /**
      * Reactions under 100 ms count as false starts, not reactions. With `shortChecksCount` any run with a reaction is
-     * valid; otherwise it needs 170-200 s, 30+ answers and false starts at most 20% of answers plus taps.
+     * valid; otherwise it needs 40-60 s, 8+ answers and false starts at most 20% of answers plus taps.
      */
     fun measure(run: QuickCheckRun, shortChecksCount: Boolean): Measures {
         val reactions = run.reactionTimesMs.filter { it >= falseStartMs }
