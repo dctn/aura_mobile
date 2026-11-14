@@ -1,0 +1,22 @@
+# Build output
+build/
+.gradle/
+.kotlin/
+/local.properties
+/captures/
+*.apk
+*.aab
+/screenshots/
+# IDE
+.idea/
+*.iml
+.DS_Store
+# Secrets never belong here
+*.jks
+*.keystore
+*.p8
+*.pem
+*.p12
+keys/
+.env*
+google-services.json

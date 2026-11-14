@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A white leaf on blue: a placeholder until there is a real app icon (the iOS app has none yet either). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M38,70 C38,50 52,38 72,36 C72,58 60,72 40,72 Z" />
+    <path
+        android:strokeColor="#FF0088FF"
+        android:strokeWidth="2.5"
+        android:strokeLineCap="round"
+        android:pathData="M40,70 L62,46" />
+</vector>

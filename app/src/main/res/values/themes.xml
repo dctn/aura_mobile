@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Light only, like the iOS app. Compose draws everything; this only sets the window. -->
+    <style name="Theme.Aura" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/aura_background</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">true</item>
+    </style>
+    <color name="aura_background">#FFF5F5F5</color>
+    <color name="aura_blue">#FF0088FF</color>
+</resources>
