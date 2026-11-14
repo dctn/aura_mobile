@@ -148,7 +148,7 @@ object DayKey {
     /** The phone's time zone, read on every call so a zone change is picked up. */
     val zone: ZoneId get() = ZoneId.systemDefault()
 
-    fun string(date: Instant, zone: ZoneId = DayKey.zone): String = string(LocalDate.ofInstant(date, zone))
+    fun string(date: Instant, zone: ZoneId = DayKey.zone): String = string(date.atZone(zone).toLocalDate())
 
     fun string(day: LocalDate): String =
         String.format(Locale.ROOT, "%04d-%02d-%02d", day.year, day.monthValue, day.dayOfMonth)

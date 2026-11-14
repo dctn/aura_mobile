@@ -88,7 +88,7 @@ object MetricMaths {
     const val recordedDays = 365
 
     fun daySpan(days: Int, endingOn: Instant, zone: ZoneId = DayKey.zone): MetricDaySpan {
-        val today = LocalDate.ofInstant(endingOn, zone)
+        val today = endingOn.atZone(zone).toLocalDate()
         val first = today.plusDays((1 - days).toLong())
         return MetricDaySpan(from = DayKey.string(first), to = DayKey.string(today))
     }

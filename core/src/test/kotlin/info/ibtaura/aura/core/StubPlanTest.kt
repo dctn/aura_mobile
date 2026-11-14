@@ -33,7 +33,7 @@ internal fun stubToday(hour: Int, minute: Int): Instant = stubTime(stubTodayKey,
 
 internal val stubTodayKey: String get() = DayKey.string(stubNoon)
 
-internal fun stubDayKey(offset: Long): String = DayKey.string(LocalDate.ofInstant(stubNoon, DayKey.zone).plusDays(offset))
+internal fun stubDayKey(offset: Long): String = DayKey.string(stubNoon.atZone(DayKey.zone).toLocalDate().plusDays(offset))
 
 /** The error a call threw, or null. */
 internal suspend fun caught(block: suspend () -> Unit): Throwable? =

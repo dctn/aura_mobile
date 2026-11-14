@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android 11 and older: the sealed session is never backed up. -->
+<full-backup-content>
+    <exclude domain="sharedpref" path="aura_tokens.xml" />
+</full-backup-content>

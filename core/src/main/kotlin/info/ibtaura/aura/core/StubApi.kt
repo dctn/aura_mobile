@@ -66,7 +66,7 @@ class StubApi(
 
     private val zone: ZoneId get() = DayKey.zone
 
-    private fun day(offset: Long): String = DayKey.string(LocalDate.ofInstant(now(), zone).plusDays(offset))
+    private fun day(offset: Long): String = DayKey.string(now().atZone(zone).toLocalDate().plusDays(offset))
 
     // MARK: Home
 
@@ -150,7 +150,7 @@ class StubApi(
     /** The Walk Distance bars from the Figma, repeated across the range. */
     override suspend fun series(field: String, from: String, to: String): MetricSeries {
         val bars = listOf(2.3, 3.8, 3.1, 4.5, 3.6, 2.2, 3.0, 4.2, 5.0, 3.5, 3.1, 4.0, 4.5, 3.4)
-        val today = LocalDate.ofInstant(now(), zone)
+        val today = now().atZone(zone).toLocalDate()
         val start = DayKey.localDate(from) ?: today
         val end = DayKey.localDate(to) ?: today
         val count = max(1, ChronoUnit.DAYS.between(start, end).toInt() + 1)
@@ -577,7 +577,7 @@ class StubApi(
 
         /** Today 09:00-09:50 on the phone's clock. */
         internal fun seededWindow(now: Instant, zone: ZoneId = DayKey.zone): Pair<Instant, Instant> {
-            val start = LocalDate.ofInstant(now, zone).atTime(9, 0).atZone(zone).toInstant()
+            val start = now.atZone(zone).toLocalDate().atTime(9, 0).atZone(zone).toInstant()
             return start to start.plusSeconds(50 * 60)
         }
 
@@ -617,7 +617,7 @@ class StubApi(
         }
 
         internal fun inboxItems(now: Instant, zone: ZoneId = DayKey.zone): List<ReviewItem> {
-            val day = LocalDate.ofInstant(now, zone)
+            val day = now.atZone(zone).toLocalDate()
             val today = DayKey.string(day)
             fun at(hour: Int, minute: Int): Instant = day.atTime(hour, minute).atZone(zone).toInstant()
             return listOf(
