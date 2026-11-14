@@ -42,7 +42,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -84,7 +83,6 @@ import info.ibtaura.auraclarus.shell.Route
 import info.ibtaura.auraclarus.shell.rememberSaveMessenger
 import info.ibtaura.auraclarus.shell.saveInBackground
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.launch
 import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalTime
@@ -178,7 +176,6 @@ private fun EventEditorForm(app: AppState, event: CalendarEvent?, close: () -> U
     var unpinned by remember { mutableStateOf(false) }
     var confirmingDelete by remember { mutableStateOf(false) }
     var showingTask by remember { mutableStateOf(false) }
-    val scope = rememberCoroutineScope()
     val focus = LocalFocusManager.current
     // A background save's refusal shows in the error line while this page shows, else as a toast.
     val messenger = rememberSaveMessenger { errorText = it }
@@ -257,37 +254,33 @@ private fun EventEditorForm(app: AppState, event: CalendarEvent?, close: () -> U
         )
     }
 
-    /** A quick move (POST .../move). The editor stays open on the moved event. */
+    /**
+     * A quick move (POST .../move), instant like the other saves: the editor closes at once and the move runs in the
+     * app's scope. The server picks the new time ("Next free slot" can't be known here), so it is told when it lands
+     * ("Moved to ...", a toast once the editor has gone); a refusal is told the same way, and the screens load again.
+     */
     fun move(target: String) {
         val original = base ?: return
         focus.clearFocus()
-        saving = true
         errorText = null
         movedText = null
-        scope.launch {
-            try {
-                val moved = app.api.moveEvent(original.id, to = target)
-                val taskId = original.taskId
-                if (original.isPlannerBlock && taskId != null) {
-                    // The move is saved; unpinning its task goes on behind it.
-                    app.launch { unpin(taskId) }
-                    unpinned = true
-                }
-                app.rememberEvents(listOf(moved))
-                base = moved
-                draft = draft.copy(start = moved.start, end = moved.end)
-                val local = moved.start.atZone(ZoneId.systemDefault())
-                movedText = "Moved to ${dateChipFormat.format(local)}, ${timeChipFormat.format(local)}."
-                saving = false
+        close()
+        app.saveInBackground(
+            write = { app.api.moveEvent(original.id, to = target) },
+            onFailed = { e ->
+                messenger.tell(eventErrorWords(e, "move"))
                 app.dataVersion += 1
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Throwable) {
-                saving = false
-                errorText = eventErrorWords(e, "move")
-                app.note(e)
-            }
-        }
+            },
+            onSaved = { moved ->
+                val taskId = original.taskId
+                // The move is saved; unpinning its task goes on behind it.
+                if (original.isPlannerBlock && taskId != null) app.launch { unpin(taskId) }
+                app.rememberEvents(listOf(moved))
+                val local = moved.start.atZone(ZoneId.systemDefault())
+                messenger.tell("Moved to ${dateChipFormat.format(local)}, ${timeChipFormat.format(local)}.")
+                app.dataVersion += 1
+            },
+        )
     }
 
     fun setStart(new: Instant) {

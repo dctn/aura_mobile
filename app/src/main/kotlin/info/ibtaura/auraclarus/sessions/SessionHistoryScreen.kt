@@ -33,7 +33,6 @@ import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import info.ibtaura.aura.core.AuraApi
 import info.ibtaura.aura.core.AuraError
 import info.ibtaura.aura.core.DayKey
 import info.ibtaura.aura.core.Rewards
@@ -66,8 +65,8 @@ import java.time.LocalDate
 private const val historyDays = 30
 
 /**
- * Search > Sessions: this week's focus and level, a filter, then the last 30 days grouped by day, newest first, loaded
- * ten days at a time as the list scrolls. A row opens the session (`onOpenSession(id)`, wired to
+ * Search > Sessions: this week's focus and level, a filter, then the last 30 days grouped by day, newest first, in one
+ * request that the week header shares (it used to take a request per 10 days plus one for the week, one after another). A row opens the session (`onOpenSession(id)`, wired to
  * `nav.push(Route.SessionDetail(id))`). "Log a break" opens Recovery's sheet; "Export CSV" shares the 30 days.
  */
 @Composable
@@ -115,11 +114,9 @@ fun SessionHistoryScreen(app: AppState, nav: AuraNav, onOpenSession: (String) ->
             }
         }
         try {
-            val from = SessionHistory.weekStart(today)
-            val inWeek = app.cache.load(CacheKeys.historyWeek(DayKey.string(from), DayKey.string(today))) {
-                loadRange(app.api, from, today)
-            }
-            week = SessionHistory.week(inWeek, today)
+            // The 30 days hold this week, and the "All" list loads the same request, so the two share one call.
+            val inDays = HistoryWindows(app, today, SessionFilter.all, historyDays).loadFirst(1)
+            week = SessionHistory.week(inDays, today)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Throwable) {
@@ -295,14 +292,14 @@ fun SessionHistoryScreen(app: AppState, nav: AuraNav, onOpenSession: (String) ->
 /** This week's header from the sessions already in the cache, or null when they aren't there. */
 private fun cachedWeek(app: AppState): WeekSummary? {
     val today = LocalDate.now(DayKey.zone)
-    val key = CacheKeys.historyWeek(DayKey.string(SessionHistory.weekStart(today)), DayKey.string(today))
-    return app.cached<List<SessionDetail>>(key)?.let { SessionHistory.week(it, today) }
+    return HistoryWindows(app, today, SessionFilter.all, historyDays).cachedPrefix()?.let { SessionHistory.week(it.first, today) }
 }
 
 /**
- * Core's SessionHistoryPager with each window kept in the screen cache (`CacheKeys.historyWindow`): the same windows
- * (10 days, newest first), the same paging and filtering, but a window already loaded comes back at once, so a return
- * from a session redraws the list and scrolling over loaded days asks nothing. A failed window is tried again on the
+ * Core's SessionHistoryPager with each window kept in the screen cache (`CacheKeys.historyWindow`), one window of
+ * all 30 days: a window already loaded comes back at once, so a return from a session redraws the list. The cache
+ * holds what the server sent for the filter's `serverKind` and the filter applies after, so "All", "Recovery" and the
+ * week header share one request. A failed window is tried again on the
  * next `loadNext`. Call it from one coroutine at a time.
  */
 private class HistoryWindows(
@@ -319,7 +316,10 @@ private class HistoryWindows(
 
     val hasMore: Boolean get() = loaded < windows.size
 
-    private fun key(index: Int) = CacheKeys.historyWindow(filter.name, windows[index].first, windows[index].second)
+    private fun key(index: Int) =
+        CacheKeys.historyWindow(filter.serverKind ?: "all", windows[index].first, windows[index].second)
+
+    private fun kept(found: List<SessionDetail>): List<SessionDetail> = found.filter { filter.matches(it.record.kind) }
 
     /** The windows in the cache from the newest on, without a gap, merged, and how many; null when none is there. */
     fun cachedPrefix(): Pair<List<SessionDetail>, Int>? {
@@ -327,7 +327,7 @@ private class HistoryWindows(
         var count = 0
         while (count < windows.size) {
             val window = app.cached<List<SessionDetail>>(key(count)) ?: break
-            list = SessionHistory.merged(list, window)
+            list = SessionHistory.merged(list, kept(window))
             count += 1
         }
         return if (count == 0) null else list to count
@@ -338,7 +338,7 @@ private class HistoryWindows(
         val (from, to) = windows[loaded]
         val found = app.cache.load(key(loaded)) { fetch(from, to) }
         loaded += 1
-        return found
+        return kept(found)
     }
 
     /** The newest `count` windows (at least one), merged. */
@@ -348,7 +348,7 @@ private class HistoryWindows(
         return all
     }
 
-    /** One whole window, every cursor page of it, newest first and filtered (as SessionHistoryPager reads it). */
+    /** One whole window, every cursor page of it, newest first; the filter applies after (see `kept`). */
     private suspend fun fetch(from: String, to: String): List<SessionDetail> {
         val found = mutableListOf<SessionDetail>()
         var cursor: String? = null
@@ -359,31 +359,18 @@ private class HistoryWindows(
             cursor = page.cursor?.takeIf { it.isNotEmpty() }
             pages += 1
         } while (cursor != null && pages < MAX_PAGES)
-        return found.filter { filter.matches(it.record.kind) }.sortedByDescending { it.record.startedAt ?: Instant.MIN }
+        return found.sortedByDescending { it.record.startedAt ?: Instant.MIN }
     }
 
     companion object {
-        private const val WINDOW_DAYS = 10
-        private const val PAGE_LIMIT = 100
+        // One window: a 10-day window that came back short made the list ask for the next, one after another.
+        private const val WINDOW_DAYS = 30
+        private const val PAGE_LIMIT = 500
         private const val MAX_PAGES = 20
 
         /** How many windows `totalDays` makes. */
         fun count(totalDays: Int): Int = SessionHistory.windows(LocalDate.now(DayKey.zone), totalDays, WINDOW_DAYS).size
     }
-}
-
-/** Every session from `from` to `to`, following the cursor. */
-private suspend fun loadRange(api: AuraApi, from: LocalDate, to: LocalDate): List<SessionDetail> {
-    val found = mutableListOf<SessionDetail>()
-    var cursor: String? = null
-    var pages = 0
-    do {
-        val page = api.sessionPage(DayKey.string(from), DayKey.string(to), cursor = cursor)
-        found.addAll(page.sessions)
-        cursor = page.cursor?.takeIf { it.isNotEmpty() }
-        pages += 1
-    } while (cursor != null && pages < 10)
-    return found
 }
 
 /** This week's focus and sessions, then the level with its XP bar and the plant. */

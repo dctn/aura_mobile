@@ -5,9 +5,9 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -252,25 +252,26 @@ internal fun ZoneDayGrid(
     }.joinToString(". ")
 
     val height = hourHeight * (to - from).toFloat() + gridPad * 2
-    BoxWithConstraints(
+    // A plain Box, not BoxWithConstraints: nothing here needs the measured width. Everything right of the gutter fills
+    // the width and steps in by the gutter with padding, and event lanes share their row by weight, so the grid
+    // composes in one pass instead of waiting for a subcomposition.
+    Box(
         Modifier
             .fillMaxWidth()
             .height(height)
             .semantics { contentDescription = spoken }
             .testTag("calendar-day-grid"),
     ) {
-        val width = maxWidth
-        val area = max(0.dp, width - gutter)
-
-        // Shades.
+        // Shades: from the gutter to the right edge.
         zones.forEach { zone ->
             val top = y(minutes(zone.start))
             val bottom = y(minutes(zone.end))
             val style = ZoneStyle.of(zone.kind)
             Box(
                 Modifier
-                    .offset(x = gutter, y = top)
-                    .width(area)
+                    .offset(y = top)
+                    .fillMaxWidth()
+                    .padding(start = gutter)
                     .height(max(0.dp, bottom - top))
                     .background(style.color)
                     .clearAndSetSemantics {},
@@ -299,31 +300,38 @@ internal fun ZoneDayGrid(
                     modifier = Modifier.offset(x = 0.dp, y = top - 8.dp).width(gutter - 6.dp).clearAndSetSemantics {},
                 )
             }
-            Box(Modifier.offset(x = gutter, y = top).width(area).height(0.5.dp).background(lineColor))
+            Box(Modifier.offset(y = top).fillMaxWidth().padding(start = gutter).height(0.5.dp).background(lineColor))
         }
 
-        // Events.
-        val laneArea = max(0.dp, width - gutter - 4.dp)
+        // Events. Each block sits in a full-width row that starts 4dp past the gutter and is split into equal lanes:
+        // a spacer as wide as the lanes before it, the block in its own lane (less a 3dp gap on its right, outside
+        // the block so the gap isn't tappable), and a spacer for the lanes after it. The row itself has no
+        // semantics or click, so taps and the screen reader go straight to the block.
         blocks.forEach { block ->
-            val laneWidth = laneArea / maxOf(1, block.lanes).toFloat()
+            val lanes = maxOf(1, block.lanes)
+            val lane = block.lane.coerceIn(0, lanes - 1)
             val top = y(block.start)
             val blockHeight = max(minBlock, y(block.end) - top)
-            ZoneEventBlock(
-                block.event,
-                blockHeight,
-                Modifier
-                    .offset(x = gutter + 4.dp + laneWidth * block.lane.toFloat(), y = top)
-                    .width(max(0.dp, laneWidth - 3.dp))
-                    .height(blockHeight),
-                onClick = onEventClick?.let { open -> { open(block.event) } },
-            )
+            Row(Modifier.offset(y = top).fillMaxWidth().padding(start = gutter + 4.dp)) {
+                if (lane > 0) Spacer(Modifier.weight(lane.toFloat()))
+                ZoneEventBlock(
+                    block.event,
+                    blockHeight,
+                    Modifier
+                        .weight(1f)
+                        .padding(end = 3.dp)
+                        .height(blockHeight),
+                    onClick = onEventClick?.let { open -> { open(block.event) } },
+                )
+                if (lanes - lane - 1 > 0) Spacer(Modifier.weight((lanes - lane - 1).toFloat()))
+            }
         }
 
         // Now, on today only.
         val nowMinute = (now.toEpochMilli() - dayStart.toEpochMilli()) / 60_000.0
         if (nowMinute >= from * 60 && nowMinute <= to * 60 && nowMinute < 24 * 60) {
             val top = y(nowMinute)
-            Box(Modifier.offset(x = gutter, y = top - 0.75.dp).width(area).height(1.5.dp).background(AuraColors.red))
+            Box(Modifier.offset(y = top - 0.75.dp).fillMaxWidth().padding(start = gutter).height(1.5.dp).background(AuraColors.red))
             Box(Modifier.offset(x = gutter - 4.dp, y = top - 4.dp).size(8.dp).background(AuraColors.red, CircleShape))
         }
     }

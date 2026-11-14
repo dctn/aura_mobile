@@ -357,7 +357,9 @@ class RunController(
         sendTomorrowTasks()
         save()
         expanded = true
-        if (canBeep && isInForeground()) beep()
+        // No beep in the walks: CI's emulator runs with -noaudio, and the tone took the whole emulator down at the end of
+        // the Done sheet walk in three runs out of three.
+        if (canBeep && !app.flags.isUiTesting && isInForeground()) beep()
     }
 
     private fun isInForeground(): Boolean = runCatching {

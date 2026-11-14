@@ -40,7 +40,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -79,8 +78,7 @@ import info.ibtaura.auraclarus.design.hex
 import info.ibtaura.auraclarus.shell.AppState
 import info.ibtaura.auraclarus.shell.OwnSaves
 import info.ibtaura.auraclarus.shell.saveInBackground
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.launch
+import kotlinx.coroutines.CompletableDeferred
 import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalTime
@@ -100,8 +98,8 @@ import java.time.format.FormatStyle
  *
  * Instant saves: Add, Save and Delete show the change through `onDone` and close the sheet at once; the write runs in
  * the app's scope. `onSaved` then gets the server's version, or `onFailed` what to put back and the words to show.
- * The title check still keeps the sheet open. Schedule waits for its save, since Find a time plans the task on the
- * server. `own` marks the planner-block clean-up's data bump as the page's own, so the page doesn't load again.
+ * The title check still keeps the sheet open. Schedule is instant too: it shows the task, closes and opens Find a
+ * time at once, and Find a time waits for the save (`TaskSaveGate`) before the Planner places the task. `own` marks the planner-block clean-up's data bump as the page's own, so the page doesn't load again.
  */
 @Composable
 internal fun TaskEditorSheet(
@@ -122,45 +120,36 @@ internal fun TaskEditorSheet(
     var errorText by remember { mutableStateOf<String?>(null) }
     var confirmingDelete by remember { mutableStateOf(false) }
     var triedSave by remember { mutableStateOf(false) }
-    val scope = rememberCoroutineScope()
     val focus = LocalFocusManager.current
     val isNew = task == null
     val problem = draft.problem
 
-    /** Shows `edit` at once, closes the sheet and saves in the app's scope; a failure puts `undo` back. */
-    fun showAndSave(action: String, edit: TaskEdit, undo: TaskUndo, write: suspend () -> TaskEdit) {
+    /**
+     * Shows `edit` at once, closes the sheet and saves in the app's scope; a failure puts `undo` back. `landed`, when
+     * given, answers whether the save went through (Find a time waits on it after Schedule).
+     */
+    fun showAndSave(
+        action: String,
+        edit: TaskEdit,
+        undo: TaskUndo,
+        landed: CompletableDeferred<Boolean>? = null,
+        write: suspend () -> TaskEdit,
+    ) {
         onDone(edit)
         onClose()
-        app.saveInBackground(
+        val job = app.saveInBackground(
             write = write,
-            onFailed = { e -> onFailed(TaskSaveFailure(undo, TaskText.errorWords(e, action), taskNeedsReload(e))) },
-            onSaved = onSaved,
+            onFailed = { e ->
+                landed?.complete(false)
+                onFailed(TaskSaveFailure(undo, TaskText.errorWords(e, action), taskNeedsReload(e)))
+            },
+            onSaved = {
+                landed?.complete(true)
+                onSaved(it)
+            },
         )
-    }
-
-    /** Waits for the write with the sheet open (Schedule), then closes. */
-    fun run(action: String, after: (TaskEdit?) -> Unit = {}, write: suspend () -> TaskEdit?) {
-        saving = true
-        errorText = null
-        scope.launch {
-            try {
-                val result = write()
-                saving = false
-                // Already saved: shown and confirmed in one go.
-                result?.let {
-                    onDone(it)
-                    onSaved(it)
-                }
-                onClose()
-                after(result)
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Throwable) {
-                saving = false
-                errorText = TaskText.errorWords(e, action)
-                app.note(e)
-            }
-        }
+        // Cancelled without an answer: never leave Find a time waiting.
+        landed?.let { gate -> job.invokeOnCompletion { gate.complete(false) } }
     }
 
     AuraSheet(onDismiss = { if (!saving) onClose() }, dismissible = !saving) {
@@ -278,13 +267,28 @@ internal fun TaskEditorSheet(
                         if (problem != null) return@PillButton
                         val current = draft.copy(autoAllocate = true)
                         draft = current
-                        run("save", after = { edit -> (edit as? TaskEdit.Saved)?.let { onSchedule(it.task) } }) {
-                            val saved = if (task == null) {
-                                app.api.createTask(current, newId)
-                            } else {
-                                app.api.updateTask(task.id, task.version, current.changes(task)) ?: task
+                        // Shown and closed at once; Find a time opens now and waits for the save before planning.
+                        val landed = CompletableDeferred<Boolean>()
+                        if (task == null) {
+                            val shown = current.previewTask(newId)
+                            TaskSaveGate.track(app, newId, landed)
+                            showAndSave("save", TaskEdit.Saved(shown), TaskUndo(newId, null), landed) {
+                                TaskEdit.Saved(app.api.createTask(current, newId))
                             }
-                            TaskEdit.Saved(saved)
+                            onSchedule(shown)
+                        } else {
+                            val changes = current.changes(task)
+                            if (changes.isEmpty) {
+                                onClose()
+                                onSchedule(task)
+                            } else {
+                                val shown = changes.appliedTo(task)
+                                TaskSaveGate.track(app, task.id, landed)
+                                showAndSave("save", TaskEdit.Saved(shown), TaskUndo(task.id, task), landed) {
+                                    TaskEdit.Saved(app.api.updateTask(task.id, task.version, changes) ?: shown)
+                                }
+                                onSchedule(shown)
+                            }
                         }
                     },
                     Modifier.testTag("task-schedule"),

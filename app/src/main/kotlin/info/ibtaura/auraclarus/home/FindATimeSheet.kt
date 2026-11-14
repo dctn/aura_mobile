@@ -154,6 +154,12 @@ fun FindATimeSheet(app: AppState, nav: AuraNav, route: Route.FindATime) {
             return@LaunchedEffect
         }
         phase = FindATimePhase.Loading
+        // After Schedule the task may still be saving: the Planner can place it only once it's there. A refused save
+        // is told by the Tasks page; here the preview just fails.
+        if (!TaskSaveGate.await(app, requestIds)) {
+            phase = FindATimePhase.Failed
+            return@LaunchedEffect
+        }
         try {
             phase = FindATimePhase.Preview(
                 app.api.allocate(date = selectedDate, dryRun = true, skipCheck = skipCheck, taskIds = requestIds),

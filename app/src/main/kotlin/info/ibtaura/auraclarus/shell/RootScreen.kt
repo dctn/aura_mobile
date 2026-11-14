@@ -28,6 +28,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
@@ -48,7 +49,10 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
+import androidx.navigation.NavGraph
 import androidx.navigation.NavGraphBuilder
+import androidx.navigation.NavHostController
+import androidx.navigation.createGraph
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
@@ -122,6 +126,12 @@ fun RootScreen(app: AppState) {
 private fun MainTabs(app: AppState) {
     val nav = remember(app) { AuraNav(app) }
     val holder = rememberSaveableStateHolder()
+    // One controller per tab, kept here rather than inside the tab: a tab coming back reattaches its own controller
+    // (back stack included) and its already-built graph, instead of restoring a new controller and rebuilding every
+    // destination's route pattern (~23 ms a switch). Each controller is saved here across rotation and process death.
+    val controllers = Tab.entries.associateWith { t -> key(t.name) { rememberNavController() } }
+    // Built the first time each tab shows, with that tab's own controller (a graph is never shared between controllers).
+    val graphs = remember { mutableMapOf<NavHostController, NavGraph>() }
     val density = LocalDensity.current
     // The floating bars' own height (tab bar, plus the mini run bar while it shows), measured without the navigation
     // bar under them; starts at the tab bar's size so the first frame already clears it.
@@ -139,10 +149,15 @@ private fun MainTabs(app: AppState) {
     Box(Modifier.fillMaxSize().background(AuraColors.background)) {
         // Every tab page pads its bottom by this (bottomPadding() adds the gap), so its last item scrolls clear.
         CompositionLocalProvider(LocalBottomInset provides barsHeight + navBarHeight) {
-            // One back stack per tab: each tab's controller is saved with its pages while another tab shows.
+            // One back stack per tab: each tab keeps its controller above, and its pages' saved state (scroll and the
+            // like) is kept by the holder while another tab shows.
             val tab = nav.tab
+            val controller = controllers.getValue(tab)
+            val graph = graphs.getOrPut(controller) {
+                controller.createGraph(startDestination = tab.root) { auraDestinations(app, nav) }
+            }
             holder.SaveableStateProvider(tab.name) {
-                TabHost(app, nav, tab)
+                TabHost(nav, tab, controller, graph)
             }
         }
 
@@ -193,8 +208,7 @@ private fun Cover(tag: String, content: @Composable () -> Unit) {
 }
 
 @Composable
-private fun TabHost(app: AppState, nav: AuraNav, tab: Tab) {
-    val controller = rememberNavController()
+private fun TabHost(nav: AuraNav, tab: Tab, controller: NavHostController, graph: NavGraph) {
     DisposableEffect(controller, tab) {
         nav.controllers[tab] = controller
         val perf = PerfMarks.destinationListener(tab.name)
@@ -204,17 +218,17 @@ private fun TabHost(app: AppState, nav: AuraNav, tab: Tab) {
             if (nav.controllers[tab] === controller) nav.controllers.remove(tab)
         }
     }
+    // Leaving composition completes any page transition still running (NavHost's own dispose), and coming back with
+    // the same controller and graph is a no-op graph update, so nothing is rebuilt.
     NavHost(
         navController = controller,
-        startDestination = tab.root,
+        graph = graph,
         modifier = Modifier.fillMaxSize(),
         enterTransition = { slideInHorizontally { it } },
         exitTransition = { slideOutHorizontally { -it / 3 } },
         popEnterTransition = { slideInHorizontally { -it / 3 } },
         popExitTransition = { slideOutHorizontally { it } },
-    ) {
-        auraDestinations(app, nav)
-    }
+    )
 }
 
 /** Every page, in every tab's graph (a metric can open from Home and from Search). */
