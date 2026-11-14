@@ -57,7 +57,10 @@ data class AppConfig(
 
 enum class ServiceName(val raw: String) {
     identity("identity"), healthData("health-data"), notification("notification"), calendar("calendar"),
-    capacity("capacity"), content("content"), habit("habit"), planner("planner"), session("session"), task("task");
+    capacity("capacity"), content("content"), habit("habit"), planner("planner"), session("session"), task("task"),
+
+    /** Keeps Apple Health and Health Connect days. Its URL may be missing from the config (Health Connect sync then skips). */
+    appleHealthData("apple-health-data");
 
     companion object {
         fun fromRaw(raw: String): ServiceName? = entries.firstOrNull { it.raw == raw }
