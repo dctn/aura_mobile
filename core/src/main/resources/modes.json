@@ -1,0 +1,1343 @@
+[
+  {
+    "id": "timer",
+    "name": "Timer",
+    "word": "Timer",
+    "shelf": "Focus",
+    "minutes": 25,
+    "choices": [
+      15,
+      25,
+      30,
+      45,
+      60,
+      90,
+      120
+    ],
+    "kind": "focus",
+    "run": "timer",
+    "note": "Count down one block of work."
+  },
+  {
+    "id": "flow",
+    "name": "Flow",
+    "word": "Flow",
+    "shelf": "Focus",
+    "minutes": 0,
+    "kind": "focus",
+    "run": "flow",
+    "note": "No countdown: stop when your focus fades."
+  },
+  {
+    "id": "meeting",
+    "name": "Meeting",
+    "word": "Meeting",
+    "shelf": "Focus",
+    "minutes": 30,
+    "choices": [
+      15,
+      30,
+      45,
+      60,
+      90
+    ],
+    "kind": "meeting",
+    "run": "timer",
+    "note": "Time a call so it ends when it should."
+  },
+  {
+    "id": "coherent",
+    "name": "Coherent",
+    "word": "Coherent",
+    "shelf": "Breathe",
+    "minutes": 5,
+    "choices": [
+      2,
+      3,
+      5,
+      10
+    ],
+    "kind": "recovery",
+    "run": "breathe",
+    "note": "In for 5, out for 5.",
+    "pattern": {
+      "in": 5,
+      "out": 5
+    }
+  },
+  {
+    "id": "box",
+    "name": "Box",
+    "word": "Box",
+    "shelf": "Breathe",
+    "minutes": 5,
+    "choices": [
+      2,
+      3,
+      5,
+      10
+    ],
+    "kind": "recovery",
+    "run": "breathe",
+    "note": "In 4, hold 4, out 4, hold 4. Steadies you fast.",
+    "pattern": {
+      "in": 4,
+      "hold": 4,
+      "out": 4,
+      "hold2": 4
+    }
+  },
+  {
+    "id": "four-seven-eight",
+    "name": "4-7-8",
+    "word": "4-7-8",
+    "shelf": "Breathe",
+    "minutes": 5,
+    "choices": [
+      2,
+      3,
+      5,
+      10
+    ],
+    "kind": "recovery",
+    "run": "breathe",
+    "note": "A long breath out that helps you settle for sleep.",
+    "pattern": {
+      "in": 4,
+      "hold": 7,
+      "out": 8
+    }
+  },
+  {
+    "id": "diaphragmatic",
+    "name": "Diaphragmatic",
+    "word": "Belly",
+    "shelf": "Breathe",
+    "minutes": 5,
+    "choices": [
+      2,
+      3,
+      5,
+      10
+    ],
+    "kind": "recovery",
+    "run": "breathe",
+    "note": "Breathe deep into the belly, longer out than in.",
+    "pattern": {
+      "in": 4,
+      "out": 6
+    }
+  },
+  {
+    "id": "breath-awareness",
+    "name": "Breath awareness",
+    "word": "Awareness",
+    "shelf": "Meditate",
+    "minutes": 10,
+    "choices": [
+      5,
+      10,
+      15,
+      20
+    ],
+    "kind": "recovery",
+    "run": "guided",
+    "note": "Settle the mind by following your breath.",
+    "prompts": [
+      "Close your eyes and settle in.",
+      "Notice the natural rhythm of your breath.",
+      "Follow each inhale… and each exhale.",
+      "When the mind wanders, gently return to the breath.",
+      "Rest in this steady rhythm.",
+      "Slowly widen your awareness. Open your eyes when ready."
+    ]
+  },
+  {
+    "id": "body-scan",
+    "name": "Body scan",
+    "word": "Body Scan",
+    "shelf": "Meditate",
+    "minutes": 10,
+    "choices": [
+      5,
+      10,
+      15,
+      20
+    ],
+    "kind": "recovery",
+    "run": "guided",
+    "note": "Let go of tension from your head down to your feet.",
+    "prompts": [
+      "Bring attention to the top of your head.",
+      "Soften your face, jaw and shoulders.",
+      "Let your arms and hands grow heavy.",
+      "Relax your chest and belly with each breath.",
+      "Release your legs down to your feet.",
+      "Feel your whole body at ease."
+    ]
+  },
+  {
+    "id": "loving-kindness",
+    "name": "Loving-kindness",
+    "word": "Kindness",
+    "shelf": "Meditate",
+    "minutes": 10,
+    "choices": [
+      5,
+      10,
+      15,
+      20
+    ],
+    "kind": "recovery",
+    "run": "guided",
+    "note": "Warm wishes for someone you care about, then for you.",
+    "prompts": [
+      "Picture someone you care about.",
+      "Wish them: may you be happy.",
+      "May you be healthy.",
+      "May you be at peace.",
+      "Now offer the same wishes to yourself.",
+      "Carry this warmth with you."
+    ]
+  },
+  {
+    "id": "evening-wind-down",
+    "name": "Evening wind-down",
+    "word": "Evening",
+    "shelf": "Meditate",
+    "minutes": 10,
+    "choices": [
+      5,
+      10,
+      15,
+      20
+    ],
+    "kind": "recovery",
+    "run": "guided",
+    "note": "Let the day go and get ready to rest.",
+    "prompts": [
+      "Let the day's tasks fall away.",
+      "Breathe in calm… breathe out tension.",
+      "Notice three things you're grateful for.",
+      "Let your breathing slow and deepen.",
+      "Feel yourself growing calm and drowsy.",
+      "Rest easy."
+    ]
+  },
+  {
+    "id": "grounding",
+    "name": "Grounding",
+    "word": "Grounding",
+    "shelf": "Meditate",
+    "minutes": 10,
+    "choices": [
+      5,
+      10,
+      15,
+      20
+    ],
+    "kind": "recovery",
+    "run": "guided",
+    "note": "Ease worry by noticing where you are right now.",
+    "prompts": [
+      "Feel your feet on the floor.",
+      "Notice five things you can sense right now.",
+      "Breathe slowly into your belly.",
+      "You are safe in this moment.",
+      "Let the ground hold you.",
+      "Carry this steadiness forward."
+    ]
+  },
+  {
+    "id": "single-point-focus",
+    "name": "Single-point focus",
+    "word": "One Point",
+    "shelf": "Meditate",
+    "minutes": 10,
+    "choices": [
+      5,
+      10,
+      15,
+      20
+    ],
+    "kind": "recovery",
+    "run": "guided",
+    "note": "Rest your attention on one point to sharpen it.",
+    "prompts": [
+      "Choose one point: your breath at the nostrils.",
+      "Rest all attention there.",
+      "When it drifts, gently bring it back.",
+      "Sharpen the focus, softly.",
+      "Stay with this one point.",
+      "Notice how steady the mind can be."
+    ]
+  },
+  {
+    "id": "nap-10",
+    "name": "Ten-minute nap",
+    "word": "Nap",
+    "shelf": "Sleep",
+    "minutes": 10,
+    "choices": [
+      5,
+      10,
+      15,
+      20,
+      25,
+      30
+    ],
+    "kind": "recovery",
+    "run": "timer",
+    "note": "Lie down, eyes closed. Before 3 pm.",
+    "evidence": "Brooks & Lack (2006) compared 5, 10, 20 and 30-minute naps against no nap after a restricted night. The 10-minute nap improved sleep latency, subjective sleepiness, fatigue, vigour and cognitive performance immediately on waking, with benefits still present at 155 minutes, and produced no sleep inertia.",
+    "avoidHours": [
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23
+    ],
+    "bestHours": [
+      13,
+      14,
+      15
+    ],
+    "nowTitle": "Ten minutes between meetings",
+    "night": true
+  },
+  {
+    "id": "caffeine-nap",
+    "name": "Coffee then nap",
+    "word": "Coffee Nap",
+    "shelf": "Sleep",
+    "minutes": 20,
+    "choices": [
+      10,
+      15,
+      20,
+      25,
+      30,
+      45,
+      60
+    ],
+    "kind": "recovery",
+    "run": "timer",
+    "note": "Drink a coffee, then nap. You wake as it kicks in.",
+    "evidence": "Caffeine reaches peak plasma concentration ~20 min after drinking, and sleep clears adenosine from its receptors. Napping across the absorption window means the caffeine arrives at receptors adenosine has already vacated, so the two effects add rather than compete. Outperforms either alone on driving-simulator and vigilance tasks.",
+    "avoidHours": [
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23
+    ],
+    "bestHours": [
+      13,
+      14,
+      15
+    ],
+    "nowTitle": "Coffee before two",
+    "night": true
+  },
+  {
+    "id": "nap-20",
+    "name": "Twenty-minute nap",
+    "word": "Nap 20",
+    "shelf": "Sleep",
+    "minutes": 20,
+    "choices": [
+      10,
+      15,
+      20,
+      25,
+      30,
+      45,
+      60
+    ],
+    "kind": "recovery",
+    "run": "timer",
+    "note": "Pays off about half an hour after you wake.",
+    "evidence": "Brooks & Lack (2006): the 20-minute nap's benefits to sleepiness, fatigue and cognition did not appear until 35 minutes after waking, unlike the 10-minute nap which improved every outcome immediately.",
+    "avoidHours": [
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23
+    ],
+    "bestHours": [
+      13,
+      14,
+      15
+    ],
+    "night": true
+  },
+  {
+    "id": "nap-30",
+    "name": "Thirty-minute nap",
+    "word": "Nap 30",
+    "shelf": "Sleep",
+    "minutes": 30,
+    "choices": [
+      15,
+      20,
+      25,
+      30,
+      45,
+      60
+    ],
+    "kind": "recovery",
+    "run": "timer",
+    "note": "Groggy at first. Leave time before anything that matters.",
+    "evidence": "In Brooks & Lack (2006) the 30-minute nap produced measurable impairment immediately on waking - performance below the no-nap control - before any benefit emerged. The nap reaches slow-wave sleep, and waking out of it produces sleep inertia.",
+    "avoidHours": [
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23
+    ],
+    "bestHours": [
+      13,
+      14,
+      15
+    ],
+    "night": true
+  },
+  {
+    "id": "wind-down",
+    "name": "Wind-down",
+    "word": "Wind Down",
+    "shelf": "Sleep",
+    "minutes": 10,
+    "kind": "recovery",
+    "run": "winddown",
+    "note": "Dim the lights. Write down what is on your mind for tomorrow."
+  },
+  {
+    "id": "recovery-break",
+    "name": "Recovery break",
+    "word": "Rest",
+    "shelf": "Rest",
+    "minutes": 10,
+    "choices": [
+      5,
+      10,
+      15,
+      20,
+      25,
+      30
+    ],
+    "kind": "recovery",
+    "run": "timer",
+    "note": "Ten quiet minutes, no screen."
+  },
+  {
+    "id": "nsdr",
+    "name": "Non-sleep deep rest",
+    "word": "Deep Rest",
+    "shelf": "Rest",
+    "minutes": 20,
+    "choices": [
+      10,
+      15,
+      20,
+      25,
+      30,
+      45,
+      60
+    ],
+    "kind": "recovery",
+    "run": "timer",
+    "note": "Most of a nap's lift, with no risk of falling asleep.",
+    "evidence": "Guided body-scan and yoga-nidra protocols shift autonomic balance toward parasympathetic dominance while the practitioner stays awake, producing measurable HRV increase without entering slow-wave sleep - hence no sleep inertia and no effect on night-time sleep pressure."
+  },
+  {
+    "id": "cold-face",
+    "name": "Cold water on your face",
+    "word": "Cold Face",
+    "shelf": "Rest",
+    "minutes": 2,
+    "choices": [
+      2,
+      5,
+      10
+    ],
+    "kind": "recovery",
+    "run": "timer",
+    "note": "Ninety seconds at a cold tap slows your heart fast.",
+    "evidence": "The diving reflex: cold receptors in the trigeminal distribution of the face, particularly around the eyes and forehead, trigger vagally-mediated bradycardia within seconds of immersion or cold application. This is one of the few interventions in the catalogue with a direct, immediate, mechanically-understood parasympathetic effect. The effect is large but short-lived, which is why the base gain stays small."
+  },
+  {
+    "id": "warm-bath",
+    "name": "Hot bath before bed",
+    "word": "Hot Bath",
+    "shelf": "Rest",
+    "minutes": 20,
+    "choices": [
+      10,
+      15,
+      20,
+      25,
+      30,
+      45,
+      60
+    ],
+    "kind": "recovery",
+    "run": "timer",
+    "note": "One to two hours before bed helps you fall asleep.",
+    "evidence": "Haghayegh et al. (2019, Sleep Medicine Reviews) meta-analysed passive body heating trials: a 10-minute-plus bath or shower at 40-42.5C, taken 1-2 hours before bed, cut sleep onset latency by around 10 minutes and improved subjective sleep quality. The mechanism is peripheral vasodilation, which accelerates the core-temperature drop that initiates sleep - which is why the timing matters more than the temperature.",
+    "bestHours": [
+      20,
+      21
+    ],
+    "nowTitle": "Hot bath before bed"
+  },
+  {
+    "id": "sauna",
+    "name": "Sauna",
+    "word": "Sauna",
+    "shelf": "Rest",
+    "minutes": 20,
+    "choices": [
+      10,
+      15,
+      20,
+      25,
+      30,
+      45,
+      60
+    ],
+    "kind": "recovery",
+    "run": "timer",
+    "note": "The calm comes in the hour after you step out.",
+    "evidence": "Heart rate rises and HRV falls during heat exposure; the parasympathetic rebound follows in the 30-60 minutes after cooling. Laukkanen et al.'s Finnish cohort (KIHD, 2015) found frequent sauna bathing associated with lower cardiovascular and all-cause mortality, though that is observational and long-run. Acute cognitive evidence is thin - the base gain reflects the relaxation and detachment, not a performance claim."
+  },
+  {
+    "id": "day-off",
+    "name": "A whole day off",
+    "word": "Day Off",
+    "shelf": "Rest",
+    "minutes": 480,
+    "kind": "recovery",
+    "run": "plan",
+    "note": "The lift fades within a week, so take them often.",
+    "evidence": "Sonnentag's weekend and vacation recovery studies find that recovery experiences during non-work days predict well-being and engagement at the start of the following week, and that the effect fades quickly - within days to a couple of weeks after a holiday. Detachment during the day off, not its length, is what carries the effect."
+  },
+  {
+    "id": "zone2",
+    "name": "Easy aerobic session",
+    "word": "Aerobic",
+    "shelf": "Movement",
+    "minutes": 30,
+    "choices": [
+      15,
+      20,
+      25,
+      30,
+      45,
+      60
+    ],
+    "kind": "walk",
+    "run": "timer",
+    "note": "Brisk pace: you can talk but not sing.",
+    "evidence": "Acute-exercise meta-analyses show an inverted-U in intensity for executive function: moderate intensity produces the largest benefit, with peak effects 11-20 minutes after finishing. High intensity transiently impairs prefrontal function instead."
+  },
+  {
+    "id": "urban-walk",
+    "name": "Walk round the block",
+    "word": "Walk",
+    "shelf": "Movement",
+    "minutes": 20,
+    "choices": [
+      10,
+      15,
+      20,
+      25,
+      30,
+      45,
+      60
+    ],
+    "kind": "walk",
+    "run": "timer",
+    "note": "A relaxed pace you could talk at.",
+    "evidence": "Berman, Jonides & Kaplan (2008): an urban walk of equivalent length and duration produced no significant improvement on backward digit span, while the nature walk produced ~20%. Urban environments contain stimuli that capture attention in ways requiring inhibition, so directed attention does not recover.",
+    "nowTitle": "Walk round the block"
+  },
+  {
+    "id": "stand-reset",
+    "name": "Stand up and reset",
+    "word": "Stand Up",
+    "shelf": "Movement",
+    "minutes": 3,
+    "choices": [
+      3,
+      5,
+      10
+    ],
+    "kind": "walk",
+    "run": "timer",
+    "note": "Stand up, walk, stretch.",
+    "evidence": "Trials interrupting prolonged sitting with short activity breaks every 20-30 minutes (Dunstan et al. and subsequent replications) show reliable improvements in postprandial glucose and vascular function, and smaller, less consistent improvements in self-reported fatigue and vigour. The acute cognitive evidence is weak - the base gain reflects that rather than the enthusiasm this intervention usually attracts."
+  },
+  {
+    "id": "stair-break",
+    "name": "Five minutes of stairs",
+    "word": "Stairs",
+    "shelf": "Movement",
+    "minutes": 5,
+    "choices": [
+      5,
+      10,
+      15
+    ],
+    "kind": "walk",
+    "run": "timer",
+    "note": "More of a lift than a coffee, and the stairs are right there.",
+    "evidence": "Randolph & O'Connor (2017, Physiology & Behavior) compared 10 minutes of low-to-moderate stair walking against 50 mg of caffeine in sleep-deprived participants: the stair walking produced larger increases in self-reported energy and motivation. Expected HRV is slightly negative because the band is reading during the sympathetic phase immediately after brief exertion, not a failure of the intervention.",
+    "nowTitle": "Five minutes of stairs"
+  },
+  {
+    "id": "mobility",
+    "name": "Stretch and move",
+    "word": "Stretch",
+    "shelf": "Movement",
+    "minutes": 15,
+    "choices": [
+      10,
+      15,
+      20,
+      25,
+      30,
+      45
+    ],
+    "kind": "walk",
+    "run": "timer",
+    "note": "Gentle, for days a real workout isn't happening.",
+    "evidence": "Static stretching and slow mobility work produce small acute increases in parasympathetic indices, in contrast to the suppression seen after moderate and vigorous exercise - the intensity stays below the threshold that drives sympathetic activation. Cognitive-performance evidence is limited, so this is priced on the autonomic effect and the sitting it interrupts."
+  },
+  {
+    "id": "yoga",
+    "name": "Yoga",
+    "word": "Yoga",
+    "shelf": "Movement",
+    "minutes": 45,
+    "choices": [
+      25,
+      30,
+      45,
+      60
+    ],
+    "kind": "walk",
+    "run": "timer",
+    "note": "Half of it is slow breathing, so it calms as it moves.",
+    "evidence": "Meta-analyses of yoga interventions report increases in vagally-mediated HRV, both acutely after sessions and in resting measures after sustained practice - unlike aerobic or resistance work, which suppress HRV acutely. The pranayama component means much of a session is slow paced breathing, sharing the baroreflex mechanism behind resonance breathing."
+  },
+  {
+    "id": "dance",
+    "name": "Dance",
+    "word": "Dance",
+    "shelf": "Movement",
+    "minutes": 30,
+    "choices": [
+      15,
+      20,
+      25,
+      30,
+      45,
+      60
+    ],
+    "kind": "walk",
+    "run": "timer",
+    "note": "Music and steps to learn leave no room for work.",
+    "evidence": "Controlled trials of dance interventions find reductions in depression and anxiety scores comparable to or exceeding matched aerobic exercise, with the difference attributed to the music, social and skill-acquisition components rather than the physical load. Expected HRV lift is close to zero: moderate exertion suppresses it while the relaxation component raises it."
+  },
+  {
+    "id": "walking-meeting",
+    "name": "Take the call walking",
+    "word": "Walk Call",
+    "shelf": "Movement",
+    "minutes": 30,
+    "choices": [
+      15,
+      20,
+      25,
+      30,
+      45,
+      60
+    ],
+    "kind": "walk",
+    "run": "timer",
+    "note": "Costs no extra time, though a free walk rests you more.",
+    "evidence": "Oppezzo & Schwartz (2014, Journal of Experimental Psychology: Learning, Memory, and Cognition) found walking increased divergent-thinking output by an average of 60% versus sitting, with the effect persisting shortly after sitting back down. It scores no detachment - the work content continues - which is why it is priced level with mobility rather than with the urban walk."
+  },
+  {
+    "id": "strength",
+    "name": "Lift something heavy",
+    "word": "Strength",
+    "shelf": "Movement",
+    "minutes": 45,
+    "choices": [
+      25,
+      30,
+      45,
+      60
+    ],
+    "kind": "walk",
+    "run": "timer",
+    "note": "Builds you up for later. Expect to feel tired tonight.",
+    "evidence": "Resistance training acutely suppresses vagally-mediated HRV for hours afterwards through sympathetic activation and raised core temperature - a negative expected lift is the correct prediction, not a failure. The adaptation is real but accrues over weeks, scored here through the high regularity ceiling rather than the same-day award."
+  },
+  {
+    "id": "hard-training",
+    "name": "Train hard",
+    "word": "Train Hard",
+    "shelf": "Movement",
+    "minutes": 45,
+    "choices": [
+      25,
+      30,
+      45,
+      60
+    ],
+    "kind": "walk",
+    "run": "timer",
+    "note": "Great for tomorrow, tiring today. Walk if work is left.",
+    "evidence": "High-intensity exercise transiently impairs prefrontal function - transient hypofrontality, where metabolic resources are reallocated away from prefrontal cortex during and shortly after intense effort. Acute-exercise meta-analyses put high intensity on the falling side of the inverted-U for immediate executive function."
+  },
+  {
+    "id": "meditation-break",
+    "name": "Ten minutes between meetings",
+    "word": "Pause",
+    "shelf": "Mind",
+    "minutes": 10,
+    "choices": [
+      5,
+      10,
+      15,
+      20,
+      25,
+      30
+    ],
+    "kind": "recovery",
+    "run": "timer",
+    "note": "Stress builds across back-to-back calls. Ten minutes stops it.",
+    "evidence": "Microsoft's Human Factors Lab measured EEG beta-wave activity across four back-to-back 30-minute meetings and found it accumulated steadily. When the same meetings were separated by 10-minute meditation breaks, beta activity reset between them and fell over the session instead of rising."
+  },
+  {
+    "id": "music-break",
+    "name": "Put music on",
+    "word": "Music",
+    "shelf": "Mind",
+    "minutes": 15,
+    "choices": [
+      10,
+      15,
+      20,
+      25,
+      30,
+      45
+    ],
+    "kind": "recovery",
+    "run": "timer",
+    "note": "Really listen. Music behind your email doesn't count.",
+    "evidence": "Thoma et al. (2013, PLoS ONE) randomised participants to relaxing music, rippling water or silence before a standardised psychosocial stressor and found the music group showed a faster autonomic recovery. Effects on the cortisol response were less clear-cut, and the literature is heterogeneous on which music works for whom - hence a modest base gain."
+  },
+  {
+    "id": "resonance-breathing",
+    "name": "Breathe at six a minute",
+    "word": "Six a Min",
+    "shelf": "Mind",
+    "minutes": 10,
+    "choices": [
+      5,
+      10,
+      15,
+      20,
+      25,
+      30
+    ],
+    "kind": "recovery",
+    "run": "breathe",
+    "note": "Slow breathing for ten minutes, anywhere, nothing needed.",
+    "evidence": "At roughly 6 breaths/min (0.1 Hz) respiratory sinus arrhythmia synchronises with baroreflex-driven blood-pressure waves and the two resonate, increasing heart-rate oscillation amplitude severalfold. The acute HRV effect is large and reliable; change in resting HRV outside sessions is modest, which is why the capacity award stays moderate.",
+    "pattern": {
+      "in": 5,
+      "out": 5
+    }
+  },
+  {
+    "id": "box-breathing",
+    "name": "Box breathing",
+    "word": "Box Reset",
+    "shelf": "Mind",
+    "minutes": 5,
+    "choices": [
+      5,
+      10,
+      15
+    ],
+    "kind": "recovery",
+    "run": "breathe",
+    "note": "Equal counts in, hold, out, hold. Easy to keep when rattled.",
+    "evidence": "Slow paced breathing at four to six breaths per minute raises acute HRV substantially through the same baroreflex-resonance mechanism as resonance breathing. In the Balban et al. (2023) head-to-head, box breathing improved mood less than cyclic sighing did, which is why it is priced below both that and resonance breathing despite the large HRV signal.",
+    "pattern": {
+      "in": 4,
+      "hold": 4,
+      "out": 4,
+      "hold2": 4
+    },
+    "nowTitle": "Box breathing"
+  },
+  {
+    "id": "physiological-sigh",
+    "name": "Double inhale, long exhale",
+    "word": "Sigh",
+    "shelf": "Mind",
+    "minutes": 5,
+    "choices": [
+      5,
+      10,
+      15
+    ],
+    "kind": "recovery",
+    "run": "timer",
+    "note": "Two breaths in through the nose, one slow breath out.",
+    "evidence": "Balban et al. (2023, Cell Reports Medicine) randomised 114 people to five minutes daily of cyclic sighing, box breathing, cyclic hyperventilation or mindfulness meditation for 28 days. Cyclic sighing produced the largest improvement in positive affect and the largest reduction in respiratory rate. The long exhale lengthens expiratory time, increasing vagal outflow. HRV lift here is reasoned from resonance-breathing rather than taken from that trial, which did not report it as a between-group result."
+  },
+  {
+    "id": "full-disconnect",
+    "name": "Properly off",
+    "word": "Off",
+    "shelf": "Mind",
+    "minutes": 15,
+    "choices": [
+      10,
+      15,
+      20,
+      25,
+      30,
+      45
+    ],
+    "kind": "recovery",
+    "run": "timer",
+    "note": "Phone away. Not thinking about work is the point.",
+    "evidence": "Sonnentag & Fritz (2007) identify psychological detachment as one of four recovery experiences and the one most consistently linked to outcomes: low evening detachment predicts next-morning fatigue independently of hours worked."
+  },
+  {
+    "id": "journalling",
+    "name": "Write it down",
+    "word": "Journal",
+    "shelf": "Mind",
+    "minutes": 15,
+    "choices": [
+      10,
+      15,
+      20,
+      25,
+      30,
+      45
+    ],
+    "kind": "recovery",
+    "run": "timer",
+    "note": "It can feel worse while writing and better a few hours later.",
+    "evidence": "Pennebaker's expressive writing paradigm - 15-20 minutes writing about a stressful experience - produces improvements in physical and psychological health at follow-up across many replications, with effect sizes that are small but robust. Participants reliably report worse mood immediately afterwards and better mood in the days following, which is why this preset carries a 30-minute onset."
+  },
+  {
+    "id": "read-fiction",
+    "name": "Read something invented",
+    "word": "Fiction",
+    "shelf": "Mind",
+    "minutes": 20,
+    "choices": [
+      10,
+      15,
+      20,
+      25,
+      30,
+      45,
+      60
+    ],
+    "kind": "recovery",
+    "run": "timer",
+    "note": "Fiction only: nothing about work, nothing that turns into a task.",
+    "evidence": "Narrative transportation (Green & Brock, 2000) describes absorption into a story that reduces access to competing real-world thoughts - the mechanism matches Sonnentag's psychological detachment closely. The widely-quoted claim that reading cuts stress by 68% traces to an unpublished 2009 study and is not used here; this is priced on the detachment mechanism, which is well evidenced, rather than on that number."
+  },
+  {
+    "id": "gratitude",
+    "name": "Name three good things",
+    "word": "Thankful",
+    "shelf": "Mind",
+    "minutes": 10,
+    "choices": [
+      5,
+      10,
+      15,
+      20,
+      25,
+      30
+    ],
+    "kind": "recovery",
+    "run": "timer",
+    "note": "Putting a feeling into words turns its volume down.",
+    "evidence": "Emmons & McCullough (2003) randomised participants to weekly gratitude listing versus hassles or neutral events and found better mood, more optimism and fewer physical complaints in the gratitude condition. Lieberman et al. (2007) showed the related mechanism directly: labelling an affective state reduces amygdala response and increases right ventrolateral prefrontal activity."
+  },
+  {
+    "id": "worry-dump",
+    "name": "Empty your head onto paper",
+    "word": "Worry List",
+    "shelf": "Mind",
+    "minutes": 10,
+    "choices": [
+      5,
+      10,
+      15,
+      20,
+      25,
+      30
+    ],
+    "kind": "recovery",
+    "run": "timer",
+    "note": "List what's still undone, so it stops keeping you awake.",
+    "evidence": "Scullin et al. (2018, Journal of Experimental Psychology: General) had participants spend five minutes before bed writing either a to-do list of upcoming tasks or an account of completed tasks. The to-do list group fell asleep significantly faster, and the more specific the list, the faster the sleep onset - the reverse held for the completed-task group.",
+    "bestHours": [
+      21,
+      22,
+      23
+    ],
+    "nowTitle": "Empty your head onto paper"
+  },
+  {
+    "id": "morning-light",
+    "name": "Get outside early",
+    "word": "Light",
+    "shelf": "Outside",
+    "minutes": 15,
+    "choices": [
+      10,
+      15,
+      20,
+      25,
+      30,
+      45
+    ],
+    "kind": "walk",
+    "run": "timer",
+    "note": "Daylight before 10 am resets the body clock.",
+    "evidence": "Melanopsin-containing retinal ganglion cells signal ambient light to the suprachiasmatic nucleus; morning light advances circadian phase, raises daytime alertness and strengthens the cortisol awakening response. Outdoor illuminance is one to two orders of magnitude above indoor lighting even under cloud, which is why the intervention is going outside rather than sitting near a window. Expected HRV lift is small because the mechanism is circadian, not vagal.",
+    "avoidHours": [
+      20,
+      21,
+      22,
+      23
+    ],
+    "bestHours": [
+      6,
+      7,
+      8,
+      9
+    ],
+    "nowTitle": "Get outside early"
+  },
+  {
+    "id": "nature-walk",
+    "name": "Walk somewhere green",
+    "word": "Green Walk",
+    "shelf": "Outside",
+    "minutes": 20,
+    "choices": [
+      10,
+      15,
+      20,
+      25,
+      30,
+      45,
+      60
+    ],
+    "kind": "walk",
+    "run": "timer",
+    "note": "A walk in a park restores attention; a busy road doesn't.",
+    "evidence": "Berman, Jonides & Kaplan (2008) found roughly a 20% improvement on backward digit span after a walk in an arboretum, with no significant improvement after an equivalent urban walk. Attention Restoration Theory: natural settings hold attention involuntarily, letting directed attention recover.",
+    "nowTitle": "Walk somewhere green"
+  },
+  {
+    "id": "outdoor-break",
+    "name": "Step outside",
+    "word": "Step Out",
+    "shelf": "Outside",
+    "minutes": 10,
+    "choices": [
+      5,
+      10,
+      15,
+      20,
+      25,
+      30
+    ],
+    "kind": "recovery",
+    "run": "timer",
+    "note": "Outside, no screen, nowhere to be.",
+    "evidence": "Short outdoor breaks combine daylight exposure with removal from the work environment. The evidence for exposures this brief is weaker than for the 20-minute nature walk - most Attention Restoration Theory trials use 15 minutes or more - so this is priced conservatively at under half the nature walk rather than assumed to scale down cleanly.",
+    "nowTitle": "Step outside"
+  },
+  {
+    "id": "green-sit",
+    "name": "Sit somewhere green",
+    "word": "Green Sit",
+    "shelf": "Outside",
+    "minutes": 20,
+    "choices": [
+      10,
+      15,
+      20,
+      25,
+      30,
+      45,
+      60
+    ],
+    "kind": "recovery",
+    "run": "timer",
+    "note": "The green does the work, so sitting counts on tired days.",
+    "evidence": "Ulrich (1984, Science) found surgical patients whose window looked onto trees had shorter post-operative stays, fewer negative nursing notes and less strong analgesia than matched patients facing a brick wall - restoration from visual exposure alone, with no activity. Attention Restoration Theory predicts the same soft-fascination mechanism as the nature walk without the movement component."
+  },
+  {
+    "id": "gardening",
+    "name": "Gardening",
+    "word": "Garden",
+    "shelf": "Outside",
+    "minutes": 30,
+    "choices": [
+      15,
+      20,
+      25,
+      30,
+      45,
+      60
+    ],
+    "kind": "walk",
+    "run": "timer",
+    "note": "Hands busy outdoors, and something to show for it.",
+    "evidence": "Van Den Berg & Custers (2011, Journal of Health Psychology) gave participants a stressful task then randomised them to 30 minutes of outdoor gardening or 30 minutes of indoor reading: salivary cortisol fell significantly more in the gardening group, and positive mood was fully restored in gardening but continued to fall in reading."
+  },
+  {
+    "id": "blue-space",
+    "name": "Time near water",
+    "word": "Waterside",
+    "shelf": "Outside",
+    "minutes": 30,
+    "choices": [
+      15,
+      20,
+      25,
+      30,
+      45,
+      60
+    ],
+    "kind": "recovery",
+    "run": "timer",
+    "note": "Coast, river or canal: likely as good as a park.",
+    "evidence": "White et al.'s work on blue space finds coastal and inland-water visits associated with higher restoration ratings than green space in some samples, but the literature is largely cross-sectional and self-reported, with few controlled comparisons. Priced below green space because the evidence is weaker, not because the effect is believed to be smaller."
+  },
+  {
+    "id": "social-break",
+    "name": "Talk to someone",
+    "word": "Talk",
+    "shelf": "People",
+    "minutes": 15,
+    "choices": [
+      10,
+      15,
+      20,
+      25,
+      30,
+      45
+    ],
+    "kind": "recovery",
+    "run": "timer",
+    "note": "Chat about anything but work. It stops you replaying problems.",
+    "evidence": "Non-work social interaction supports psychological detachment (Sonnentag & Fritz, 2007) by occupying attention with content unrelated to the stressor. Social contact is also associated with reduced acute cortisol reactivity."
+  },
+  {
+    "id": "call-a-friend",
+    "name": "Call someone (not text)",
+    "word": "Call",
+    "shelf": "People",
+    "minutes": 15,
+    "choices": [
+      10,
+      15,
+      20,
+      25,
+      30,
+      45
+    ],
+    "kind": "recovery",
+    "run": "timer",
+    "note": "Hearing their voice is what helps. Texting doesn't do it.",
+    "evidence": "Seltzer et al. (2010, Evolution and Human Behavior) put participants through a stressor, then gave them contact with their mother either in person, by phone, or not at all: voice contact produced oxytocin release and cortisol reduction comparable to physical contact. A follow-up found instant messaging produced neither, despite the same content."
+  },
+  {
+    "id": "coffee-with-colleague",
+    "name": "Coffee with a colleague",
+    "word": "Catch-up",
+    "shelf": "People",
+    "minutes": 20,
+    "choices": [
+      10,
+      15,
+      20,
+      25,
+      30,
+      45,
+      60
+    ],
+    "kind": "recovery",
+    "run": "timer",
+    "note": "Pleasant, but the talk usually drifts back to work.",
+    "evidence": "Work-related social contact scores poorly on psychological detachment, the recovery experience most strongly linked to next-day fatigue (Sonnentag & Fritz, 2007). Breaks whose content remains work-focused show markedly smaller recovery effects than breaks that switch content entirely - hence a base gain a third of the non-work social options."
+  },
+  {
+    "id": "meal-with-someone",
+    "name": "Eat with someone",
+    "word": "Shared Meal",
+    "shelf": "People",
+    "minutes": 45,
+    "choices": [
+      25,
+      30,
+      45,
+      60
+    ],
+    "kind": "recovery",
+    "run": "timer",
+    "note": "Food and company together, and it lasts longer than a coffee.",
+    "evidence": "Dunbar (2017, Adaptive Human Behavior and Physiology) found social eating frequency associated with greater life satisfaction, more social support and larger social networks, with communal eating triggering endorphin release through laughter and conversation. Observational rather than causal, and priced accordingly - below the nap ladder, above a solo refuel."
+  },
+  {
+    "id": "train-with-someone",
+    "name": "Exercise with someone",
+    "word": "Buddy",
+    "shelf": "People",
+    "minutes": 45,
+    "choices": [
+      25,
+      30,
+      45,
+      60
+    ],
+    "kind": "walk",
+    "run": "timer",
+    "note": "Worth more than training alone, and you're likelier to go.",
+    "evidence": "Yorks, Frothingham & Schuenke (2017, Journal of the American Osteopathic Association) followed medical students over 12 weeks: those exercising in a group reported significantly greater reductions in perceived stress and greater improvements in mental, physical and emotional quality of life than those training alone, despite similar training loads. Expected HRV is mildly negative because moderate exertion suppresses it acutely."
+  },
+  {
+    "id": "family-time",
+    "name": "Time with people you live with",
+    "word": "Family",
+    "shelf": "People",
+    "minutes": 60,
+    "choices": [
+      30,
+      45,
+      60
+    ],
+    "kind": "recovery",
+    "run": "timer",
+    "note": "Be there, not just in the room. Phone face down.",
+    "evidence": "Evening psychological detachment predicts next-morning fatigue and vigour (Sonnentag & Fritz, 2007; Sonnentag & Bayer, 2005). Family time delivers detachment only when work thoughts genuinely stop - studies of work-family boundary permeability find that being physically present while mentally at work produces little recovery and some additional strain.",
+    "bestHours": [
+      18,
+      19,
+      20
+    ]
+  },
+  {
+    "id": "hobby-group",
+    "name": "The thing you do that isn't work",
+    "word": "Hobby",
+    "shelf": "People",
+    "minutes": 90,
+    "choices": [
+      45,
+      60,
+      90
+    ],
+    "kind": "recovery",
+    "run": "timer",
+    "note": "Learning something new with others takes you right out of work.",
+    "evidence": "Sonnentag & Fritz (2007) treat mastery - challenging off-job activity that builds competence - as a distinct recovery experience from relaxation, and one that predicts recovery despite being effortful. Pressman et al. (2009) found enjoyable leisure activity associated with lower cortisol, lower blood pressure and better psychosocial functioning. This is the only preset carrying three of the four experiences."
+  },
+  {
+    "id": "hydration",
+    "name": "Drink a proper glass of water",
+    "word": "Glass",
+    "shelf": "Fuel",
+    "minutes": 5,
+    "choices": [
+      5,
+      10,
+      15
+    ],
+    "kind": "recovery",
+    "run": "timer",
+    "note": "Only helps if you're short. Been drinking all morning? Skip it.",
+    "evidence": "Ganio et al. (2011) and Armstrong et al. (2012) induced mild dehydration of around 1.5% body mass and found degraded vigilance and working memory, and increased fatigue, tension and anxiety, in men and women respectively. Dehydration also lowers HRV via reduced plasma volume and compensatory sympathetic activation, so rehydration recovers it."
+  },
+  {
+    "id": "refuel",
+    "name": "Actually eat something",
+    "word": "Eat",
+    "shelf": "Fuel",
+    "minutes": 25,
+    "choices": [
+      15,
+      20,
+      25,
+      30,
+      45,
+      60
+    ],
+    "kind": "recovery",
+    "run": "timer",
+    "note": "Worth most when you haven't eaten for hours.",
+    "evidence": "Sustained cognitive work depletes peripheral glucose availability, and executive and self-control tasks degrade under fasting in people not adapted to it. The effect is strongly context-dependent, which is why this preset carries a context scale rather than a large base gain."
+  },
+  {
+    "id": "stable-snack",
+    "name": "Something to steady the dip",
+    "word": "Snack",
+    "shelf": "Fuel",
+    "minutes": 10,
+    "choices": [
+      5,
+      10,
+      15,
+      20,
+      25,
+      30
+    ],
+    "kind": "recovery",
+    "run": "timer",
+    "note": "Protein and fat, not a biscuit. The biscuit brings the next dip.",
+    "evidence": "Rapid glycaemic rise and subsequent fall is followed by a return of hunger and reduced alertness; a snack combining protein or fat with carbohydrate blunts both the peak and the rebound. The evidence is mechanistic and from continuous glucose monitoring rather than from cognitive-outcome trials, so the base gain is deliberately close to the generic refuel."
+  },
+  {
+    "id": "protein-meal",
+    "name": "A meal with real protein in it",
+    "word": "Protein",
+    "shelf": "Fuel",
+    "minutes": 30,
+    "choices": [
+      15,
+      20,
+      25,
+      30,
+      45,
+      60
+    ],
+    "kind": "recovery",
+    "run": "timer",
+    "note": "Keeps you steady until the next meal, so no slump.",
+    "evidence": "Protein-rich meals produce a slower, lower postprandial glucose excursion than carbohydrate-dominant ones, and continuous-glucose-monitoring studies link large glycaemic excursions to subsequent hunger and reduced alertness. Priced above the generic refuel because the composition, not just the eating, is doing work here."
+  },
+  {
+    "id": "light-lunch",
+    "name": "Keep lunch light before deep work",
+    "word": "Lunch",
+    "shelf": "Fuel",
+    "minutes": 20,
+    "choices": [
+      10,
+      15,
+      20,
+      25,
+      30,
+      45,
+      60
+    ],
+    "kind": "recovery",
+    "run": "timer",
+    "note": "A lighter lunch softens the after-lunch dip.",
+    "evidence": "The post-lunch dip in alertness has a circadian component that occurs even without eating, but meal size and fat content reliably deepen it: larger and higher-fat lunches produce greater afternoon sleepiness and slower vigilance than smaller ones. This preset is the deliberate absence of a heavy meal, so its gain is the dip avoided rather than energy added.",
+    "bestHours": [
+      12,
+      13
+    ]
+  },
+  {
+    "id": "caffeine-timing",
+    "name": "Coffee, before two",
+    "word": "Coffee",
+    "shelf": "Fuel",
+    "minutes": 5,
+    "choices": [
+      5,
+      10,
+      15
+    ],
+    "kind": "recovery",
+    "run": "timer",
+    "note": "Have it early, so it's worn off by bedtime.",
+    "evidence": "Caffeine blocks adenosine receptors without clearing adenosine, so the sleep pressure is deferred rather than resolved. Half-life is around five hours: Drake et al. (2013, Journal of Clinical Sleep Medicine) found 400 mg taken six hours before bed reduced total sleep time by more than an hour, with participants unaware of the disruption. Expected HRV is negative because caffeine raises sympathetic tone acutely.",
+    "avoidHours": [
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23
+    ],
+    "bestHours": [
+      8,
+      9,
+      10,
+      11
+    ]
+  },
+  {
+    "id": "electrolytes",
+    "name": "Salt and minerals, not just water",
+    "word": "Minerals",
+    "shelf": "Fuel",
+    "minutes": 5,
+    "choices": [
+      5,
+      10,
+      15
+    ],
+    "kind": "recovery",
+    "run": "timer",
+    "note": "Only after a real sweat. On a desk day it does little.",
+    "evidence": "Sodium replacement improves rehydration efficiency after substantial sweat loss by supporting fluid retention, which plain water does not. There is no good evidence of a cognitive or autonomic benefit in people who are not sweat-depleted - this is the lowest-priced preset in the catalogue and the evidence is why."
+  },
+  {
+    "id": "alcohol-free-evening",
+    "name": "Evening without a drink",
+    "word": "No Drink",
+    "shelf": "Fuel",
+    "minutes": 240,
+    "kind": "recovery",
+    "run": "plan",
+    "note": "The biggest boost to tomorrow, and it costs no time.",
+    "evidence": "Pietila et al. (2018, JMIR Mental Health) analysed overnight recordings from 4,098 people: even low alcohol intake reduced overnight HRV by around 9%, moderate by 24%, and high intake by around 39%, with the suppression lasting the whole night. Note the framing - the band's comparison here is against your own drinking nights, not a within-session before/after reading, so this preset's measured lift is less directly observable than the rest of the catalogue.",
+    "bestHours": [
+      18,
+      19,
+      20,
+      21,
+      22
+    ]
+  }
+]
