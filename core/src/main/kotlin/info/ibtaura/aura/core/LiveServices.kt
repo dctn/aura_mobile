@@ -2,11 +2,15 @@ package info.ibtaura.aura.core
 
 import okhttp3.OkHttpClient
 
-/** Builds the real backend and sign-in. The app calls this at launch when it isn't running UI tests. */
+/**
+ * Builds the real backend and sign-in. The app calls this at launch when it isn't running UI tests. The API keeps
+ * GET /v1/me for `MeCache.KEEP_MILLIS`, shared by every screen, and forgets it whenever the session begins or ends.
+ */
 object LiveServices {
     fun make(config: AppConfig, store: TokenStore, http: OkHttpClient = auraHttpClient()): Pair<AuraApi, AuthService> {
         val auth = CognitoAuth(config, store, http)
-        val api = LiveApi(config, auth, http, realSleep, realNow)
+        val api = LiveApi(config, auth, http, realSleep, realNow, meKeepMillis = MeCache.KEEP_MILLIS)
+        auth.onSessionChanged = { api.clearCaches() }
         return api to auth
     }
 

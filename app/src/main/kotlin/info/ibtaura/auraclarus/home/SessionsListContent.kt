@@ -46,6 +46,7 @@ import info.ibtaura.auraclarus.design.CardDivider
 import info.ibtaura.auraclarus.design.ZoneText
 import info.ibtaura.auraclarus.run.DifficultyPicker
 import info.ibtaura.auraclarus.shell.AppState
+import info.ibtaura.auraclarus.shell.CacheKeys
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import java.time.Instant
@@ -59,15 +60,18 @@ import java.util.Locale
  */
 @Composable
 internal fun SessionsListContent(app: AppState, showsHeader: Boolean = true) {
-    var sessions by remember { mutableStateOf<List<SessionRecord>?>(null) }
+    // From the screen cache first (Home and the Sessions page share it), so a return shows the rows at once.
+    var sessions by remember { mutableStateOf(app.cached<List<SessionRecord>>(sessionsKey())) }
     var failed by remember { mutableStateOf(false) }
     var retry by remember { mutableIntStateOf(0) }
     var rating by remember { mutableStateOf<SessionRecord?>(null) }
 
     LaunchedEffect(app.dataVersion, retry) {
         val today = LocalDate.now(DayKey.zone)
+        val from = DayKey.string(today.minusDays(1))
+        val to = DayKey.string(today)
         try {
-            sessions = app.api.sessions(from = DayKey.string(today.minusDays(1)), to = DayKey.string(today))
+            sessions = app.cache.load(CacheKeys.sessions(from, to)) { app.api.sessions(from = from, to = to) }
             failed = false
         } catch (e: CancellationException) {
             throw e
@@ -102,8 +106,19 @@ internal fun SessionsListContent(app: AppState, showsHeader: Boolean = true) {
     rating?.let { session ->
         SessionRatingSheet(app, session, onDismiss = { rating = null }) { updated ->
             sessions = sessions?.let { replaceSession(it, updated) }
+            // So the next visit, drawn from the cache, shows the rating too.
+            app.cache.update<List<SessionRecord>>(sessionsKey()) { replaceSession(it, updated) }
+            // Session history and the session's own page show the rating too: they ask again next time.
+            app.cache.markStale(CacheKeys.HISTORY_PREFIX)
+            app.cache.markStale(CacheKeys.session(updated.id))
         }
     }
+}
+
+/** Yesterday and today: the cache key of the list. */
+private fun sessionsKey(): String {
+    val today = LocalDate.now(DayKey.zone)
+    return CacheKeys.sessions(DayKey.string(today.minusDays(1)), DayKey.string(today))
 }
 
 /** The answer may leave out what the list already knew. */

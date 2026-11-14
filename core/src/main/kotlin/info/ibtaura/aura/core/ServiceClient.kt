@@ -1,10 +1,12 @@
 package info.ibtaura.aura.core
 
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -97,8 +99,11 @@ class ServiceClient(
         /** How long after a grant a `consent_required` answer is taken to be Health Data's copy lagging. */
         val consentWindow: Duration = Duration.ofSeconds(30)
 
-        /** Dev's account runs few Lambdas at a time, so leave room for the backend. */
-        const val maxInFlight = 6
+        /**
+         * Dev's account runs few Lambdas at a time, so leave room for the backend. 8 rather than 6: a cold Home sends
+         * 9 calls, and with 6 the last ones waited up to a second for a slot.
+         */
+        const val maxInFlight = 8
 
         private val jsonType = "application/json".toMediaType()
 
@@ -115,7 +120,11 @@ class ServiceClient(
         consentGrantedAt = now()
     }
 
-    /** One call: returns the body of a 2xx, throws `AuraError` for anything else. `path` must already be escaped. */
+    /**
+     * One call: returns the body of a 2xx, throws `AuraError` for anything else. `path` must already be escaped.
+     * Safe to call from the main thread: the work around the call (reading a stored token, building the request,
+     * reading an error body) runs on the IO threads, and the call itself on OkHttp's.
+     */
     suspend fun send(
         service: ServiceName,
         method: String,
@@ -123,16 +132,44 @@ class ServiceClient(
         query: Map<String, String> = emptyMap(),
         body: String? = null,
         headers: Map<String, String> = emptyMap(),
+    ): String = withContext(Dispatchers.IO) {
+        PerfLog.callStarted()
+        try {
+            sendOnce(service, method, path, query, body, headers)
+        } finally {
+            PerfLog.callEnded()
+        }
+    }
+
+    private suspend fun sendOnce(
+        service: ServiceName,
+        method: String,
+        path: String,
+        query: Map<String, String>,
+        body: String?,
+        headers: Map<String, String>,
     ): String {
         val url = makeURL(service, path, query)
         var refreshed = false
         var triedNewer = false
         var throttled = 0
         var consentTries = 0
+        val started = System.nanoTime()
+        var tries = 0
         while (true) {
+            tries += 1
+            val tokenStart = System.nanoTime()
             val token = tokens.accessToken()
+            val tokenMs = PerfLog.ms(tokenStart)
             val request = makeRequest(url, method, body, token, headers)
             val reply = transmit(request)
+            if (PerfLog.on) {
+                PerfLog.line(
+                    "net $method ${service.raw}${PerfLog.template(path)} status=${reply.status} " +
+                        "slot=${reply.slotMs} token=$tokenMs wire=${reply.wireMs} total=${PerfLog.ms(started)} " +
+                        "bytes=${reply.text.length} try=$tries",
+                )
+            }
             if (reply.status in 200..299) return reply.text
             if (reply.status == 401) {
                 if (!refreshed) {
@@ -150,18 +187,25 @@ class ServiceClient(
             }
             val failure = ServiceFailure(reply.status, reply.text)
             if (reply.status == 503 && !failure.hasErrorBody && throttled < throttleDelays.size) {
+                noteBackoff("throttled", method, service, path, throttleDelays[throttled])
                 sleep(throttleDelays[throttled])
                 throttled += 1
                 continue
             }
             if (reply.status == 403 && failure.code == "consent_required") {
                 if (!consentJustGranted() || consentTries >= consentWaits.size) throw AuraError.ConsentRequired
+                noteBackoff("consent", method, service, path, consentWaits[consentTries])
                 sleep(consentWaits[consentTries])
                 consentTries += 1
                 continue
             }
             throw AuraError.Server(failure.code, failure.message, reply.status).apply { details = failure.details }
         }
+    }
+
+    /** A timing line for a wait before trying again (route shape only). */
+    private fun noteBackoff(reason: String, method: String, service: ServiceName, path: String, seconds: Double) {
+        if (PerfLog.on) PerfLog.line("backoff $reason $method ${service.raw}${PerfLog.template(path)} wait=${seconds}s")
     }
 
     private fun consentJustGranted(): Boolean {
@@ -208,12 +252,23 @@ class ServiceClient(
         return builder.build()
     }
 
-    private class Reply(val status: Int, val text: String)
+    private class Reply(val status: Int, val text: String) {
+        var slotMs = 0L
+        var wireMs = 0L
+    }
 
     /** Holds a slot only while the call is open, never while waiting to retry. */
     private suspend fun transmit(request: Request): Reply {
         try {
-            return limiter.withPermit { execute(http.newCall(request)) }
+            val queued = System.nanoTime()
+            return limiter.withPermit {
+                val slotMs = PerfLog.ms(queued)
+                val sent = System.nanoTime()
+                execute(http.newCall(request)).also {
+                    it.slotMs = slotMs
+                    it.wireMs = PerfLog.ms(sent)
+                }
+            }
         } catch (error: IOException) {
             // A call going away with its screen isn't the same as being offline.
             currentCoroutineContext().ensureActive()

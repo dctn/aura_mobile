@@ -72,6 +72,7 @@ import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.max
@@ -302,48 +303,39 @@ fun IconTile(symbol: String, color: Color, modifier: Modifier = Modifier, size: 
 
 /** One tile on a Recovery shelf: icon, coloured word, then its length. */
 @Composable
-fun ModeTile(mode: Mode, modifier: Modifier = Modifier) {
+fun ModeTile(mode: Mode, width: Dp, modifier: Modifier = Modifier) {
     val length = when {
         mode.minutes == 0 -> "Open"
         mode.minutes >= 120 -> "${mode.minutes / 60} Hours"
         else -> String.format(Locale.ROOT, "%02d Minutes", mode.minutes)
     }
-    Row(modifier, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-        IconTile(mode.shelf.symbol, mode.shelf.color)
-        // The two lines take the rest of the tile. They shrink (to 75%) to stay one line each, like iOS
-        // `minimumScaleFactor`, and wrap to two lines only when even that is too wide: never cut.
-        BoxWithConstraints(Modifier.weight(1f)) {
-            val measurer = rememberTextMeasurer()
-            val width = constraints.maxWidth
-            val base = AuraType.calloutMedium
-            val fitted: TextStyle? = remember(mode.word, length, width, measurer) {
-                if (width == Constraints.Infinity) return@remember base
-                var scale = 1f
-                while (scale >= 0.75f - 0.001f) {
-                    val candidate = base.copy(fontSize = base.fontSize * scale)
-                    val fits = listOf(mode.word, length).none { line ->
-                        measurer.measure(
-                            line,
-                            candidate,
-                            softWrap = false,
-                            maxLines = 1,
-                            constraints = Constraints(maxWidth = width),
-                        ).hasVisualOverflow
-                    }
-                    if (fits) return@remember candidate
-                    scale -= 0.05f
-                }
-                null
-            }
-            val style = fitted ?: base.copy(fontSize = base.fontSize * 0.75f)
-            val lines = if (fitted != null) 1 else 2
-            Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                Text(mode.word, style = style, color = mode.shelf.color, maxLines = lines, overflow = TextOverflow.Ellipsis)
-                Text(length, style = style, color = Color.Black, maxLines = lines, overflow = TextOverflow.Ellipsis)
-            }
+    // The tile's width is known, so the text's width is too (tile - icon - gap): no sub-layout to find it out.
+    val density = LocalDensity.current
+    val textWidth = with(density) { (width - MODE_TILE_ICON - MODE_TILE_GAP).roundToPx() }.coerceAtLeast(1)
+    val measurer = rememberTextMeasurer()
+    val base = AuraType.calloutMedium
+    // The two lines shrink (to 75%) to stay one line each, like iOS `minimumScaleFactor`, and wrap to two lines only
+    // when even that is too wide: never cut. TextFit remembers the answer for every later visit.
+    val scale = remember(mode.word, length, textWidth, measurer, density) {
+        TextFit.oneLineScale(measurer, listOf(mode.word, length), base, textWidth, 0.75f, density)
+    }
+    val style = base.copy(fontSize = base.fontSize * (scale ?: 0.75f))
+    val lines = if (scale != null) 1 else 2
+    Row(
+        modifier.width(width),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(MODE_TILE_GAP),
+    ) {
+        IconTile(mode.shelf.symbol, mode.shelf.color, size = MODE_TILE_ICON)
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            Text(mode.word, style = style, color = mode.shelf.color, maxLines = lines, overflow = TextOverflow.Ellipsis)
+            Text(length, style = style, color = Color.Black, maxLines = lines, overflow = TextOverflow.Ellipsis)
         }
     }
 }
+
+private val MODE_TILE_ICON = 66.dp
+private val MODE_TILE_GAP = 10.dp
 
 /** A white circle with an icon, like the iOS glass toolbar buttons (the back button, Recovery's toolbar). */
 @Composable

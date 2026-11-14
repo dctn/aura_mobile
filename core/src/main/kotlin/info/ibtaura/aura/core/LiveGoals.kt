@@ -201,24 +201,22 @@ internal data class WireHabitStats(
     val milestones: List<JsonElement>? = null,
 )
 
-/** The Goals routes. `client` is LiveApi's, so tokens, retries and the call limit are shared. */
-internal class LiveGoals(private val client: ServiceClient, private val now: AuraNow) {
+/**
+ * The Goals routes. `client` is LiveApi's, so tokens, retries and the call limit are shared; so is `me`, the cached
+ * GET /v1/me.
+ */
+internal class LiveGoals(private val client: ServiceClient, private val now: AuraNow, private val me: MeCache) {
     companion object {
         /** Most pages the habit lists are followed for. */
         private const val maxPages = 10
 
-        private val badResponse: AuraError
-            get() = AuraError.Server("bad_response", "Aura sent an answer this app can't read.", 200)
+        private val badResponse: AuraError get() = wireBadResponse
 
         /** What a refused healthGoals write becomes (dev Identity refused the field until it was redeployed). */
         const val goalsRefusedCode = "health_goals_refused"
 
-        private fun <T> decode(serializer: KSerializer<T>, text: String): T =
-            try {
-                wireJson.decodeFromString(serializer, text)
-            } catch (_: Exception) {
-                throw badResponse
-            }
+        /** Off the main thread (WireDecode.kt). */
+        private suspend fun <T> decode(serializer: KSerializer<T>, text: String): T = wireDecode(serializer, text)
 
         private fun esc(text: String): String = URLEscape.component(text)
 
@@ -229,13 +227,14 @@ internal class LiveGoals(private val client: ServiceClient, private val now: Aur
 
     // MARK: Identity
 
-    suspend fun profile(): GoalsProfile =
-        decode(WireGoalsMe.serializer(), client.send(ServiceName.identity, "GET", "/v1/me")).model
+    /** GET /v1/me through the shared cache; `fresh` reads past it. */
+    suspend fun profile(fresh: Boolean = false): GoalsProfile = decode(WireGoalsMe.serializer(), me.text(fresh)).model
 
     /**
      * PUT /v1/me/profile {healthGoals: changes} with If-Match "v<version>". A write in between (412) reads the profile
-     * again and sends once more: goals merge field by field, so nothing else is lost. A 400 that names healthGoals, or
-     * any 400 invalid_request here, is Identity not taking the field yet: `health_goals_refused`.
+     * again (past the cache) and sends once more: goals merge field by field, so nothing else is lost. A 400 that
+     * names healthGoals, or any 400 invalid_request here, is Identity not taking the field yet: `health_goals_refused`.
+     * The answer, the whole profile, replaces the cached one.
      */
     suspend fun putHealthGoals(changes: Map<String, JsonElement?>, version: Int): GoalsProfile {
         val goals = JsonObject(changes.mapValues { it.value ?: JsonNull })
@@ -244,13 +243,15 @@ internal class LiveGoals(private val client: ServiceClient, private val now: Aur
         var retried = false
         while (true) {
             try {
-                val text = client.send(ServiceName.identity, "PUT", "/v1/me/profile", body = body,
-                    headers = mapOf("If-Match" to "\"v$current\""))
+                val text = me.write {
+                    client.send(ServiceName.identity, "PUT", "/v1/me/profile", body = body,
+                        headers = mapOf("If-Match" to "\"v$current\""))
+                }
                 return decode(WireGoalsMe.serializer(), text).model
             } catch (error: AuraError.Server) {
                 if (error.status == 412 && !retried) {
                     retried = true
-                    current = profile().version
+                    current = profile(fresh = true).version
                     continue
                 }
                 if (error.status == 400 && (error.code == "invalid_request" || error.message.contains("healthGoals"))) {
@@ -265,8 +266,7 @@ internal class LiveGoals(private val client: ServiceClient, private val now: Aur
     // MARK: Health Data
 
     /** Today's goal columns from GET /v1/metrics/daily. Null fields when the day isn't computed yet. */
-    suspend fun metricsToday(): GoalProgress {
-        val day = today()
+    suspend fun metricsToday(day: String = today()): GoalProgress {
         val fields = "stepCount,activeKcal,standHours,stepGoalProgressPct,activeKcalGoalProgressPct,standHoursGoalProgressPct"
         val query = mapOf("from" to day, "to" to day, "fields" to fields)
         val text = client.send(ServiceName.healthData, "GET", "/v1/metrics/daily", query = query)
@@ -283,8 +283,7 @@ internal class LiveGoals(private val client: ServiceClient, private val now: Aur
     }
 
     /** The sum of today's water logs' ml (GET /v1/logs?type=water). Zero with none. */
-    suspend fun waterToday(): Double {
-        val day = today()
+    suspend fun waterToday(day: String = today()): Double {
         val text = client.send(ServiceName.healthData, "GET", "/v1/logs",
             query = mapOf("from" to day, "to" to day, "type" to "water"))
         return decode(WireWaterLogs.serializer(), text).items.filter { it.type == null || it.type == "water" }

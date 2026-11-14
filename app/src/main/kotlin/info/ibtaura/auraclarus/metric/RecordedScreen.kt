@@ -29,6 +29,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import info.ibtaura.aura.core.MetricMaths
+import info.ibtaura.aura.core.MetricSeries
 import info.ibtaura.auraclarus.goals.UnitFormat
 import info.ibtaura.auraclarus.goals.rememberUnitSystem
 import info.ibtaura.aura.core.MetricPoint
@@ -43,6 +44,7 @@ import info.ibtaura.auraclarus.design.SearchRowDivider
 import info.ibtaura.auraclarus.design.SectionTitle
 import info.ibtaura.auraclarus.shell.AppState
 import info.ibtaura.auraclarus.shell.AuraNav
+import info.ibtaura.auraclarus.shell.CacheKeys
 import info.ibtaura.auraclarus.shell.Route
 import kotlinx.coroutines.CancellationException
 import java.time.Instant
@@ -56,8 +58,12 @@ private val Gap = 18.dp
 @Composable
 fun RecordedScreen(app: AppState, nav: AuraNav, route: Route.Recorded) {
     var query by rememberSaveable { mutableStateOf("") }
-    var rows by remember { mutableStateOf<List<MetricPoint>?>(null) }
-    var format by remember { mutableStateOf("") }
+    // From the screen cache when this page was seen before, so the rows draw at once.
+    var rows by remember {
+        val span = MetricMaths.daySpan(MetricMaths.recordedDays, Instant.now())
+        mutableStateOf(app.cached<MetricSeries>(CacheKeys.series(route.field, span.from, span.to))?.let { MetricMaths.recordedRows(it.points) })
+    }
+    var format by remember { mutableStateOf(route.format ?: "") }
     var failed by remember { mutableStateOf(false) }
     var retry by remember { mutableIntStateOf(0) }
     val units = rememberUnitSystem(app)
@@ -67,14 +73,17 @@ fun RecordedScreen(app: AppState, nav: AuraNav, route: Route.Recorded) {
         try {
             val span = MetricMaths.daySpan(MetricMaths.recordedDays, Instant.now())
             val found = route.format ?: metricFormat(route.field, app)
-            val series = app.api.series(route.field, span.from, span.to)
+            val series = app.cache.load(CacheKeys.series(route.field, span.from, span.to)) {
+                app.api.series(route.field, span.from, span.to)
+            }
             format = found
             rows = MetricMaths.recordedRows(series.points)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Throwable) {
             app.note(e)
-            failed = true
+            // Rows already showing stay; only an empty page offers a retry.
+            failed = rows == null
         }
     }
 

@@ -20,6 +20,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.heading
@@ -34,6 +35,7 @@ import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import info.ibtaura.auraclarus.design.AuraColors
 import info.ibtaura.auraclarus.design.AuraType
+import info.ibtaura.auraclarus.design.TextFit
 import info.ibtaura.auraclarus.design.auraIcon
 
 // Small pieces shared by the Recovery tab and its Edit and Filter sheets.
@@ -54,17 +56,10 @@ internal fun FitText(
     BoxWithConstraints(modifier) {
         val measurer = rememberTextMeasurer()
         val width = constraints.maxWidth
-        val fitted = remember(text, style, width, maxLines, measurer) {
-            if (width == Constraints.Infinity) return@remember style
-            var scale = 1f
-            while (scale >= minScale - 0.001f) {
-                val candidate = style.copy(fontSize = style.fontSize * scale)
-                // A line that has to wrap adds a line past maxLines, which counts as overflow.
-                val result = measurer.measure(text, candidate, maxLines = maxLines, constraints = Constraints(maxWidth = width))
-                if (!result.hasVisualOverflow) return@remember candidate
-                scale -= 0.05f
-            }
-            style.copy(fontSize = style.fontSize * minScale)
+        val density = LocalDensity.current
+        // TextFit remembers the scale, so the pill measures nothing when the tab comes back.
+        val fitted = remember(text, style, width, maxLines, measurer, density) {
+            style.copy(fontSize = style.fontSize * TextFit.wrappedScale(measurer, text, style, width, maxLines, minScale, density))
         }
         Text(text, style = fitted, color = color, maxLines = maxLines, overflow = TextOverflow.Ellipsis)
     }

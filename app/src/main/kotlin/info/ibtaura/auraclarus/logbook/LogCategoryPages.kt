@@ -25,7 +25,6 @@ import info.ibtaura.auraclarus.design.AuraColors
 import info.ibtaura.auraclarus.design.AuraPage
 import info.ibtaura.auraclarus.design.AuraType
 import info.ibtaura.auraclarus.design.Footnote
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonElement
 
@@ -52,7 +51,10 @@ internal fun LogCategoryPage(model: LogbookModel, category: LogCategory, onBack:
     }
 }
 
-/** The state a card's Save needs: saving, an error, and a "Saved" line until the next edit. */
+/**
+ * The state a card's Save needs: saving, an error, and a "Saved" line until the next edit. The entry shows at once
+ * (the model's optimistic write); the write runs in the app's scope, so leaving the page doesn't cancel it.
+ */
 private class SaveState {
     var saving by mutableStateOf(false)
     var error by mutableStateOf<String?>(null)
@@ -63,12 +65,12 @@ private class SaveState {
         saved = null
     }
 
-    fun run(scope: CoroutineScope, done: String = "Saved", onSaved: () -> Unit = {}, write: suspend () -> String?) {
+    fun run(model: LogbookModel, done: String = "Saved", onSaved: () -> Unit = {}, write: suspend () -> String?) {
         if (saving) return
         saving = true
         error = null
         saved = null
-        scope.launch {
+        model.launchInApp {
             val refusal = write()
             saving = false
             if (refusal == null) {
@@ -95,13 +97,12 @@ private fun picked(vararg pairs: Pair<String, Int?>): Map<String, JsonElement> =
 
 @Composable
 private fun MoodCards(model: LogbookModel) {
-    val scope = rememberCoroutineScope()
     val todayMood = LogbookMaths.latest(model.checkins, CheckinKind.mood, model.todayKey)?.mood
     val moodSave = rememberSave()
     LogInputCard(LogCategory.mood.symbol, "Mood", LogCategory.mood.color, "How are you feeling right now?",
         lastText(model, CheckinKind.mood)) {
         FaceRow(todayMood, ScaleWords.moodFaces, enabled = !moodSave.saving, tag = "logging-mood-page") { value ->
-            moodSave.run(scope) { model.addCheckin(CheckinKind.mood, json("mood" to value)) }
+            moodSave.run(model) { model.addCheckin(CheckinKind.mood, json("mood" to value)) }
         }
         moodSave.error?.let { Text(it, style = AuraType.callout, color = AuraColors.red) }
     }
@@ -118,7 +119,7 @@ private fun MoodCards(model: LogbookModel) {
         Question("Worrying about work")
         ScaleChips(1..5, worry, { worry = it; save.edited() }, "logging-worry", words = ScaleWords.agree)
         SaveLine(save.saving, listOf(energy, onEdge, worry).any { it != null }, save.error, save.saved, "logging-mood-save") {
-            save.run(scope, onSaved = { energy = null; onEdge = null; worry = null }) {
+            save.run(model, onSaved = { energy = null; onEdge = null; worry = null }) {
                 model.addLog(LogType.mood, picked("energy" to energy, "onEdge" to onEdge, "worry" to worry))
             }
         }
@@ -134,7 +135,6 @@ private fun Question(text: String) {
 
 @Composable
 private fun StressCards(model: LogbookModel) {
-    val scope = rememberCoroutineScope()
 
     var effort by remember { mutableStateOf<Int?>(null) }
     var stress by remember { mutableStateOf<Int?>(null) }
@@ -145,7 +145,7 @@ private fun StressCards(model: LogbookModel) {
         Question("How stressed do you feel?")
         ScaleChips(0..10, stress, { stress = it; blockSave.edited() }, "logging-block-stress", words = ScaleWords.stress)
         SaveLine(blockSave.saving, effort != null || stress != null, blockSave.error, blockSave.saved, "logging-block-save") {
-            blockSave.run(scope, onSaved = { effort = null; stress = null }) {
+            blockSave.run(model, onSaved = { effort = null; stress = null }) {
                 model.addCheckin(CheckinKind.block, picked("effort" to effort, "stress" to stress))
             }
         }
@@ -158,7 +158,7 @@ private fun StressCards(model: LogbookModel) {
         ScaleChips(0..10, exhaustion, { exhaustion = it; weeklySave.edited() }, "logging-exhaustion",
             words = "Not at all" to "Completely")
         SaveLine(weeklySave.saving, exhaustion != null, weeklySave.error, weeklySave.saved, "logging-weekly-save") {
-            weeklySave.run(scope, onSaved = { exhaustion = null }) {
+            weeklySave.run(model, onSaved = { exhaustion = null }) {
                 model.addCheckin(CheckinKind.weekly, picked("exhaustion" to exhaustion))
             }
         }
@@ -176,7 +176,7 @@ private fun StressCards(model: LogbookModel) {
         ChoiceChips(challengeChoices, challenge, { challenge = it; yearSave.edited() }, "logging-challenge")
         SaveLine(yearSave.saving, true, yearSave.error, yearSave.saved, "logging-year-save") {
             val code = challenge?.let { challengeChoices.indexOf(it) + 1 }
-            yearSave.run(scope, onSaved = { challenge = null }) {
+            yearSave.run(model, onSaved = { challenge = null }) {
                 model.addLog(LogType.custom, picked("stressfulMonths" to months, "challengeOrHindrance" to code))
             }
         }
@@ -187,13 +187,12 @@ private fun StressCards(model: LogbookModel) {
 
 @Composable
 private fun PeopleCards(model: LogbookModel) {
-    val scope = rememberCoroutineScope()
     val todayConnection = LogbookMaths.latest(model.checkins, CheckinKind.connection, model.todayKey)?.connection
     val connectionSave = rememberSave()
     LogInputCard(LogCategory.people.symbol, "Connection", LogCategory.people.color,
         "How connected to other people do you feel?", lastText(model, CheckinKind.connection)) {
         FaceRow(todayConnection, ScaleWords.connectionFaces, enabled = !connectionSave.saving, tag = "logging-connection-page") { value ->
-            connectionSave.run(scope) { model.addCheckin(CheckinKind.connection, json("connection" to value)) }
+            connectionSave.run(model) { model.addCheckin(CheckinKind.connection, json("connection" to value)) }
         }
         connectionSave.error?.let { Text(it, style = AuraType.callout, color = AuraColors.red) }
     }
@@ -206,7 +205,7 @@ private fun PeopleCards(model: LogbookModel) {
             talksSave.edited()
         }
         SaveLine(talksSave.saving, true, talksSave.error, talksSave.saved, "logging-conversations-save") {
-            talksSave.run(scope) { model.addLog(LogType.custom, json("meaningfulConversations" to talks)) }
+            talksSave.run(model) { model.addLog(LogType.custom, json("meaningfulConversations" to talks)) }
         }
     }
 
@@ -219,7 +218,7 @@ private fun PeopleCards(model: LogbookModel) {
         Question("My work stretches me in a good way")
         ScaleChips(1..5, challenge, { challenge = it; workSave.edited() }, "logging-work-challenge", words = ScaleWords.agree)
         SaveLine(workSave.saving, support != null || challenge != null, workSave.error, workSave.saved, "logging-work-save") {
-            workSave.run(scope, onSaved = { support = null; challenge = null }) {
+            workSave.run(model, onSaved = { support = null; challenge = null }) {
                 model.addLog(LogType.custom, picked("supportAtWork" to support, "workChallenge" to challenge))
             }
         }
@@ -260,7 +259,6 @@ private fun measured(fields: List<Measure>, values: Map<String, String>): Pair<M
 
 @Composable
 private fun MeasureForm(title: String, symbol: String, fields: List<Measure>, tag: String, model: LogbookModel, decimals: Boolean = true) {
-    val scope = rememberCoroutineScope()
     val values = remember { mutableStateOf(mapOf<String, String>()) }
     val save = rememberSave()
     LogInputCard(symbol, title, LogCategory.body.color, null, null) {
@@ -289,7 +287,7 @@ private fun MeasureForm(title: String, symbol: String, fields: List<Measure>, ta
             if (wrong != null) {
                 save.error = "Check $wrong: that number looks out of range."
             } else if (data.isNotEmpty()) {
-                save.run(scope, onSaved = { values.value = emptyMap() }) { model.addLog(LogType.measurement, data) }
+                save.run(model, onSaved = { values.value = emptyMap() }) { model.addLog(LogType.measurement, data) }
             }
         }
     }
@@ -308,7 +306,6 @@ private val muscleGroups = listOf("Full body", "Upper body", "Legs", "Core")
 
 @Composable
 private fun StrengthCards(model: LogbookModel) {
-    val scope = rememberCoroutineScope()
     var minutes by remember { mutableIntStateOf(30) }
     var group by remember { mutableStateOf<String?>(null) }
     val strengthSave = rememberSave()
@@ -321,7 +318,7 @@ private fun StrengthCards(model: LogbookModel) {
         ChoiceChips(muscleGroups, group, { group = if (group == it) null else it; strengthSave.edited() }, "logging-strength-group")
         SaveLine(strengthSave.saving, true, strengthSave.error, strengthSave.saved, "logging-strength-save") {
             val data = if (group != null) json("minutes" to minutes, "group" to group!!) else json("minutes" to minutes)
-            strengthSave.run(scope, onSaved = { group = null }) { model.addLog(LogType.strength, data) }
+            strengthSave.run(model, onSaved = { group = null }) { model.addLog(LogType.strength, data) }
         }
     }
 
@@ -333,7 +330,7 @@ private fun StrengthCards(model: LogbookModel) {
             tvSave.edited()
         }
         SaveLine(tvSave.saving, true, tvSave.error, tvSave.saved, "logging-tv-save") {
-            tvSave.run(scope) { model.addLog(LogType.custom, json("tvTimeMin" to tv)) }
+            tvSave.run(model) { model.addLog(LogType.custom, json("tvTimeMin" to tv)) }
         }
     }
 }
@@ -353,7 +350,6 @@ private val insomniaWords: List<Pair<String, String>> = listOf(
 
 @Composable
 private fun SleepCards(model: LogbookModel) {
-    val scope = rememberCoroutineScope()
     val last = LogbookMaths.latest(model.checkins, CheckinKind.insomnia)
     val score = last?.insomniaScore
     if (last != null && score != null) {
@@ -390,7 +386,7 @@ private fun SleepCards(model: LogbookModel) {
         }
         SaveLine(save.saving, complete, save.error, save.saved, "logging-isi-save") {
             val items = answers.map { it ?: 0 }
-            save.run(scope, onSaved = { for (i in answers.indices) answers[i] = null }) {
+            save.run(model, onSaved = { for (i in answers.indices) answers[i] = null }) {
                 model.addCheckin(CheckinKind.insomnia, json("insomnia" to items))
             }
         }

@@ -28,6 +28,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
+import info.ibtaura.aura.core.CatalogueSection
 import info.ibtaura.aura.core.DayKey
 import info.ibtaura.aura.core.FieldAvailability
 import info.ibtaura.aura.core.MetricMaths
@@ -46,9 +47,10 @@ import java.time.LocalDate
 /** Pins: the person's own pinned metrics with their latest values (iOS HomePinsSection). */
 @Composable
 internal fun HomePinsSection(app: AppState, nav: AuraNav) {
-    var latest by remember { mutableStateOf<Map<String, FieldAvailability>>(emptyMap()) }
+    // From the shared availability entry (Search uses it too), so a return to Home shows the values at once.
+    var latest by remember { mutableStateOf(app.cachedAvailability()?.let(::pinValues).orEmpty()) }
     // Each field's catalogue format, so a value in metres shows as km.
-    var formats by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
+    var formats by remember { mutableStateOf(app.catalogue?.let(::catalogueFormats).orEmpty()) }
     var editing by remember { mutableStateOf(false) }
     var failed by remember { mutableStateOf(false) }
     var retry by remember { mutableIntStateOf(0) }
@@ -61,11 +63,9 @@ internal fun HomePinsSection(app: AppState, nav: AuraNav) {
             failed = false
             return@LaunchedEffect
         }
-        val today = LocalDate.now(DayKey.zone)
         try {
-            // The backend allows at most 400 days.
-            val available = app.api.availability(DayKey.string(today.minusDays(365)), DayKey.string(today))
-            latest = available.associateBy { it.field }
+            // The backend's 400 days, shared with Search; Pins still show only the last 365.
+            latest = pinValues(app.loadAvailability())
             failed = false
             // Values still show without formats, so a failure here isn't an error on the page.
             if (formats.isEmpty()) {
@@ -77,14 +77,14 @@ internal fun HomePinsSection(app: AppState, nav: AuraNav) {
                     null
                 }
                 if (sections != null) {
-                    formats = sections.flatMap { it.parameters }.mapNotNull { p -> p.field?.let { it to p.format } }.toMap()
+                    formats = catalogueFormats(sections)
                 }
             }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Throwable) {
             app.note(e)
-            failed = latest.isEmpty()
+            failed = latest.isEmpty() && app.cachedAvailability() == null
         }
     }
 
@@ -167,3 +167,13 @@ private fun PinCard(pin: PinnedMetric, value: String?, unit: String?, modifier: 
         onClick = onClick,
     )
 }
+
+/** Each field's newest value of the last 365 days (Pins' window), out of the shared 400-day availability. */
+private fun pinValues(available: List<FieldAvailability>): Map<String, FieldAvailability> {
+    val first = DayKey.string(LocalDate.now(DayKey.zone).minusDays(365))
+    return available.filter { it.latestDate.take(10) >= first }.associateBy { it.field }
+}
+
+/** Each field's catalogue format. */
+private fun catalogueFormats(sections: List<CatalogueSection>): Map<String, String> =
+    sections.flatMap { it.parameters }.mapNotNull { p -> p.field?.let { it to p.format } }.toMap()

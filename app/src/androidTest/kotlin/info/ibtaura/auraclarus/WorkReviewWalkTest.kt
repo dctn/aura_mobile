@@ -58,7 +58,7 @@ class WorkReviewWalkTest : WalkTestCase() {
     private fun openHome() {
         Walk.openTab("Home")
         Walk.findText("Insights", timeoutMs = 20_000)
-        Walk.find("home-work-calendar", "Not found: Calendar row")
+        Walk.bringIntoView("home-work-calendar")
         repeat(3) { Walk.dragPage(0.7, 0.2) }
     }
 

@@ -25,6 +25,9 @@ import kotlin.math.pow
  * `quick_check_required` unless `skipCheck` is sent or a valid Quick check was taken today (`--uitesting-needs-check`).
  * `shortChecksCount` makes any Quick check with at least one reaction valid, whatever its length
  * (`--uitesting-short-check`). `now` is the clock (Android only; Swift reads `Date()`). Days are in `DayKey.zone`.
+ *
+ * `sample` is the app's sample-data mode: the stores start with weeks of made-up use (SampleActivity) instead of the
+ * CI fixture, and every write still works on them. `sampleSchedule` is the work week its calendar follows.
  */
 class StubApi(
     workSchedule: WorkSchedule? = defaultSchedule,
@@ -32,6 +35,10 @@ class StubApi(
     private val needsQuickCheck: Boolean = false,
     private val shortChecksCount: Boolean = false,
     private val now: AuraNow = realNow,
+    /** Rich sample-mode seeds (tasks, events, session history, logbook, habits, goals, checks). */
+    private val sample: Boolean = false,
+    /** Capacity score for a day; null keeps the fixed `zoneScore` (72). Used by dayZones and allocate. */
+    private val zoneScoreFor: ((java.time.LocalDate) -> Int)? = null,
 ) : AuraApi {
     /** Swift's actor/lock: every piece of state below is read and written under it. */
     private val mutex = Mutex()
@@ -65,9 +72,29 @@ class StubApi(
     /** Ids deleted in the editor. */
     private val deletedEvents = HashSet<String>()
     /** Every task by id, in the order made: the seeded ones, then those added here. */
-    private val taskStore = LinkedHashMap<String, TaskItem>().apply { stubTasks.forEach { put(it.id, it) } }
+    private val taskStore = LinkedHashMap<String, TaskItem>().apply {
+        (if (sample) SampleActivity.tasks(now(), DayKey.zone) else stubTasks).forEach { put(it.id, it) }
+    }
 
     private val zone: ZoneId get() = DayKey.zone
+
+    init {
+        // Sample mode: a normal from 12 checks, today's gate cleared by a check this morning, and yesterday's and
+        // today's sessions so far kept as ended sessions of this stub.
+        if (sample) {
+            val now = now()
+            countedChecks = 12
+            val morning = now.atZone(zone).toLocalDate().atTime(8, 40).atZone(zone).toInstant()
+            firstValidCheck[DayKey.string(now, zone)] = minOf(morning, now)
+            for (record in SampleActivity.liveSessions(now, zone, seededWindow(now, zone))) {
+                startedSessions[record.id] = record
+                record.difficulty?.let { ratings[record.id] = it }
+            }
+        }
+    }
+
+    /** The day's capacity score: `zoneScoreFor`'s, else the fixed `zoneScore`. */
+    private fun scoreOn(day: LocalDate): Int = zoneScoreFor?.invoke(day) ?: zoneScore
 
     private fun day(offset: Long): String = DayKey.string(now().atZone(zone).toLocalDate().plusDays(offset))
 
@@ -78,13 +105,14 @@ class StubApi(
 
     /**
      * Always ahead of the clock, so Upcoming shows them whenever CI runs. Then the blocks of Find a time's real runs
-     * that start in [from, to), as the Planner writes them to the calendar. A dry run writes nothing.
+     * that start in [from, to), as the Planner writes them to the calendar. A dry run writes nothing. In sample mode
+     * the sample calendar's events in [from, to) take the fixed two's place.
      */
     override suspend fun events(from: Instant, to: Instant): List<CalendarEvent> {
         val now = now()
         val nap = now.plusSeconds(15 * 60)
         val building = nap.plusSeconds(15 * 60)
-        val fixed = listOf(
+        val fixed = if (sample) SampleActivity.events(now.atZone(zone).toLocalDate(), from, to, zone) else listOf(
             CalendarEvent(id = "e1", title = "10 Min nap", start = nap, end = building, kind = "recovery"),
             CalendarEvent(id = "e2", title = "Xcode Building", start = building, end = building.plusSeconds(3600), kind = "focus",
                 workType = "deepFocus"),
@@ -227,8 +255,16 @@ class StubApi(
         }
     }
 
-    /** No band data, except on the seeded history (Session history), which has a trace to chart. */
-    override suspend fun sessionTrace(id: String): SessionTrace = historyTrace(id) ?: SessionTrace(status = "noData")
+    /** No band data, except on the seeded history (Session history) and sample sessions, which have a trace to chart. */
+    override suspend fun sessionTrace(id: String): SessionTrace = historyTrace(id) ?: sampleTrace(id) ?: SessionTrace(status = "noData")
+
+    /** Sample mode: yesterday's and today's sample sessions (`sm-` ids) get a trace as the seeds do. */
+    private suspend fun sampleTrace(id: String): SessionTrace? {
+        if (!sample || !id.startsWith("sm-")) return null
+        val record = mutex.withLock { startedSessions[id] } ?: return null
+        return StubSessionHistory.trace(SessionHistory.detailOf(record), zone)
+    }
+
     override suspend fun addEvent(title: String, start: Instant, end: Instant, kind: String) {}
     override suspend fun addTask(title: String, plannedFor: String) {
         val id = TaskDraft.newId()
@@ -334,7 +370,10 @@ class StubApi(
         mutex.withLock { held = schedule }
     }
 
-    /** One day per date, both ends included, at most 62. Work days are all ready with the same score. */
+    /**
+     * One day per date, both ends included, at most 62. Work days are all ready with the same score, or each with
+     * `zoneScoreFor`'s when given.
+     */
     override suspend fun dayZones(from: String, to: String): List<ZoneDay> {
         val schedule = workSchedule()
         val zone = zone
@@ -343,7 +382,7 @@ class StubApi(
         val days = mutableListOf<ZoneDay>()
         var date = first
         while (date <= last && days.size < 62) {
-            days.add(StubZones.day(DayKey.string(date), schedule, zoneScore, zone))
+            days.add(StubZones.day(DayKey.string(date), schedule, scoreOn(date), zone))
             date = date.plusDays(1)
         }
         return days
@@ -386,7 +425,8 @@ class StubApi(
             val plan = StubPlan.build(
                 key = key, day = day, schedule = held, skipCheck = skipCheck, taskIds = taskIds, version = version,
                 zone = zone, generatedAt = now, quickCheckAt = checkAt, laterDay = laterDay,
-                tasks = taskStore.values.toList(), busy = kept.map { it.start to it.end },
+                tasks = taskStore.values.toList(), busy = kept.map { it.start to it.end } + sampleBusy(day, now),
+                score = scoreOn(day), firstStart = if (sample) sampleFirstStart(day, now) else null, capacityAware = sample,
             )
             if (!dryRun) {
                 savedPlans[key] = if (kept.isEmpty()) plan else plan.copy(placed = (kept + plan.placed).sortedBy { it.start })
@@ -394,6 +434,31 @@ class StubApi(
             }
             plan
         }
+    }
+
+    /**
+     * Sample mode: the day's calendar (as edited) is busy for Find a time, all-day items and planner blocks aside.
+     * Empty otherwise. Under the lock.
+     */
+    private fun sampleBusy(day: LocalDate, now: Instant): List<Pair<Instant, Instant>> {
+        if (!sample) return emptyList()
+        val start = day.atStartOfDay(zone).toInstant()
+        val end = day.plusDays(1).atStartOfDay(zone).toInstant()
+        val events = SampleActivity.events(now.atZone(zone).toLocalDate(), start, end, zone)
+        return applyEdits(events, editedEvents.toMap(), deletedEvents.toSet(), start, end)
+            .filter { !it.allDay && !it.isPlannerBlock && !it.id.startsWith("plan-") }
+            .map { it.start to it.end }
+    }
+
+    /** Sample mode's first start: the work day's start, or today the next quarter hour from now when that is later. */
+    private fun sampleFirstStart(day: LocalDate, now: Instant): Instant {
+        val schedule = held ?: SampleActivity.schedule
+        val open = StubZones.at(WorkSchedule.minutes(schedule.workdayStart) ?: (9 * 60), day, zone)
+        val local = now.atZone(zone)
+        if (local.toLocalDate() != day) return open
+        val minute = local.hour * 60 + local.minute
+        val next = StubZones.at(minOf((minute + 14) / 15 * 15, 23 * 60 + 45), day, zone)
+        return maxOf(open, next)
     }
 
     // MARK: Tasks (auto-allocation)
@@ -542,10 +607,14 @@ class StubApi(
     /** Capacity's five recovery breaks with their real lifts, in Capacity's order. */
     override suspend fun recoveryOptions(minutes: Int): List<RecoveryOption> = recoveryChoices(minutes)
 
-    /** A meeting and a recovery block today; an answered one drops out. */
+    /**
+     * A meeting and a recovery block today; in sample mode the last ended blocks of yesterday and today. An answered
+     * one drops out.
+     */
     override suspend fun reviewInbox(date: String, days: Int): List<ReviewItem> {
         val answered = mutex.withLock { reviews.keys.toSet() }
-        return inboxItems(now(), zone).filter { it.blockId !in answered }
+        val items = if (sample) SampleActivity.inbox(now(), zone) else inboxItems(now(), zone)
+        return items.filter { it.blockId !in answered }
     }
 
     /** Stored as sent. A recovery block without a type is still taken, as the server takes it. */
@@ -553,7 +622,9 @@ class StubApi(
         mutex.withLock { reviews[answer.item.blockId] = answer }
     }
 
-    override suspend fun sleepSchedule(): SleepSchedule? = SleepSchedule(bedtime = "23:00", wakeTime = "07:00")
+    /** 23:00-07:00; in sample mode 23:15-07:00, as its goals. */
+    override suspend fun sleepSchedule(): SleepSchedule? =
+        if (sample) SleepSchedule(bedtime = "23:15", wakeTime = "07:00") else SleepSchedule(bedtime = "23:00", wakeTime = "07:00")
 
     /** Stored by date: created the first time, false for the same date again. */
     override suspend fun putSleepNight(night: SleepNight): SleepNightResult {
@@ -592,18 +663,20 @@ class StubApi(
 
     // MARK: Goals
 
-    private val goals = StubGoals(now)
+    private val goals = StubGoals(now, sample)
 
     override suspend fun goalsProfile(): GoalsProfile = goals.profile()
 
     override suspend fun putHealthGoals(changes: Map<String, JsonElement?>, version: Int): GoalsProfile =
         goals.putHealthGoals(changes, version)
 
-    /** Focus minutes are today's focus sessions here, as on the live API. */
+    /** Focus minutes are today's focus sessions here, as on the live API; sample mode adds today's water logs. */
     override suspend fun goalProgressToday(): GoalProgress {
         val today = day(0)
         val focus = sessions(today, today).filter { it.kind == "focus" }.sumOf { it.minutes }
-        return goals.progress(focus)
+        if (!sample) return goals.progress(focus)
+        val water = logbook.logs(today, today, LogType.water).sumOf { it.number("ml") ?: 0.0 }
+        return goals.progress(focus, water)
     }
 
     override suspend fun habits(includeArchived: Boolean): List<Habit> = goals.habits(includeArchived)
@@ -632,7 +705,7 @@ class StubApi(
         val now = now()
         val today = now.atZone(zone).toLocalDate()
         val ratings = mutex.withLock { historyRatings.toMap() }
-        val seeds = StubSessionHistory.seeds(today, zone, ratings).filter { s ->
+        val seeds = StubSessionHistory.seeds(today, zone, ratings, sample).filter { s ->
             val key = s.date ?: return@filter false
             key >= from && key <= to
         }
@@ -656,7 +729,7 @@ class StubApi(
         val today = now.atZone(zone).toLocalDate()
         if (StubSessionHistory.isSeed(id)) {
             val ratings = mutex.withLock { historyRatings.toMap() }
-            StubSessionHistory.find(id, today, zone, ratings)?.let { return it }
+            StubSessionHistory.find(id, today, zone, ratings, sample)?.let { return it }
         } else {
             val live = sessions(DayKey.string(today.minusDays(1)), DayKey.string(today)).firstOrNull { it.id == id }
             if (live != null) return SessionHistory.detailOf(live)
@@ -672,13 +745,17 @@ class StubApi(
     override suspend fun exportSessionsCsv(from: String, to: String): String =
         StubSessionHistory.csv(historyAll(from, to), zone)
 
-    /** The fixed and edited events around now; a deleted or unknown id is a 404 (null). */
+    /**
+     * The fixed and edited events around now, and in sample mode any sample day's; a deleted or unknown id is a 404
+     * (null).
+     */
     override suspend fun event(id: String): CalendarEvent? {
         mutex.withLock {
             if (id in deletedEvents) return null
             editedEvents[id]?.let { return it }
         }
         val now = now()
+        if (sample) SampleActivity.event(id, now.atZone(zone).toLocalDate(), zone)?.let { return it }
         return events(now.minusSeconds(2 * 86_400L), now.plusSeconds(2 * 86_400L)).firstOrNull { it.id == id }
     }
 
@@ -686,7 +763,7 @@ class StubApi(
     private suspend fun rateHistory(sessionId: String, difficulty: Difficulty): SessionRecord {
         val today = now().atZone(zone).toLocalDate()
         return mutex.withLock {
-            val seed = StubSessionHistory.find(sessionId, today, zone, historyRatings)
+            val seed = StubSessionHistory.find(sessionId, today, zone, historyRatings, sample)
                 ?: throw AuraError.Server(code = "session_not_found", message = "That session isn't there.", status = 404)
             if (!seed.record.isFocus) {
                 throw AuraError.Server(code = "not_focus_session", message = "Only a focus session can be rated.", status = 409)
@@ -699,13 +776,13 @@ class StubApi(
     /** A seed's trace, built from its window. */
     private fun historyTrace(id: String): SessionTrace? {
         val today = now().atZone(zone).toLocalDate()
-        val seed = StubSessionHistory.find(id, today, zone, emptyMap()) ?: return null
+        val seed = StubSessionHistory.find(id, today, zone, emptyMap(), sample) ?: return null
         return StubSessionHistory.trace(seed, zone)
     }
 
     // MARK: Logbook
 
-    private val logbook = StubLogbook(now)
+    private val logbook = StubLogbook(now, sample)
 
     override suspend fun logs(from: String, to: String, type: LogType?): List<LogEntry> = logbook.logs(from, to, type)
 
@@ -808,6 +885,9 @@ class StubApi(
             workdayStart = "09:00", workdayEnd = "18:00", lunchStart = "13:00",
             lunchMinutes = 60, workDays = listOf(1, 2, 3, 4, 5, 6, 7),
         )
+
+        /** Mon-Fri 09:00-18:00, lunch at 13:00: the work week sample mode's calendar follows. */
+        val sampleSchedule: WorkSchedule get() = SampleActivity.schedule
 
         /** The score every stub work day has: a steady day (68-78), so 2 h of heavy work. */
         internal const val zoneScore = 72
@@ -1062,6 +1142,10 @@ internal object StubPlan {
      * nothing when `skipCheck` was sent. `laterDay` is a date after today, which the Planner plans without the Quick
      * check: the basis names no check time whatever `skipCheck` says, and "Book the dentist" (due tomorrow, so unplaced
      * today) is placed 15:00-15:30 in either variant, leaving nothing unplaced.
+     *
+     * `score` is the day's capacity score. Sample mode sends `firstStart` (where other tasks start instead of 16:00)
+     * and `capacityAware`: heavy tasks go first and only while the day's heavy minutes last, the rest of them
+     * `overCapacity`, and the stub's fixed warnings are left out.
      */
     fun build(
         key: String,
@@ -1076,6 +1160,9 @@ internal object StubPlan {
         laterDay: Boolean = false,
         tasks: List<TaskItem> = StubApi.stubTasks,
         busy: List<Pair<Instant, Instant>> = emptyList(),
+        score: Int = StubApi.zoneScore,
+        firstStart: Instant? = null,
+        capacityAware: Boolean = false,
     ): DayPlan {
         fun time(hour: Int, minute: Int): Instant = StubZones.at(hour * 60 + minute, day, zone)
         // As the Planner: only open focus tasks marked autoAllocate, narrowed by taskIds.
@@ -1084,7 +1171,7 @@ internal object StubPlan {
             it.autoAllocate && !it.done && it.workMode == TaskWorkMode.focus && (wanted?.contains(it.id) ?: true)
         }
         val ids = candidates.map { it.id }.toSet()
-        val zoneDay = StubZones.day(key, schedule, StubApi.zoneScore, zone)
+        val zoneDay = StubZones.day(key, schedule, score, zone)
         val rhythm = zoneDay.status == ZoneStatus.ready && zoneDay.heavyMinutes > 0
         // Each block with the task it belongs to, so a rest goes when its task is left out.
         val blocks: List<Owned>
@@ -1102,7 +1189,7 @@ internal object StubPlan {
                     demand = 25.0, workType = "routine",
                     reason = "Light enough for any hour: 14:00 keeps the better hours for harder work.")),
             )
-            warnings = PlanWarnings(committedOnRecovery = 1, recoveryMoved = 1)
+            warnings = if (capacityAware) PlanWarnings() else PlanWarnings(committedOnRecovery = 1, recoveryMoved = 1)
         } else {
             blocks = listOf(
                 Owned("t3", PlanBlock(taskId = "t3", blockId = "plan-$key-t3", start = time(9, 0), end = time(11, 0),
@@ -1124,14 +1211,25 @@ internal object StubPlan {
         // Any other task (one made here) goes from 16:00 on, one after another with 15 min between, until the day ends.
         val dayEnd = StubZones.at(schedule?.let { WorkSchedule.minutes(it.workdayEnd) } ?: (18 * 60), day, zone)
         val taken = (fixed.map { it.start to it.end } + busy).toMutableList()
-        var cursor = time(16, 0)
+        var cursor = firstStart ?: time(16, 0)
         val extraPlaced = mutableListOf<PlanBlock>()
         val extraUnplaced = mutableListOf<UnplacedTask>()
-        for (task in candidates.filter { it.id !in fixedOwners }) {
+        fun heavy(task: TaskItem): Boolean =
+            (task.demand ?: 50) >= 70 || task.workType == TaskWorkType.deepFocus
+        var others = candidates.filter { it.id !in fixedOwners }
+        if (capacityAware) others = others.sortedWith(compareBy({ !heavy(it) }, { it.priority.ordinal }))
+        var heavyLeft = zoneDay.heavyMinutes.toLong()
+        for (task in others) {
             val minutes = (task.estimateMinutes ?: PLANNER_DEFAULT_MINUTES).toLong()
             if (minutes > longestGap) {
                 extraUnplaced += UnplacedTask(task.id, "tooLong", "Longer than any free gap in your day.")
                 continue
+            }
+            if (capacityAware && heavy(task)) {
+                if (minutes > heavyLeft) {
+                    extraUnplaced += UnplacedTask(task.id, "overCapacity", "Too demanding for your capacity that day.")
+                    continue
+                }
             }
             var start = cursor
             while (true) {
@@ -1145,10 +1243,11 @@ internal object StubPlan {
                 extraUnplaced += UnplacedTask(task.id, "noFreeTime", "No free time left that day.")
                 continue
             }
+            if (capacityAware && heavy(task)) heavyLeft -= minutes
             val label = String.format(Locale.ROOT, "%02d:%02d", start.atZone(zone).hour, start.atZone(zone).minute)
             extraPlaced += PlanBlock(taskId = task.id, blockId = "plan-$key-${task.id}", start = start, end = end,
                 demand = (task.demand ?: 50).toDouble(), workType = task.workType?.raw ?: "routine",
-                reason = "$label: free time after the rest of your plan.")
+                reason = if (capacityAware) "$label: a free gap in your calendar." else "$label: free time after the rest of your plan.")
             taken += start to end
             cursor = end.plusSeconds(15 * 60)
         }
@@ -1158,7 +1257,7 @@ internal object StubPlan {
         val checkAt: Instant? = if (laterDay) null else quickCheckAt ?: if (skipCheck) null else time(8, 40)
         val basis = PlanBasis(
             quickCheckAt = checkAt, attention = 71.0, sleepMinutes = 432.0, sharpestHours = null,
-            capacityOpening = StubApi.zoneScore.toDouble(), workLimitMinutes = null,
+            capacityOpening = score.toDouble(), workLimitMinutes = null,
         )
         return DayPlan(date = key, generatedAt = generatedAt, basis = basis, placed = placed, unplaced = unplaced,
             warnings = warnings, version = version)

@@ -1,5 +1,8 @@
 package info.ibtaura.aura.core
 
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
@@ -48,16 +51,29 @@ internal object DayRanges {
     }
 }
 
-/** The backend, reached through `ServiceClient`. Routes and shapes follow packages/contracts/src in aws_docs. */
+/**
+ * The backend, reached through `ServiceClient`. Routes and shapes follow packages/contracts/src in aws_docs.
+ * `meKeepMillis` is how long a GET /v1/me answer is kept and shared (`MeCache`); LiveServices passes 60 s, and the
+ * default 0 reads it every time.
+ */
 class LiveApi(
     private val config: AppConfig,
     tokens: AccessTokenSource,
-    http: OkHttpClient,
+    private val http: OkHttpClient,
     sleep: AuraSleep = realSleep,
     private val now: AuraNow = realNow,
+    meKeepMillis: Long = 0L,
 ) : AuraApi {
     private val client = ServiceClient(config, tokens, http, sleep, now)
     private val policyVersion = config.consentPolicyVersion
+
+    /** The profile, shared with LiveGoals and LiveLogbook. */
+    private val me = MeCache(meKeepMillis) { client.send(ServiceName.identity, "GET", "/v1/me") }
+
+    private val warmer by lazy { ConnectionWarmer(config, http) }
+
+    /** Tasks Find a time placed in this run, so their blocks are looked for even before Task mirrors them. */
+    private val placedTasks = PlacedTasks()
 
     companion object {
         /** Longest range the metrics routes take. */
@@ -72,6 +88,9 @@ class LiveApi(
 
         /** Most pages `GET /v1/sessions` is followed for. */
         private const val maxSessionPages = 5
+
+        /** The most sessions one page of `GET /v1/sessions` takes (contracts common.ts pageQuery: 1-500). */
+        private const val sessionPageSize = 500
 
         /** Most days `POST /v1/health-connect/days/batch` takes. */
         private const val maxHealthBatchDays = 31
@@ -97,20 +116,16 @@ class LiveApi(
 
         private fun esc(text: String): String = URLEscape.component(text)
 
-        private val badResponse: AuraError
-            get() = AuraError.Server("bad_response", "Aura sent an answer this app can't read.", 200)
+        private val badResponse: AuraError get() = wireBadResponse
 
         private val notAvailable = "Health Connect sync isn't available yet."
 
-        private fun <T> decode(serializer: KSerializer<T>, text: String): T =
-            try {
-                wireJson.decodeFromString(serializer, text)
-            } catch (_: Exception) {
-                throw badResponse
-            }
+        /** Off the main thread (WireDecode.kt). */
+        private suspend fun <T> decode(serializer: KSerializer<T>, text: String): T = wireDecode(serializer, text)
 
         /** The plan in `{"plan": ...}`. One without a readable `generatedAt` is a bad answer, like one that isn't JSON. */
-        private fun dayPlan(text: String): DayPlan = decode(WirePlanResponse.serializer(), text).plan.model ?: throw badResponse
+        private suspend fun dayPlan(text: String): DayPlan =
+            decode(WirePlanResponse.serializer(), text).plan.model ?: throw badResponse
 
         /** The value, or JSON null for a body key that must be present. */
         private fun orNull(value: String?): JsonElement = value?.let { JsonPrimitive(it) } ?: JsonNull
@@ -375,16 +390,18 @@ class LiveApi(
 
     // MARK: Profile
 
-    /** The route refuses a write without the version just read, so a zone set in between is never overwritten. */
+    /**
+     * The route refuses a write without the version just read, so a zone set in between is never overwritten. The
+     * profile may come from `MeCache`; a 412 reads it fresh, once.
+     */
     override suspend fun setTimeZoneIfMissing(identifier: String) {
         val body = buildJsonObject { put("timezone", identifier) }.toString()
         var retried = false
         while (true) {
-            val me = get(WireMe.serializer(), ServiceName.identity, "/v1/me", emptyMap())
+            val me = profile(fresh = retried)
             if (!me.timezone.isNullOrEmpty()) return
             try {
-                client.send(ServiceName.identity, "PUT", "/v1/me/profile", body = body,
-                    headers = mapOf("If-Match" to "\"v${me.version}\""))
+                putProfile(body, me.version)
                 return
             } catch (error: AuraError.Server) {
                 // Something else wrote to the profile since the read: read again, once.
@@ -394,23 +411,32 @@ class LiveApi(
         }
     }
 
-    override suspend fun workSchedule(): WorkSchedule? =
-        get(WireMe.serializer(), ServiceName.identity, "/v1/me", emptyMap()).schedule
+    override suspend fun workSchedule(): WorkSchedule? = profile().schedule
 
     /** Sends only the work hours, with the version just read; a write in between makes it read again, once. */
     override suspend fun setWorkSchedule(schedule: WorkSchedule) {
         val body = WireWorkSchedule.update(schedule).toString()
         var retried = false
         while (true) {
-            val me = get(WireMe.serializer(), ServiceName.identity, "/v1/me", emptyMap())
+            val me = profile(fresh = retried)
             try {
-                client.send(ServiceName.identity, "PUT", "/v1/me/profile", body = body,
-                    headers = mapOf("If-Match" to "\"v${me.version}\""))
+                putProfile(body, me.version)
                 return
             } catch (error: AuraError.Server) {
                 if (error.status != 412 || retried) throw error
                 retried = true
             }
+        }
+    }
+
+    /** GET /v1/me through the shared cache. */
+    private suspend fun profile(fresh: Boolean = false): WireMe = decode(WireMe.serializer(), me.text(fresh))
+
+    /** PUT /v1/me/profile with If-Match; the answer (the whole profile) replaces the cached one. */
+    private suspend fun putProfile(body: String, version: Int) {
+        me.write {
+            client.send(ServiceName.identity, "PUT", "/v1/me/profile", body = body,
+                headers = mapOf("If-Match" to "\"v$version\""))
         }
     }
 
@@ -433,13 +459,16 @@ class LiveApi(
      * Reads the profile's work hours first and sends them as the day window; without any the Planner uses
      * 09:00-18:00. A failed read stops here instead of planning in the wrong hours. Errors come through as the
      * Planner sends them: 409 `quick_check_required` (ask, then call again with `skipCheck`), 400 `date_in_past`.
+     * The work hours come from `MeCache`, so previews in a row don't each read the profile again.
      */
     override suspend fun allocate(date: String, dryRun: Boolean, skipCheck: Boolean, taskIds: List<String>?): DayPlan {
         val schedule = workSchedule()
         val request = WireAllocateRequest(date = date, dryRun = dryRun, skipCheck = skipCheck, taskIds = taskIds,
             workdayStart = schedule?.workdayStart, workdayEnd = schedule?.workdayEnd)
         val text = client.send(ServiceName.planner, "POST", "/v1/planner/allocate", body = request.json().toString())
-        return dayPlan(text)
+        val plan = dayPlan(text)
+        if (!dryRun) placedTasks.note(plan)
+        return plan
     }
 
     /** Null on a 404, which is how the Planner says no plan has been made for that day yet. */
@@ -450,7 +479,7 @@ class LiveApi(
             if (error.status == 404) return null
             throw error
         }
-        return dayPlan(text)
+        return dayPlan(text).also { placedTasks.note(it) }
     }
 
     // MARK: Quick check
@@ -486,13 +515,16 @@ class LiveApi(
         return if (detail.isNullOrEmpty()) null else detail
     }
 
-    /** At most `maxSessionPages` pages, then newest first by start. */
+    /**
+     * At most `maxSessionPages` pages, then newest first by start. Pages of `sessionPageSize` (the route's most; its
+     * default is 100), so a busy range is one call, not several in a row.
+     */
     override suspend fun sessions(from: String, to: String): List<SessionRecord> {
         val records = mutableListOf<SessionRecord>()
         var cursor: String? = null
         var pages = 0
         do {
-            val query = mutableMapOf("from" to from, "to" to to)
+            val query = mutableMapOf("from" to from, "to" to to, "limit" to sessionPageSize.toString())
             cursor?.let { query["cursor"] = it }
             val page = get(WireSessionPage.serializer(), ServiceName.session, "/v1/sessions", query)
             records.addAll(page.records)
@@ -545,8 +577,7 @@ class LiveApi(
         client.send(ServiceName.session, "PUT", "/v1/reviews/${esc(item.blockId)}", body = body.toString())
     }
 
-    override suspend fun sleepSchedule(): SleepSchedule? =
-        get(WireMe.serializer(), ServiceName.identity, "/v1/me", emptyMap()).sleepSchedule
+    override suspend fun sleepSchedule(): SleepSchedule? = profile().sleepSchedule
 
     /** 403 `consent_required` is `AuraError.ConsentRequired`, as on the other Health Data routes. */
     override suspend fun putSleepNight(night: SleepNight): SleepNightResult {
@@ -605,7 +636,7 @@ class LiveApi(
 
     // MARK: Goals
 
-    private val goals by lazy { LiveGoals(client, now) }
+    private val goals by lazy { LiveGoals(client, now, me) }
 
     override suspend fun goalsProfile(): GoalsProfile = goals.profile()
 
@@ -614,21 +645,26 @@ class LiveApi(
 
     /**
      * The goal columns must load; water and focus minutes are extras, null when their route fails (water logs need
-     * Health Data's /v1/logs, focus minutes Session's list).
+     * Health Data's /v1/logs, focus minutes Session's list). The three reads run at the same time.
      */
-    override suspend fun goalProgressToday(): GoalProgress {
-        val progress = goals.metricsToday()
-        val water = try {
-            goals.waterToday()
-        } catch (error: AuraError.Server) {
-            null
+    override suspend fun goalProgressToday(): GoalProgress = coroutineScope {
+        val day = DayKey.string(now())
+        val metrics = async { goals.metricsToday(day) }
+        val water = async {
+            try {
+                goals.waterToday(day)
+            } catch (error: AuraError.Server) {
+                null
+            }
         }
-        val focus = try {
-            sessions(progress.date, progress.date).filter { it.kind == "focus" }.sumOf { it.minutes }
-        } catch (error: AuraError.Server) {
-            null
+        val focus = async {
+            try {
+                sessions(day, day).filter { it.kind == "focus" }.sumOf { it.minutes }
+            } catch (error: AuraError.Server) {
+                null
+            }
         }
-        return progress.copy(waterMl = water, focusMinutes = focus)
+        metrics.await().copy(waterMl = water.await(), focusMinutes = focus.await())
     }
 
     override suspend fun habits(includeArchived: Boolean): List<Habit> = goals.habits(includeArchived)
@@ -651,19 +687,15 @@ class LiveApi(
     // MARK: Settings (goals)
 
     override suspend fun meSettings(): Map<String, JsonElement> {
-        val text = client.send(ServiceName.identity, "GET", "/v1/me")
-        val me = try {
-            wireJson.parseToJsonElement(text) as? JsonObject
-        } catch (_: Exception) {
-            null
-        } ?: throw badResponse
-        return (me["settings"] as? JsonObject)?.toMap() ?: emptyMap()
+        val profile = wireObject(me.text())
+        return (profile["settings"] as? JsonObject)?.toMap() ?: emptyMap()
     }
 
+    /** The answer (the whole profile) replaces the cached one. */
     override suspend fun putMeSettings(changes: Map<String, JsonElement?>) {
         if (changes.isEmpty()) return
         val body = JsonObject(changes.mapValues { it.value ?: JsonNull })
-        client.send(ServiceName.identity, "PUT", "/v1/me/settings", body = body.toString())
+        me.write { client.send(ServiceName.identity, "PUT", "/v1/me/settings", body = body.toString()) }
     }
 
     // MARK: Session history
@@ -704,7 +736,7 @@ class LiveApi(
 
     // MARK: Logbook
 
-    private val logbook = LiveLogbook(client)
+    private val logbook = LiveLogbook(client, me)
 
     override suspend fun logs(from: String, to: String, type: LogType?): List<LogEntry> = logbook.logs(from, to, type)
 
@@ -727,10 +759,13 @@ class LiveApi(
         return decode(WireEventAnswer.serializer(), text).event.model ?: throw badResponse
     }
 
-    override suspend fun unpinTaskFromPlanner(taskId: String) {
+    override suspend fun unpinTaskFromPlanner(taskId: String) = unpinTaskFromPlanner(taskId, null)
+
+    /** With the caller's version the PATCH goes at once; a 412 still reads the task and tries once more. */
+    override suspend fun unpinTaskFromPlanner(taskId: String, version: Int?) {
         val body = buildJsonObject { put("autoAllocate", false) }
         try {
-            patchTask(taskId, null, body)
+            patchTask(taskId, version, body)
         } catch (error: AuraError.Server) {
             if (error.status != 404) throw error
         }
@@ -757,7 +792,8 @@ class LiveApi(
      * Lists today to 14 days on (DayKeys, well inside the route's 62) by `source=planner`, following every page, and
      * deletes this task's blocks that start now or later: those carrying its `taskId`, and those without one whose id
      * is Planner's own for it (`plan-<date>-<task>`, its `-p<n>` pieces and its `-rest` break). Planner writes the
-     * break with no `taskId`, so listing by `taskId` alone left the break on the calendar.
+     * break with no `taskId`, so listing by `taskId` alone left the break on the calendar. The deletes run at the
+     * same time.
      */
     override suspend fun removePlannerBlocks(taskId: String): Int {
         val start = now()
@@ -769,21 +805,47 @@ class LiveApi(
         )
         val blocks = allPages(WirePlannerBlockPage.serializer(), ServiceName.calendar, "/v1/calendar/events", query)
         val owned = Regex("^plan-\\d{4}-\\d{2}-\\d{2}-${Regex.escape(planTaskPart(taskId))}(-p\\d+|-rest)?$")
-        var removed = 0
-        for (block in blocks.distinctBy { it.id }) {
-            if (block.source != "planner") continue
+        val doomed = blocks.distinctBy { it.id }.filter { block ->
             val mine = block.taskId?.let { it == taskId } ?: owned.matches(block.id)
-            if (!mine) continue
-            val at = WireDate.parse(block.start) ?: continue
-            if (at < start) continue
-            try {
-                client.send(ServiceName.calendar, "DELETE", "/v1/calendar/events/${esc(block.id)}")
-            } catch (error: AuraError.Server) {
-                if (error.status != 404) throw error
-            }
-            removed += 1
+            val at = WireDate.parse(block.start)
+            block.source == "planner" && mine && at != null && at >= start
         }
-        return removed
+        coroutineScope {
+            doomed.map { block -> async { deleteBlock(block.id) } }.awaitAll()
+        }
+        return doomed.size
+    }
+
+    /**
+     * Skips the calendar read for a task that can't have planner blocks: Task mirrors no block (`blockId`) and no
+     * block time (`scheduledAt`) on it, and Find a time didn't place it in this run of the app (Task's mirror lags
+     * Planner by a moment, so a task placed just now is looked for anyway).
+     */
+    override suspend fun removePlannerBlocks(task: TaskItem): Int {
+        val mayHaveBlocks = task.blockId != null || task.scheduledAt != null || placedTasks.contains(task.id)
+        if (!mayHaveBlocks) {
+            if (PerfLog.on) PerfLog.line("skip removePlannerBlocks: no block on the task")
+            return 0
+        }
+        return removePlannerBlocks(task.id)
+    }
+
+    /** DELETE /v1/calendar/events/{id}; a block already gone counts as deleted. */
+    private suspend fun deleteBlock(id: String) {
+        try {
+            client.send(ServiceName.calendar, "DELETE", "/v1/calendar/events/${esc(id)}")
+        } catch (error: AuraError.Server) {
+            if (error.status != 404) throw error
+        }
+    }
+
+    // MARK: Speed (network layer)
+
+    override suspend fun warmUp() = warmer.warmUp()
+
+    override fun clearCaches() {
+        me.clear()
+        placedTasks.clear()
     }
 
     /**

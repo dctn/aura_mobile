@@ -13,7 +13,9 @@ import info.ibtaura.aura.core.LogEntry
 import info.ibtaura.aura.core.LogIds
 import info.ibtaura.aura.core.LogType
 import info.ibtaura.auraclarus.shell.AppState
+import info.ibtaura.auraclarus.shell.OwnSaves
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.serialization.json.JsonArray
@@ -29,6 +31,11 @@ import java.time.LocalDate
  * check-ins, the water and calorie goals, and optimistic writes. A write shows at once and is taken back with a
  * message when the server refuses it. Entries written here are kept through a reload, so one the server's list
  * doesn't carry yet doesn't blink out.
+ *
+ * Instant saves: the `...InBackground` writes run in the app's scope, so closing a sheet or leaving the page doesn't
+ * cancel them, and a save's data bump is marked as this page's own ([own]), so the page doesn't load its logs,
+ * check-ins and the water goal again after every tap: the entry is already shown. The water goal is read once per
+ * page load.
  */
 @Stable
 internal class LogbookModel(private val app: AppState) {
@@ -51,6 +58,12 @@ internal class LogbookModel(private val app: AppState) {
         private set
     var settingsLoaded by mutableStateOf(false)
         private set
+
+    /** This page's own data bumps, which its load skips (`if (model.own.shouldLoad(app.dataVersion)) model.load()`). */
+    val own = OwnSaves()
+
+    /** A refusal from a background save whose sheet has already closed, shown on the page until the next save. */
+    var message by mutableStateOf<String?>(null)
 
     /** Entries written on this page, by id, kept through a reload until the server lists them. */
     private val written = LinkedHashMap<String, LogEntry>()
@@ -107,7 +120,7 @@ internal class LogbookModel(private val app: AppState) {
         calorieGoal = goal
         return try {
             app.api.putMeSettings(mapOf(CALORIE_GOAL_KEY to JsonPrimitive(goal)))
-            app.dataVersion += 1
+            own.bump(app)
             null
         } catch (e: CancellationException) {
             throw e
@@ -116,6 +129,15 @@ internal class LogbookModel(private val app: AppState) {
             app.note(e)
             message(e)
         }
+    }
+
+    /** Runs a page's save in the app's scope, so leaving the page doesn't cancel it. */
+    fun launchInApp(block: suspend () -> Unit): Job = app.launch { block() }
+
+    /** Saves a new calorie goal at once in the app's scope; a refusal puts the old one back and goes to [message]. */
+    fun saveCalorieGoalInBackground(goal: Int) {
+        message = null
+        app.launch { saveCalorieGoal(goal)?.let { message = it } }
     }
 
     /**
@@ -128,15 +150,40 @@ internal class LogbookModel(private val app: AppState) {
         takenAt: Instant = Instant.now(),
         date: String = DayKey.string(takenAt),
     ): String? {
+        val id = showLog(type, data, takenAt, date)
+        return sendLog(id, type, data, takenAt, date)
+    }
+
+    /**
+     * Adds a log at once and saves it in the app's scope, so it carries on when the sheet or page goes away.
+     * `onRefused` gets the words when the server refuses it (the entry is taken back); by default they go to [message].
+     */
+    fun addLogInBackground(
+        type: LogType,
+        data: Map<String, JsonElement>,
+        takenAt: Instant = Instant.now(),
+        date: String = DayKey.string(takenAt),
+        onRefused: (String) -> Unit = { message = it },
+    ) {
+        message = null
+        val id = showLog(type, data, takenAt, date)
+        app.launch { sendLog(id, type, data, takenAt, date)?.let(onRefused) }
+    }
+
+    private fun showLog(type: LogType, data: Map<String, JsonElement>, takenAt: Instant, date: String): String {
         val id = LogIds.new()
         val local = LogEntry(id, type, date, takenAt, data, Instant.now())
         written[id] = local
         logs = logs + local
+        return id
+    }
+
+    private suspend fun sendLog(id: String, type: LogType, data: Map<String, JsonElement>, takenAt: Instant, date: String): String? {
         return try {
             val saved = app.api.addLog(type, date, takenAt, data, id = id)
             written[id] = saved
             logs = logs.map { if (it.id == id) saved else it }
-            app.dataVersion += 1
+            own.bump(app)
             null
         } catch (e: CancellationException) {
             throw e
@@ -150,15 +197,36 @@ internal class LogbookModel(private val app: AppState) {
 
     /** Adds a check-in at once and sends it, as [addLog]. */
     suspend fun addCheckin(kind: CheckinKind, answers: Map<String, JsonElement>, takenAt: Instant = Instant.now()): String? {
+        val id = showCheckin(kind, answers, takenAt)
+        return sendCheckin(id, kind, answers, takenAt)
+    }
+
+    /** Adds a check-in at once and saves it in the app's scope, as [addLogInBackground]. */
+    fun addCheckinInBackground(
+        kind: CheckinKind,
+        answers: Map<String, JsonElement>,
+        takenAt: Instant = Instant.now(),
+        onRefused: (String) -> Unit = { message = it },
+    ) {
+        message = null
+        val id = showCheckin(kind, answers, takenAt)
+        app.launch { sendCheckin(id, kind, answers, takenAt)?.let(onRefused) }
+    }
+
+    private fun showCheckin(kind: CheckinKind, answers: Map<String, JsonElement>, takenAt: Instant): String {
         val id = LogIds.new()
         val local = localCheckin(id, kind, takenAt, answers)
         writtenCheckins[id] = local
         checkins = checkins + local
+        return id
+    }
+
+    private suspend fun sendCheckin(id: String, kind: CheckinKind, answers: Map<String, JsonElement>, takenAt: Instant): String? {
         return try {
             val saved = app.api.addCheckin(kind, takenAt, answers, id = id)
             writtenCheckins[id] = saved
             checkins = checkins.map { if (it.id == id) saved else it }
-            app.dataVersion += 1
+            own.bump(app)
             null
         } catch (e: CancellationException) {
             throw e

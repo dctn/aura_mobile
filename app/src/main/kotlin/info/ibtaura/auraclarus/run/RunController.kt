@@ -124,6 +124,8 @@ class RunController(
     private val api: AuraApi get() = app.api
     /** UI tests: no restore, no saving, and no notifications, whose permission prompt would cover the screen. */
     private val isUiTesting = app.flags.isUiTesting
+    /** Only the real app keeps a run across restarts; a sample run must never come back on the live account. */
+    private val keepsRun = !app.flags.isUiTesting && !app.flags.isSample
     /** `--uitesting-short-run`: every timed run lasts 3 seconds, so the walk can reach the Done sheet. */
     private val isShortRun = app.flags.shortRun
     private val prefs: SharedPreferences = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -163,7 +165,7 @@ class RunController(
         // saved run itself; the old one stops, so the run isn't driven twice.
         latest?.shutDown()
         latest = this
-        if (!isUiTesting) restore()
+        if (keepsRun) restore()
         runCatching { ProcessLifecycleOwner.get().lifecycle.addObserver(foreground) }
     }
 
@@ -570,7 +572,7 @@ class RunController(
     // MARK: Saving
 
     private fun save() {
-        if (isUiTesting) return
+        if (!keepsRun) return
         val run = active
         prefs.edit {
             if (run == null) remove(STORE_KEY) else putString(STORE_KEY, json.encodeToString(ActiveRun.serializer(), run))

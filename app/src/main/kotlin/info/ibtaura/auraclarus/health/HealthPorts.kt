@@ -263,7 +263,7 @@ internal class HealthStubSleepPort(private val hasNight: Boolean) : HealthSleepS
 internal class HealthStubDayPort(private val app: AppState) : HealthPort {
     private var sent = false
 
-    override suspend fun isConnected(): Boolean = app.flags.healthNight && app.healthConnected
+    override suspend fun isConnected(): Boolean = (app.flags.healthNight || app.flags.isSample) && app.healthConnected
 
     override suspend fun syncRecentDays() {
         if (sent) return

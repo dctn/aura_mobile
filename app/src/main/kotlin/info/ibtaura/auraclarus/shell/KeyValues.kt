@@ -21,9 +21,16 @@ class SharedPrefsKeyValues(private val prefs: SharedPreferences) : KeyValues {
     override fun remove(key: String) = prefs.edit { remove(key) }
 
     companion object {
-        /** "aura_app" for the app, "uitesting" for UI tests, so a walk never sees the app's own settings. */
+        /**
+         * "aura_app" for the app, "uitesting" for UI tests and "aura_sample" in sample mode, so neither ever sees the
+         * app's own settings (pins, today's check-in).
+         */
         fun forApp(context: Context, flags: LaunchFlags): SharedPrefsKeyValues {
-            val name = if (flags.isUiTesting) "uitesting" else "aura_app"
+            val name = when {
+                flags.isUiTesting -> "uitesting"
+                flags.isSample -> "aura_sample"
+                else -> "aura_app"
+            }
             return SharedPrefsKeyValues(context.getSharedPreferences(name, Context.MODE_PRIVATE))
         }
     }

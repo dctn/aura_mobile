@@ -56,6 +56,7 @@ import info.ibtaura.auraclarus.design.SectionTitle
 import info.ibtaura.auraclarus.design.auraIcon
 import info.ibtaura.auraclarus.home.BetaTimeField
 import info.ibtaura.auraclarus.shell.AppState
+import info.ibtaura.auraclarus.shell.CacheKeys
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -89,16 +90,20 @@ private val fallbackOptions = listOf(
  */
 @Composable
 fun RecoveryBreakSheet(app: AppState, onStart: (RecoveryBreakChoice) -> Unit, onDismiss: () -> Unit) {
-    var options by remember { mutableStateOf<List<RecoveryOption>>(emptyList()) }
+    // From the screen cache when the sheet opened before, so the choices show at once.
+    var options by remember {
+        mutableStateOf(app.cached<List<RecoveryOption>>(CacheKeys.recoveryOptions(20))?.filter { it.type != null }.orEmpty())
+    }
     var selectedId by rememberSaveable { mutableStateOf<String?>(null) }
     var minutes by rememberSaveable { mutableIntStateOf(20) }
     val selected = options.firstOrNull { it.id == selectedId }
 
     // Only kinds the app knows are listed, since the session must send one of them.
     LaunchedEffect(Unit) {
-        var loaded: List<RecoveryOption> = emptyList()
+        // A failed load keeps the cached choices, if any.
+        var loaded: List<RecoveryOption> = app.cached<List<RecoveryOption>>(CacheKeys.recoveryOptions(20)).orEmpty()
         try {
-            loaded = app.api.recoveryOptions(20)
+            loaded = app.cache.load(CacheKeys.recoveryOptions(20)) { app.api.recoveryOptions(20) }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Throwable) {
@@ -194,6 +199,9 @@ private fun BreakTypeRow(option: RecoveryOption, isSelected: Boolean, onClick: (
     }
 }
 
+/** How long "Break added." shows before the sheet closes (was 1.5 s; the save itself has already finished). */
+private const val SAVED_LINGER_MILLIS = 600L
+
 /**
  * "Add a break I took": records a break from today or yesterday that wasn't started in the app. Shows itself as an
  * [AuraSheet] while composed; Cancel/Done, a swipe, or a moment after "Break added." call [onDismiss].
@@ -232,7 +240,9 @@ fun LogBreakSheet(app: AppState, onDismiss: () -> Unit) {
                 saving = false
                 savedText = if (logged.created) "Break added." else "Already added."
                 app.dataVersion += 1
-                delay(1500)
+                // This Save waits for the server: an overlap with another break is a common refusal and must show here,
+                // in the sheet. The "Break added." line only lingers briefly (the walk test reads it, so it keeps 1.5 s).
+                delay(if (app.flags.isUiTesting) 1500 else SAVED_LINGER_MILLIS)
                 onDismiss()
             } catch (e: CancellationException) {
                 throw e

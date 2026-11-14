@@ -3,6 +3,10 @@ package info.ibtaura.auraclarus.settings
 import android.content.Context
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
+import androidx.compose.ui.Alignment
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -34,6 +38,7 @@ import info.ibtaura.aura.core.UnitSystem
 import info.ibtaura.auraclarus.shell.AppState
 import info.ibtaura.auraclarus.shell.AuraNav
 import info.ibtaura.auraclarus.shell.Route
+import info.ibtaura.auraclarus.shell.SampleMode
 import kotlinx.coroutines.CancellationException
 
 /** Work hours, the account, the version and Sign out (Settings/SettingsView.swift). The Figma has no frame for it. */
@@ -43,6 +48,8 @@ fun SettingsScreen(app: AppState, nav: AuraNav) {
     var confirmingSignOut by remember { mutableStateOf(false) }
     var signingOut by remember { mutableStateOf(false) }
     var scheduleFailed by remember { mutableStateOf(false) }
+    // The switch's new value while its confirm dialog shows.
+    var confirmingSample by remember { mutableStateOf<Boolean?>(null) }
 
     // Runs again after the form saves, since saving bumps `dataVersion`.
     LaunchedEffect(app.dataVersion) {
@@ -96,7 +103,21 @@ fun SettingsScreen(app: AppState, nav: AuraNav) {
                 symbolColor = AuraColors.gray,
             )
         }
-        HealthSettingsSection(app)
+        if (app.flags.isSample) {
+            AuraCard(spacing = 6.dp) {
+                Text("Health Connect", style = AuraType.bodyMedium, color = Color.Black)
+                Text(
+                    "Off while sample data is on. Sleep, steps and heart data are made up.",
+                    style = AuraType.caption,
+                    color = AuraColors.gray,
+                )
+            }
+        } else {
+            HealthSettingsSection(app)
+        }
+        if (SampleMode.allowed(context)) {
+            SampleDataSection(on = app.flags.isSample, onChange = { confirmingSample = it })
+        }
         AuraCard(spacing = 14.dp) {
             if (email != null) {
                 InfoRow("Account", email)
@@ -111,6 +132,25 @@ fun SettingsScreen(app: AppState, nav: AuraNav) {
             style = PillStyle.Secondary,
             fills = true,
             enabled = !signingOut,
+        )
+    }
+
+    confirmingSample?.let { turnOn ->
+        AuraConfirmDialog(
+            title = if (turnOn) "Use sample data?" else "Back to your account?",
+            message = if (turnOn) {
+                "The app restarts with weeks of made-up data. Changes you make stay on this phone until it restarts. " +
+                    "Nothing is sent to your account or read from Health Connect."
+            } else {
+                "The app restarts on your own account. Sample changes are dropped."
+            },
+            confirmTitle = "Restart",
+            onConfirm = {
+                confirmingSample = null
+                SampleMode.set(context, turnOn)
+            },
+            onDismiss = { confirmingSample = null },
+            confirmTag = "settings-sample-confirm",
         )
     }
 
@@ -130,6 +170,30 @@ fun SettingsScreen(app: AppState, nav: AuraNav) {
             onDismiss = { confirmingSignOut = false },
             confirmTag = "settings-sign-out-confirm",
         )
+    }
+}
+
+/** Debug builds: run the whole app on made-up data, to see how it behaves with weeks of use. */
+@Composable
+private fun SampleDataSection(on: Boolean, onChange: (Boolean) -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Text("Sample data", style = AuraType.heading, color = Color.Black, modifier = Modifier.semantics { heading() })
+        AuraCard(spacing = 6.dp) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Use sample data", style = AuraType.bodyMedium, color = Color.Black, modifier = Modifier.weight(1f))
+                Switch(
+                    checked = on,
+                    onCheckedChange = onChange,
+                    colors = SwitchDefaults.colors(checkedTrackColor = AuraColors.green, checkedThumbColor = Color.White),
+                    modifier = Modifier.testTag("settings-sample"),
+                )
+            }
+            Text(
+                "Made-up sleep, steps, heart, sessions, tasks and logs, kept on this phone. For trying the app only.",
+                style = AuraType.caption,
+                color = AuraColors.gray,
+            )
+        }
     }
 }
 

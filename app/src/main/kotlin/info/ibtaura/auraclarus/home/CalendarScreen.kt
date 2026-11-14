@@ -45,6 +45,7 @@ import info.ibtaura.auraclarus.design.WorkHoursRow
 import info.ibtaura.auraclarus.design.ZoneText
 import info.ibtaura.auraclarus.design.auraIcon
 import info.ibtaura.auraclarus.shell.AppState
+import info.ibtaura.auraclarus.shell.CacheKeys
 import info.ibtaura.auraclarus.shell.AuraNav
 import info.ibtaura.auraclarus.shell.Route
 import kotlinx.coroutines.CancellationException
@@ -62,14 +63,15 @@ import java.time.ZoneId
 @Composable
 fun CalendarScreen(app: AppState, nav: AuraNav) {
     // Every event from yesterday to 13 days ahead (15 days, inside the route's 62), loaded at once; the chips pick one.
-    var events by remember { mutableStateOf<List<CalendarEvent>?>(null) }
+    // Starts from the screen cache (Home fills the same entry), so the page draws at once and refreshes quietly.
+    var events by remember { mutableStateOf(app.cachedCalendarEvents()) }
     var failed by remember { mutableStateOf(false) }
     // The day shown, as days from today (-1 is yesterday). Kept when the editor is pushed and popped.
     var dayOffset by rememberSaveable { mutableIntStateOf(0) }
     var zoneDay by remember { mutableStateOf<ZoneDay?>(null) }
     var zonesFailed by remember { mutableStateOf(false) }
-    var schedule by remember { mutableStateOf<WorkSchedule?>(null) }
-    var scheduleLoaded by remember { mutableStateOf(false) }
+    var schedule by remember { mutableStateOf(app.workSchedule) }
+    var scheduleLoaded by remember { mutableStateOf(app.workScheduleLoaded) }
     var retry by remember { mutableIntStateOf(0) }
     var now by remember { mutableStateOf(Instant.now()) }
 
@@ -81,13 +83,9 @@ fun CalendarScreen(app: AppState, nav: AuraNav) {
 
     // Events, the chosen day's zones and the work hours load on their own; each can fail on its own.
     LaunchedEffect(app.dataVersion, retry) {
-        val today = Instant.now().atZone(zone).toLocalDate()
-        val from = today.plusDays(EventDays.FIRST.toLong()).atStartOfDay(zone).toInstant()
-        val to = today.plusDays(EventDays.LAST + 1L).atStartOfDay(zone).toInstant()
         try {
-            val loaded = app.api.events(from, to)
-            app.rememberEvents(loaded)
-            events = loaded
+            // Through the cache, which also remembers the events for the editor.
+            events = app.loadCalendarEvents()
             failed = false
         } catch (e: CancellationException) {
             throw e
@@ -99,14 +97,13 @@ fun CalendarScreen(app: AppState, nav: AuraNav) {
     LaunchedEffect(app.dataVersion, retry, selectedKey) {
         zonesFailed = false
         try {
-            val loaded = app.api.dayZones(selectedKey, selectedKey)
-            zoneDay = loaded.firstOrNull { it.date == selectedKey } ?: loaded.firstOrNull()?.copy(date = selectedKey)
-                ?: ZoneDay(date = selectedKey, status = ZoneStatus.unknown)
+            // Each day's zones are kept, so tapping back to a day already seen draws it at once.
+            zoneDay = loadDayZones(app, selectedKey)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Throwable) {
             app.note(e)
-            zonesFailed = zoneDay?.date != selectedKey
+            zonesFailed = zoneDay?.date != selectedKey && !app.cache.has(CacheKeys.zones(selectedKey))
         }
     }
     LaunchedEffect(app.dataVersion, retry) {
@@ -120,6 +117,10 @@ fun CalendarScreen(app: AppState, nav: AuraNav) {
             app.note(e)
         }
     }
+    // Every chip's zones in one request once the page is up, so tapping another day draws at once.
+    LaunchedEffect(app.dataVersion) {
+        prefetchChipZones(app, todayDate)
+    }
     // The hour grid's red line and the "Earlier today" split move every minute.
     LaunchedEffect(Unit) {
         while (true) {
@@ -128,8 +129,9 @@ fun CalendarScreen(app: AppState, nav: AuraNav) {
         }
     }
 
-    // The zones of the day shown; a load for another day still on its way doesn't count.
-    val shownZone = zoneDay?.takeIf { it.date == selectedKey }
+    // The zones of the day shown; a load for another day still on its way doesn't count. A day seen before shows its
+    // cached zones while they refresh.
+    val shownZone = zoneDay?.takeIf { it.date == selectedKey } ?: app.cached<ZoneDay>(CacheKeys.zones(selectedKey))
     val readyDay = shownZone?.takeIf { it.status == ZoneStatus.ready }
     val zonesLoading = shownZone == null && !zonesFailed
     val dayStart = selectedDate.atStartOfDay(zone).toInstant()
@@ -258,5 +260,37 @@ private fun CalendarDayGroup(
                 }
             }
         }
+    }
+}
+
+/** One day's zones through the screen cache, as Calendar shows them. Home's prefetch fills today's. */
+internal suspend fun loadDayZones(app: AppState, day: String): ZoneDay = app.cache.load(CacheKeys.zones(day)) {
+    val loaded = app.api.dayZones(day, day)
+    loaded.firstOrNull { it.date == day } ?: loaded.firstOrNull()?.copy(date = day)
+        ?: ZoneDay(date = day, status = ZoneStatus.unknown)
+}
+
+/**
+ * The zones for every day chip (yesterday to 13 days ahead) in one request, stored per day. Days already fresh in the
+ * cache are left alone, and nothing is stored if the data changed while the request was out. Fails quietly: a chip
+ * still loads its own day when tapped.
+ */
+internal suspend fun prefetchChipZones(app: AppState, today: LocalDate) {
+    if (app.flags.isUiTesting) return
+    val days = EventDays.offsets.map { DayKey.string(today.plusDays(it.toLong())) }
+    if (days.all { app.cache.isFresh(CacheKeys.zones(it)) }) return
+    val version = app.dataVersion
+    val loaded = try {
+        app.api.dayZones(days.first(), days.last())
+    } catch (e: CancellationException) {
+        throw e
+    } catch (_: Throwable) {
+        return
+    }
+    if (app.dataVersion != version) return
+    val byDay = loaded.associateBy { it.date }
+    days.forEach { day ->
+        val zones = byDay[day] ?: return@forEach
+        if (!app.cache.isFresh(CacheKeys.zones(day))) app.cache.put(CacheKeys.zones(day), zones)
     }
 }

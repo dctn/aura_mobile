@@ -11,18 +11,21 @@ import java.util.UUID
 /**
  * Goals, habits and settings without a network, for UI tests and CI. Seeded with believable numbers: a part-done day,
  * three habits (one already ticked today) and metric units. StubApi's `// MARK: Goals` block calls this.
+ *
+ * With `sample` (StubApi's sample mode) it starts with SampleActivity's goals and five habits with weeks of logs, and
+ * works streaks and stats out from the logs.
  */
-internal class StubGoals(private val now: AuraNow) {
+internal class StubGoals(private val now: AuraNow, private val sample: Boolean = false) {
     private val mutex = Mutex()
     private var version = 3
-    private var goals = HealthGoals(
+    private var goals = if (sample) SampleActivity.goals else HealthGoals(
         stepsPerDay = 8000, activeKcalPerDay = 500, sleepNeedMinutes = 480, standHoursPerDay = 12,
         bedtime = "23:00", wakeTime = "07:00", waterGoalMl = 2000,
     )
     private val settings = linkedMapOf<String, JsonElement>(
         GoalsProfile.UNITS_KEY to JsonPrimitive("metric"),
-        GoalsProfile.FOCUS_GOAL_KEY to JsonPrimitive(120),
-    )
+        GoalsProfile.FOCUS_GOAL_KEY to JsonPrimitive(if (sample) SampleActivity.focusGoalMinutes else 120),
+    ).apply { if (sample) put(CALORIE_GOAL_KEY, JsonPrimitive(SampleActivity.calorieGoal)) }
     private val habits = LinkedHashMap<String, Habit>()
     private val logs = LinkedHashMap<String, HabitLog>()
 
@@ -31,6 +34,16 @@ internal class StubGoals(private val now: AuraNow) {
     private fun day(offset: Long): String = DayKey.string(now().atZone(DayKey.zone).toLocalDate().plusDays(offset))
 
     init {
+        if (sample) seedSample() else seedDefault()
+    }
+
+    private fun seedSample() {
+        val (sampleHabits, sampleLogs) = SampleActivity.habits(now(), DayKey.zone)
+        sampleHabits.forEach { habits[it.id] = it }
+        sampleLogs.forEach { logs[it.id] = it }
+    }
+
+    private fun seedDefault() {
         val seed = listOf(
             Habit(id = "h-water", name = "Drink a glass of water", cue = "After I wake up", icon = "drop.fill",
                 colorHex = "0088FF", streak = HabitStreak(5, 12, null), version = 1, sortOrder = 0),
@@ -84,9 +97,22 @@ internal class StubGoals(private val now: AuraNow) {
         version += 1
     }
 
-    /** A day well under way: 6,240 steps, 310 kcal, 7 stand hours, 1,250 ml of water. Percentages from the goals. */
-    suspend fun progress(focusMinutes: Int): GoalProgress = mutex.withLock {
+    /**
+     * A day well under way: 6,240 steps, 310 kcal, 7 stand hours, 1,250 ml of water. Percentages from the goals. In
+     * sample mode the day so far by the clock (SampleActivity.progressSoFar) and `waterMl`, today's water logs.
+     */
+    suspend fun progress(focusMinutes: Int, waterMl: Double? = null): GoalProgress = mutex.withLock {
         fun pct(value: Double, goal: Int?): Double? = goal?.takeIf { it > 0 }?.let { value / it * 100 }
+        if (sample) {
+            val (steps, kcal, stand) = SampleActivity.progressSoFar(now(), DayKey.zone)
+            return@withLock GoalProgress(
+                date = today(),
+                steps = steps, stepsPct = pct(steps, goals.stepsPerDay),
+                activeKcal = kcal, activeKcalPct = pct(kcal, goals.activeKcalPerDay),
+                standHours = stand, standHoursPct = pct(stand, goals.standHoursPerDay),
+                waterMl = waterMl ?: 0.0, focusMinutes = focusMinutes,
+            )
+        }
         GoalProgress(
             date = today(),
             steps = 6240.0, stepsPct = pct(6240.0, goals.stepsPerDay),
@@ -148,6 +174,7 @@ internal class StubGoals(private val now: AuraNow) {
 
     suspend fun habitStats(id: String): HabitStats = mutex.withLock {
         val habit = habits[id] ?: throw AuraError.Server("not_found", "That habit is gone.", 404)
+        if (sample) return@withLock SampleActivity.stats(habit, logs.values, now().atZone(DayKey.zone).toLocalDate())
         val mine = logs.values.filter { it.habitId == id }
         val recent = mine.map { it.date }.filter { it >= day(-29) }.distinct().size
         HabitStats(
@@ -161,8 +188,9 @@ internal class StubGoals(private val now: AuraNow) {
         )
     }
 
-    /** The seeded best and a current streak that grows by one when today is ticked. */
+    /** The seeded best and a current streak that grows by one when today is ticked; in sample mode, from the logs. */
     private fun withStreak(habit: Habit): Habit {
+        if (sample) return habit.copy(streak = SampleActivity.streak(habit, logs.values, now().atZone(DayKey.zone).toLocalDate()))
         val tickedToday = logs.values.any { it.habitId == habit.id && it.date == today() }
         val base = habit.streak
         val current = base.current + if (tickedToday && habit.id != "h-water") 1 else 0
@@ -178,4 +206,9 @@ internal class StubGoals(private val now: AuraNow) {
         goal = HabitGoal(draft.goalEnabled, draft.goalTargetCount, draft.goalDeadline),
         isNegative = draft.isNegative, isPaused = draft.isPaused,
     )
+
+    private companion object {
+        /** The Calorie Tracker's goal setting (the app's LogbookModel.CALORIE_GOAL_KEY). */
+        const val CALORIE_GOAL_KEY = "nutrition.calorieGoal"
+    }
 }

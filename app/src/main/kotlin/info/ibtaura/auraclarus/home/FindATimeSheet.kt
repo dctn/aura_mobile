@@ -129,10 +129,11 @@ fun FindATimeSheet(app: AppState, nav: AuraNav, route: Route.FindATime) {
     val noTasks = candidates?.isEmpty() == true
     val noneTicked = candidates?.isNotEmpty() == true && selected.isEmpty()
 
-    // The tasks load first: they decide what's ticked and give the rows their titles.
+    // The tasks come first: they decide what's ticked and give the rows their titles. The list Tasks just showed is
+    // used as it is (TasksMemo), so Plan my day and Schedule go straight to the preview; else it loads.
     LaunchedEffect(Unit) {
         try {
-            val loaded = app.api.tasks()
+            val loaded = TasksMemo.tasks(app) ?: app.api.tasks()
             tasks = loaded
             selected = TaskPlanning.initialSelection(TaskPlanning.candidates(loaded), route.taskIds)
         } catch (e: CancellationException) {
@@ -372,7 +373,7 @@ fun FindATimeSheet(app: AppState, nav: AuraNav, route: Route.FindATime) {
 }
 
 /** How long "Added N blocks" shows before the page closes. */
-private const val ADDED_MILLIS = 900L
+private const val ADDED_MILLIS = 300L
 
 private const val QUICK_CHECK_CODE = "quick_check_required"
 

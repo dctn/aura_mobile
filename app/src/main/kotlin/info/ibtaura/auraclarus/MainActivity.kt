@@ -22,9 +22,11 @@ import info.ibtaura.auraclarus.design.AuraTheme
 import info.ibtaura.auraclarus.shell.AppState
 import info.ibtaura.auraclarus.shell.LaunchFlags
 import info.ibtaura.auraclarus.shell.RootScreen
+import info.ibtaura.auraclarus.shell.SampleMode
 import info.ibtaura.auraclarus.shell.SharedPrefsKeyValues
 import info.ibtaura.auraclarus.shell.installPorts
 import info.ibtaura.auraclarus.shell.makeServices
+import info.ibtaura.auraclarus.perf.PerfMarks
 
 /** Holds the one AppState across activity re-creation; its scope lives as long as the app's task. */
 class AppHolder(application: Application, flags: LaunchFlags) : AndroidViewModel(application) {
@@ -42,12 +44,13 @@ class AppHolder(application: Application, flags: LaunchFlags) : AndroidViewModel
 
 class MainActivity : ComponentActivity() {
     private val holder: AppHolder by viewModels {
-        viewModelFactory { initializer { AppHolder(application, LaunchFlags.from(intent)) } }
+        viewModelFactory { initializer { AppHolder(application, SampleMode.applyTo(LaunchFlags.from(intent), application)) } }
     }
 
     @OptIn(ExperimentalComposeUiApi::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        PerfMarks.install(this)
         // Light only, as the iOS app: dark bar icons even when the phone is in dark mode.
         enableEdgeToEdge(
             statusBarStyle = SystemBarStyle.light(Color.TRANSPARENT, Color.TRANSPARENT),

@@ -43,6 +43,7 @@ import info.ibtaura.auraclarus.design.AuraType
 import info.ibtaura.auraclarus.design.PillButton
 import info.ibtaura.auraclarus.design.ZoneText
 import info.ibtaura.auraclarus.shell.AppState
+import info.ibtaura.auraclarus.shell.CacheKeys
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import java.time.LocalDate
@@ -56,15 +57,19 @@ import java.util.Locale
  */
 @Composable
 internal fun ReviewInboxContent(app: AppState, showsHeader: Boolean = true, showsEmpty: Boolean = false) {
-    var items by remember { mutableStateOf<List<ReviewItem>>(emptyList()) }
-    var loaded by remember { mutableStateOf(false) }
+    val inboxKey = CacheKeys.inbox(DayKey.string(LocalDate.now(DayKey.zone)), 7)
+    // From the screen cache first (Home and the Review page share it), so a return shows the cards at once.
+    val cachedItems = remember { app.cached<List<ReviewItem>>(inboxKey) }
+    var items by remember { mutableStateOf(cachedItems.orEmpty()) }
+    var loaded by remember { mutableStateOf(cachedItems != null) }
     // Answered here. A reload can't bring them back while the backend catches up.
     var answered by remember { mutableStateOf<Set<String>>(emptySet()) }
     val openItems = items.filter { it.blockId !in answered }
 
     LaunchedEffect(app.dataVersion) {
         try {
-            items = app.api.reviewInbox(date = DayKey.string(LocalDate.now(DayKey.zone)), days = 7)
+            val date = DayKey.string(LocalDate.now(DayKey.zone))
+            items = app.cache.load(CacheKeys.inbox(date, 7)) { app.api.reviewInbox(date = date, days = 7) }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Throwable) {
@@ -80,7 +85,11 @@ internal fun ReviewInboxContent(app: AppState, showsHeader: Boolean = true, show
             }
             openItems.forEach { item ->
                 androidx.compose.runtime.key(item.blockId) {
-                    ReviewCard(app, item) { answered = answered + item.blockId }
+                    ReviewCard(app, item) {
+                        answered = answered + item.blockId
+                        // So the next visit, drawn from the cache, doesn't ask again.
+                        app.cache.update<List<ReviewItem>>(inboxKey) { list -> list.filterNot { it.blockId == item.blockId } }
+                    }
                 }
             }
         } else if (showsEmpty && loaded) {

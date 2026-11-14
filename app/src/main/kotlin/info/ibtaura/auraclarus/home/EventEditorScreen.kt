@@ -81,6 +81,8 @@ import info.ibtaura.auraclarus.design.auraIcon
 import info.ibtaura.auraclarus.shell.AppState
 import info.ibtaura.auraclarus.shell.AuraNav
 import info.ibtaura.auraclarus.shell.Route
+import info.ibtaura.auraclarus.shell.rememberSaveMessenger
+import info.ibtaura.auraclarus.shell.saveInBackground
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import java.time.Instant
@@ -178,6 +180,8 @@ private fun EventEditorForm(app: AppState, event: CalendarEvent?, close: () -> U
     var showingTask by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val focus = LocalFocusManager.current
+    // A background save's refusal shows in the error line while this page shows, else as a toast.
+    val messenger = rememberSaveMessenger { errorText = it }
 
     val current = base
     val isNew = current == null
@@ -225,7 +229,8 @@ private fun EventEditorForm(app: AppState, event: CalendarEvent?, close: () -> U
     // Stops Find a time placing the task again. A failure here doesn't undo the change already saved.
     suspend fun unpin(taskId: String) {
         try {
-            app.api.unpinTaskFromPlanner(taskId)
+            // The linked task's version is already here, so the PATCH goes without reading the task first.
+            app.api.unpinTaskFromPlanner(taskId, linkedTask?.takeIf { it.id == taskId }?.version)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Throwable) {
@@ -233,25 +238,23 @@ private fun EventEditorForm(app: AppState, event: CalendarEvent?, close: () -> U
         }
     }
 
+    /**
+     * Closes the editor at once and saves in the app's scope. Every screen loads again when it lands, so Calendar and
+     * Home show the change; a refusal is told (on this page if it still shows, else as a toast) and the screens load
+     * again, so nothing that didn't save stays on them.
+     */
     fun run(action: String, write: suspend () -> Unit) {
-        saving = true
         errorText = null
         movedText = null
-        scope.launch {
-            try {
-                write()
-                saving = false
-                // Every screen loads again, so Calendar and Home show the change.
+        close()
+        app.saveInBackground(
+            write = write,
+            onFailed = { e ->
+                messenger.tell(eventErrorWords(e, action))
                 app.dataVersion += 1
-                close()
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Throwable) {
-                saving = false
-                errorText = eventErrorWords(e, action)
-                app.note(e)
-            }
-        }
+            },
+            onSaved = { app.dataVersion += 1 },
+        )
     }
 
     /** A quick move (POST .../move). The editor stays open on the moved event. */
@@ -266,7 +269,8 @@ private fun EventEditorForm(app: AppState, event: CalendarEvent?, close: () -> U
                 val moved = app.api.moveEvent(original.id, to = target)
                 val taskId = original.taskId
                 if (original.isPlannerBlock && taskId != null) {
-                    unpin(taskId)
+                    // The move is saved; unpinning its task goes on behind it.
+                    app.launch { unpin(taskId) }
                     unpinned = true
                 }
                 app.rememberEvents(listOf(moved))
@@ -421,6 +425,7 @@ private fun EventEditorForm(app: AppState, event: CalendarEvent?, close: () -> U
             task = task,
             horizon = task.horizon,
             onClose = { showingTask = false },
+            // Shown at once; every screen loads again once the save lands.
             onDone = { edit ->
                 when (edit) {
                     is TaskEdit.Saved -> linkedTask = edit.task
@@ -429,7 +434,17 @@ private fun EventEditorForm(app: AppState, event: CalendarEvent?, close: () -> U
                         taskGone = true
                     }
                 }
+            },
+            onSaved = { edit ->
+                (edit as? TaskEdit.Saved)?.let { linkedTask = it.task }
                 app.dataVersion += 1
+            },
+            onFailed = { failure ->
+                failure.undo.before?.let {
+                    linkedTask = it
+                    taskGone = false
+                }
+                messenger.tell(failure.words)
             },
         )
     }

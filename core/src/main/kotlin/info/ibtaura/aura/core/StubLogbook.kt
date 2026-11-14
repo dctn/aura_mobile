@@ -13,9 +13,10 @@ import java.time.LocalTime
 
 // The logbook for StubApi: a week of believable entries made relative to the clock, so CI screenshots always show a
 // filled Logging page and Calorie Tracker. Behaves as the server does: a resent id answers with the stored entry,
-// check-ins need one of their kind's answers, and nothing can be edited or deleted.
+// check-ins need one of their kind's answers, and nothing can be edited or deleted. With `sample` it starts with
+// SampleActivity's two weeks instead (StubApi's sample mode).
 
-internal class StubLogbook(private val now: AuraNow) {
+internal class StubLogbook(private val now: AuraNow, private val sample: Boolean = false) {
     private val mutex = Mutex()
     private var seeded = false
     private val logs = LinkedHashMap<String, LogEntry>()
@@ -23,7 +24,7 @@ internal class StubLogbook(private val now: AuraNow) {
     private val settings = LinkedHashMap<String, JsonElement>()
 
     /** The water goal the stub profile has (healthGoals.waterGoalMl). */
-    val waterGoal = 2000
+    val waterGoal = if (sample) SampleActivity.waterGoalMl else 2000
 
     private fun at(day: LocalDate, hour: Int, minute: Int): Instant =
         day.atTime(LocalTime.of(hour, minute)).atZone(DayKey.zone).toInstant()
@@ -31,6 +32,12 @@ internal class StubLogbook(private val now: AuraNow) {
     private fun seedIfNeeded() {
         if (seeded) return
         seeded = true
+        if (sample) {
+            val (sampleLogs, sampleCheckins) = SampleActivity.logbook(now(), DayKey.zone)
+            sampleLogs.forEach { logs[it.id] = it }
+            sampleCheckins.forEach { checkins[it.id] = it }
+            return
+        }
         val today = now().atZone(DayKey.zone).toLocalDate()
         fun log(id: String, type: LogType, day: LocalDate, hour: Int, minute: Int, vararg data: Pair<String, Any>) {
             val time = at(day, hour, minute)

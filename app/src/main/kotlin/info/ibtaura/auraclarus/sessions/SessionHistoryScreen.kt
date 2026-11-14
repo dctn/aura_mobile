@@ -40,7 +40,6 @@ import info.ibtaura.aura.core.Rewards
 import info.ibtaura.aura.core.SessionDetail
 import info.ibtaura.aura.core.SessionFilter
 import info.ibtaura.aura.core.SessionHistory
-import info.ibtaura.aura.core.SessionHistoryPager
 import info.ibtaura.aura.core.WeekSummary
 import info.ibtaura.auraclarus.design.AuraCard
 import info.ibtaura.auraclarus.design.AuraColors
@@ -56,9 +55,11 @@ import info.ibtaura.auraclarus.home.HomeRetryLine
 import info.ibtaura.auraclarus.recovery.LogBreakSheet
 import info.ibtaura.auraclarus.shell.AppState
 import info.ibtaura.auraclarus.shell.AuraNav
+import info.ibtaura.auraclarus.shell.CacheKeys
 import info.ibtaura.auraclarus.shell.Tab
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
+import java.time.Instant
 import java.time.LocalDate
 
 /** How many days the history and the export cover. */
@@ -74,17 +75,21 @@ fun SessionHistoryScreen(app: AppState, nav: AuraNav, onOpenSession: (String) ->
     var filter by rememberSaveable { mutableStateOf(SessionFilter.all) }
     var retry by remember { mutableIntStateOf(0) }
 
-    var rewards by remember { mutableStateOf<Rewards?>(null) }
-    var week by remember { mutableStateOf<WeekSummary?>(null) }
+    // The header and the list start from the screen cache, so a return from a session draws the page at once and
+    // refreshes it quietly.
+    var rewards by remember { mutableStateOf(app.cached<Rewards>(CacheKeys.REWARDS)) }
+    var week by remember { mutableStateOf(cachedWeek(app)) }
     var headerFailed by remember { mutableStateOf(false) }
 
-    var sessions by remember { mutableStateOf<List<SessionDetail>?>(null) }
-    var loadedFilter by remember { mutableStateOf<SessionFilter?>(null) }
-    var pager by remember { mutableStateOf<SessionHistoryPager?>(null) }
+    // The windows already cached, newest first, without a gap: shown at once, then each refreshed.
+    val cachedStart = remember { HistoryWindows(app, LocalDate.now(DayKey.zone), filter, historyDays).cachedPrefix() }
+    var sessions by remember { mutableStateOf(cachedStart?.first) }
+    var loadedFilter by remember { mutableStateOf(if (cachedStart != null) filter else null) }
+    var pager by remember { mutableStateOf<HistoryWindows?>(null) }
     var listFailed by remember { mutableStateOf(false) }
     var loadingMore by remember { mutableStateOf(false) }
     var moreFailed by remember { mutableStateOf(false) }
-    var hasMore by remember { mutableStateOf(false) }
+    var hasMore by remember { mutableStateOf(cachedStart != null && cachedStart.second < HistoryWindows.count(historyDays)) }
 
     var loggingBreak by remember { mutableStateOf(false) }
     var exporting by remember { mutableStateOf(false) }
@@ -100,7 +105,7 @@ fun SessionHistoryScreen(app: AppState, nav: AuraNav, onOpenSession: (String) ->
         var failed = false
         launch {
             try {
-                rewards = app.api.rewards()
+                rewards = app.cache.load(CacheKeys.REWARDS) { app.api.rewards() }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Throwable) {
@@ -110,7 +115,11 @@ fun SessionHistoryScreen(app: AppState, nav: AuraNav, onOpenSession: (String) ->
             }
         }
         try {
-            week = SessionHistory.week(loadRange(app.api, SessionHistory.weekStart(today), today), today)
+            val from = SessionHistory.weekStart(today)
+            val inWeek = app.cache.load(CacheKeys.historyWeek(DayKey.string(from), DayKey.string(today))) {
+                loadRange(app.api, from, today)
+            }
+            week = SessionHistory.week(inWeek, today)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Throwable) {
@@ -123,7 +132,9 @@ fun SessionHistoryScreen(app: AppState, nav: AuraNav, onOpenSession: (String) ->
     // The list: the newest window first. A new filter starts afresh; a reload for new data keeps the old rows showing.
     LaunchedEffect(filter, app.dataVersion, retry) {
         val today = LocalDate.now(DayKey.zone)
-        val fresh = SessionHistoryPager(app.api, today, filter, totalDays = historyDays)
+        val fresh = HistoryWindows(app, today, filter, totalDays = historyDays)
+        // A reload keeps as many windows as are showing (from the cache while fresh), so the list doesn't shrink.
+        val keep = if (loadedFilter == filter) pager?.loaded ?: cachedStart?.second ?: 1 else 1
         if (loadedFilter != filter) {
             sessions = null
             listState.scrollToItem(0)
@@ -133,7 +144,7 @@ fun SessionHistoryScreen(app: AppState, nav: AuraNav, onOpenSession: (String) ->
         moreFailed = false
         loadingMore = true
         try {
-            val first = fresh.loadNext()
+            val first = fresh.loadFirst(keep)
             sessions = first
             loadedFilter = filter
         } catch (e: CancellationException) {
@@ -278,6 +289,86 @@ fun SessionHistoryScreen(app: AppState, nav: AuraNav, onOpenSession: (String) ->
 
     if (loggingBreak) {
         LogBreakSheet(app, onDismiss = { loggingBreak = false })
+    }
+}
+
+/** This week's header from the sessions already in the cache, or null when they aren't there. */
+private fun cachedWeek(app: AppState): WeekSummary? {
+    val today = LocalDate.now(DayKey.zone)
+    val key = CacheKeys.historyWeek(DayKey.string(SessionHistory.weekStart(today)), DayKey.string(today))
+    return app.cached<List<SessionDetail>>(key)?.let { SessionHistory.week(it, today) }
+}
+
+/**
+ * Core's SessionHistoryPager with each window kept in the screen cache (`CacheKeys.historyWindow`): the same windows
+ * (10 days, newest first), the same paging and filtering, but a window already loaded comes back at once, so a return
+ * from a session redraws the list and scrolling over loaded days asks nothing. A failed window is tried again on the
+ * next `loadNext`. Call it from one coroutine at a time.
+ */
+private class HistoryWindows(
+    private val app: AppState,
+    today: LocalDate,
+    private val filter: SessionFilter,
+    totalDays: Int,
+) {
+    private val windows = SessionHistory.windows(today, totalDays, WINDOW_DAYS)
+
+    /** How many windows have loaded. */
+    var loaded = 0
+        private set
+
+    val hasMore: Boolean get() = loaded < windows.size
+
+    private fun key(index: Int) = CacheKeys.historyWindow(filter.name, windows[index].first, windows[index].second)
+
+    /** The windows in the cache from the newest on, without a gap, merged, and how many; null when none is there. */
+    fun cachedPrefix(): Pair<List<SessionDetail>, Int>? {
+        var list = emptyList<SessionDetail>()
+        var count = 0
+        while (count < windows.size) {
+            val window = app.cached<List<SessionDetail>>(key(count)) ?: break
+            list = SessionHistory.merged(list, window)
+            count += 1
+        }
+        return if (count == 0) null else list to count
+    }
+
+    suspend fun loadNext(): List<SessionDetail> {
+        if (!hasMore) return emptyList()
+        val (from, to) = windows[loaded]
+        val found = app.cache.load(key(loaded)) { fetch(from, to) }
+        loaded += 1
+        return found
+    }
+
+    /** The newest `count` windows (at least one), merged. */
+    suspend fun loadFirst(count: Int): List<SessionDetail> {
+        var all = emptyList<SessionDetail>()
+        repeat(count.coerceIn(1, windows.size)) { all = SessionHistory.merged(all, loadNext()) }
+        return all
+    }
+
+    /** One whole window, every cursor page of it, newest first and filtered (as SessionHistoryPager reads it). */
+    private suspend fun fetch(from: String, to: String): List<SessionDetail> {
+        val found = mutableListOf<SessionDetail>()
+        var cursor: String? = null
+        var pages = 0
+        do {
+            val page = app.api.sessionPage(from, to, filter.serverKind, cursor, PAGE_LIMIT)
+            found.addAll(page.sessions)
+            cursor = page.cursor?.takeIf { it.isNotEmpty() }
+            pages += 1
+        } while (cursor != null && pages < MAX_PAGES)
+        return found.filter { filter.matches(it.record.kind) }.sortedByDescending { it.record.startedAt ?: Instant.MIN }
+    }
+
+    companion object {
+        private const val WINDOW_DAYS = 10
+        private const val PAGE_LIMIT = 100
+        private const val MAX_PAGES = 20
+
+        /** How many windows `totalDays` makes. */
+        fun count(totalDays: Int): Int = SessionHistory.windows(LocalDate.now(DayKey.zone), totalDays, WINDOW_DAYS).size
     }
 }
 

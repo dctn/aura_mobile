@@ -47,6 +47,7 @@ import info.ibtaura.aura.core.FieldAvailability
 import info.ibtaura.aura.core.MetricMaths
 import info.ibtaura.aura.core.MetricPoint
 import info.ibtaura.aura.core.MetricRange
+import info.ibtaura.aura.core.MetricSeries
 import info.ibtaura.aura.core.MetricTrendDirection
 import info.ibtaura.auraclarus.design.AuraCard
 import info.ibtaura.auraclarus.design.AuraColors
@@ -66,6 +67,7 @@ import info.ibtaura.auraclarus.goals.UnitsPage
 import info.ibtaura.auraclarus.goals.rememberUnitSystem
 import info.ibtaura.auraclarus.shell.AppState
 import info.ibtaura.auraclarus.shell.AuraNav
+import info.ibtaura.auraclarus.shell.CacheKeys
 import info.ibtaura.auraclarus.shell.PinnedMetric
 import info.ibtaura.auraclarus.shell.Route
 import kotlinx.coroutines.CancellationException
@@ -81,7 +83,8 @@ internal val MetricTitleInset = Modifier.padding(horizontal = 20.dp)
 @Composable
 fun MetricScreen(app: AppState, nav: AuraNav, route: Route.Metric) {
     var range by rememberSaveable { mutableStateOf(MetricRange.twoWeeks) }
-    var points by remember { mutableStateOf<List<MetricPoint>?>(null) }
+    // From the screen cache when this range was seen before, so the chart draws at once.
+    var points by remember { mutableStateOf(cachedPoints(app, route.field, range)) }
     var format by remember { mutableStateOf<String?>(null) }
     /** The newest value when the chosen range has none. */
     var newest by remember { mutableStateOf<FieldAvailability?>(null) }
@@ -99,14 +102,21 @@ fun MetricScreen(app: AppState, nav: AuraNav, route: Route.Metric) {
 
     LaunchedEffect(app.dataVersion, retry, range) {
         failed = false
+        val span = range.span(Instant.now())
+        val key = CacheKeys.series(route.field, span.from, span.to)
+        // A range seen before draws at once from the screen cache, then refreshes quietly.
+        val cached = app.cached<MetricSeries>(key)?.let { MetricMaths.dailyPoints(it.points, span) }
+        if (cached != null) {
+            points = cached
+            if (newest == null && MetricMaths.latest(cached) == null) newest = cachedNewest(route.field, app)
+        }
         try {
-            val span = range.span(Instant.now())
             val found = resolvedFormat ?: metricFormat(route.field, app)
-            val series = app.api.series(route.field, span.from, span.to)
+            val series = app.cache.load(key) { app.api.series(route.field, span.from, span.to) }
             val days = MetricMaths.dailyPoints(series.points, span)
             var fallback = newest
             if (MetricMaths.latest(days) == null && fallback == null) {
-                fallback = newestValue(route.field, app.api)
+                fallback = newestValue(route.field, app)
             }
             format = found
             points = days
@@ -115,8 +125,11 @@ fun MetricScreen(app: AppState, nav: AuraNav, route: Route.Metric) {
             throw e
         } catch (e: Throwable) {
             app.note(e)
-            points = null
-            failed = true
+            // The cached range stays; only a range with nothing to show offers a retry.
+            if (cached == null) {
+                points = null
+                failed = true
+            }
         }
     }
 
@@ -220,15 +233,21 @@ internal suspend fun metricFormat(field: String, app: AppState): String {
     return ""
 }
 
-/** Only for the hero line, so a failure here leaves the page as it is. */
-private suspend fun newestValue(field: String, api: AuraApi): FieldAvailability? = try {
-    val span = MetricMaths.daySpan(MetricMaths.availabilityDays, Instant.now())
-    api.availability(span.from, span.to).firstOrNull { it.field == field }
+/**
+ * Only for the hero line, so a failure here leaves the page as it is. The shared availability entry (Pins and Search
+ * use it too), so it's usually already there.
+ */
+private suspend fun newestValue(field: String, app: AppState): FieldAvailability? = try {
+    app.loadAvailability().firstOrNull { it.field == field }
 } catch (e: CancellationException) {
     throw e
 } catch (_: Throwable) {
     null
 }
+
+/** The newest value from the availability entry already in the cache, without asking. */
+private fun cachedNewest(field: String, app: AppState): FieldAvailability? =
+    app.cachedAvailability()?.firstOrNull { it.field == field }
 
 private data class HeroLine(val label: String, val value: String, val unit: String)
 
@@ -344,4 +363,10 @@ private fun MetricAboutCard(name: String) {
             color = AuraColors.metricGrey,
         )
     }
+}
+
+/** The range's daily points from the series already in the cache, or null when it isn't there. */
+private fun cachedPoints(app: AppState, field: String, range: MetricRange): List<MetricPoint>? {
+    val span = range.span(Instant.now())
+    return app.cached<MetricSeries>(CacheKeys.series(field, span.from, span.to))?.let { MetricMaths.dailyPoints(it.points, span) }
 }

@@ -6,7 +6,6 @@ import androidx.compose.foundation.gestures.snapping.rememberSnapFlingBehavior
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -22,13 +21,14 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -46,6 +46,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
@@ -111,9 +112,17 @@ fun RecoveryScreen(app: AppState, nav: AuraNav, pushed: Boolean = false) {
         app.startRun(mode, choice.minutes, choice.title, choice.type)
     }
 
-    BoxWithConstraints(Modifier.fillMaxSize().background(AuraColors.background)) {
-        // Exactly two tiles fill the width, with the third just past the edge.
-        val tileWidth = maxOf(150.dp, (maxWidth - 66.dp) / 2)
+    // Exactly two tiles fill the width, with the third just past the edge. The page always spans the screen, so the
+    // screen's width serves (no sub-layout over the whole page to measure it).
+    val tileWidth = maxOf(150.dp, (LocalConfiguration.current.screenWidthDp.dp - 66.dp) / 2)
+    val hour = LocalTime.now().hour
+    val rows = remember(app.modes, layout, filter, hour) { recoveryRows(app.modes, layout, filter, hour) }
+    val results = remember(app.modes, query, filter) {
+        if (isSearching) app.modes.filter { it.matches(query) && filter.matches(it) } else emptyList()
+    }
+    val bottom = 24.dp + bottomPadding()
+
+    Box(Modifier.fillMaxSize().background(AuraColors.background)) {
         Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.statusBars)) {
             RecoveryToolbar(
                 onBack = if (pushed) ({ nav.pop() }) else null,
@@ -127,38 +136,43 @@ fun RecoveryScreen(app: AppState, nav: AuraNav, pushed: Boolean = false) {
                     filtering = true
                 },
             )
-            Column(
-                Modifier
-                    .fillMaxSize()
-                    .nestedScroll(dismissKeyboard)
-                    .verticalScroll(rememberScrollState())
-                    .padding(bottom = 24.dp + bottomPadding()),
+            // Lazy, so a visit builds only the shelves on screen; the rest build as the page scrolls. Building all ten
+            // shelves at once took about 200 ms on the S20 FE every time the tab opened.
+            LazyColumn(
+                Modifier.fillMaxSize().nestedScroll(dismissKeyboard),
+                contentPadding = PaddingValues(bottom = bottom),
             ) {
-                SearchCapsule(
-                    text = query,
-                    onTextChange = { query = it },
-                    modifier = Modifier.padding(horizontal = 22.dp).padding(top = 8.dp),
-                    fieldModifier = Modifier.testTag("recovery-search"),
-                )
-                if (filter.isActive) {
-                    ActiveFilterPill(
-                        summary = filter.summary,
-                        count = app.modes.count { filter.matches(it) },
-                        onOpen = { filtering = true },
-                        onClear = { filter = RecoveryFilter() },
+                item(key = "search") {
+                    SearchCapsule(
+                        text = query,
+                        onTextChange = { query = it },
+                        modifier = Modifier.padding(horizontal = 22.dp).padding(top = 8.dp),
+                        fieldModifier = Modifier.testTag("recovery-search"),
                     )
                 }
+                if (filter.isActive) {
+                    item(key = "filter") {
+                        ActiveFilterPill(
+                            summary = filter.summary,
+                            count = app.modes.count { filter.matches(it) },
+                            onOpen = { filtering = true },
+                            onClear = { filter = RecoveryFilter() },
+                        )
+                    }
+                }
                 if (isSearching) {
-                    RecoverySearchResults(
-                        app.modes.filter { it.matches(query) && filter.matches(it) },
+                    recoverySearchResults(
+                        results,
                         tileWidth,
                         filterActive = filter.isActive,
                         onClearFilter = { filter = RecoveryFilter() },
                     ) { open(nav, it, null) }
                 } else {
-                    RecoveryBreakButtons(onTake = { takingBreak = true }, onLog = { loggingBreak = true })
-                    RecoverySections(
-                        modes = app.modes,
+                    item(key = "breaks") {
+                        RecoveryBreakButtons(onTake = { takingBreak = true }, onLog = { loggingBreak = true })
+                    }
+                    recoverySections(
+                        rows = rows,
                         layout = layout,
                         filter = filter,
                         tileWidth = tileWidth,
@@ -210,10 +224,34 @@ private fun open(nav: AuraNav, mode: Mode, headline: String?) {
     nav.push(Route.ModeDetail(mode.id, headline))
 }
 
-/** The sections in the person's order, minus hidden ones, each narrowed by the filter. */
-@Composable
-private fun RecoverySections(
-    modes: List<Mode>,
+/** One row of the Recovery page below the break pills: the Now carousel or a shelf. */
+private sealed interface RecoveryRow {
+    val key: String
+
+    data class Now(val cards: List<Mode>) : RecoveryRow {
+        override val key: String get() = "now"
+    }
+
+    data class ShelfRow(val shelf: Shelf, val tiles: List<Mode>) : RecoveryRow {
+        override val key: String get() = "shelf-${shelf.raw}"
+    }
+}
+
+/** The sections in the person's order, minus hidden ones, each narrowed by the filter; empty ones are left out. */
+private fun recoveryRows(modes: List<Mode>, layout: RecoveryLayout, filter: RecoveryFilter, hour: Int): List<RecoveryRow> =
+    layout.visible.mapNotNull { section ->
+        val shelf = section.shelf
+        if (shelf == null) {
+            Mode.nowCards(modes, hour, limit = 4).filter { filter.matches(it) }.takeIf { it.isNotEmpty() }
+                ?.let { RecoveryRow.Now(it) }
+        } else {
+            modes.filter { it.shelf == shelf && filter.matches(it) }.takeIf { it.isNotEmpty() }
+                ?.let { RecoveryRow.ShelfRow(shelf, it) }
+        }
+    }
+
+private fun LazyListScope.recoverySections(
+    rows: List<RecoveryRow>,
     layout: RecoveryLayout,
     filter: RecoveryFilter,
     tileWidth: Dp,
@@ -222,46 +260,37 @@ private fun RecoverySections(
     onClearFilter: () -> Unit,
     onEdit: () -> Unit,
 ) {
-    val hour = LocalTime.now().hour
-    val nowCards = remember(modes, hour, filter) { Mode.nowCards(modes, hour, limit = 4).filter { filter.matches(it) } }
-    val visible = layout.visible
-    var shownAny = false
-    visible.forEach { section ->
-        val shelf = section.shelf
-        if (shelf == null) {
-            if (nowCards.isNotEmpty()) {
-                shownAny = true
-                RecoveryNowSection(nowCards, onOpenNow)
-            }
-        } else {
-            val tiles = modes.filter { it.shelf == shelf && filter.matches(it) }
-            if (tiles.isNotEmpty()) {
-                shownAny = true
-                RecoveryShelf(shelf, tiles, tileWidth, onOpen)
-            }
+    items(rows, key = { it.key }, contentType = { if (it is RecoveryRow.Now) "now" else "shelf" }) { row ->
+        when (row) {
+            is RecoveryRow.Now -> RecoveryNowSection(row.cards, onOpenNow)
+            is RecoveryRow.ShelfRow -> RecoveryShelf(row.shelf, row.tiles, tileWidth, onOpen)
         }
     }
     when {
-        visible.isEmpty() -> RecoveryEmptyState(
-            symbol = "square.grid.2x2.fill",
-            title = "Everything is hidden",
-            line = "Choose which sections Recovery shows.",
-            action = "Edit Sections",
-            actionTag = "recovery-empty-edit",
-            onAction = onEdit,
-        )
-        !shownAny && filter.isActive -> RecoveryEmptyState(
-            symbol = "line.3.horizontal.decrease",
-            title = "No modes match",
-            line = if (visible.size < layout.order.size) {
-                "Try other lengths or shelves, or show hidden sections in Edit."
-            } else {
-                "Try other lengths or shelves."
-            },
-            action = "Clear Filter",
-            actionTag = "recovery-empty-clear",
-            onAction = onClearFilter,
-        )
+        layout.visible.isEmpty() -> item(key = "empty") {
+            RecoveryEmptyState(
+                symbol = "square.grid.2x2.fill",
+                title = "Everything is hidden",
+                line = "Choose which sections Recovery shows.",
+                action = "Edit Sections",
+                actionTag = "recovery-empty-edit",
+                onAction = onEdit,
+            )
+        }
+        rows.isEmpty() && filter.isActive -> item(key = "no-match") {
+            RecoveryEmptyState(
+                symbol = "line.3.horizontal.decrease",
+                title = "No modes match",
+                line = if (layout.visible.size < layout.order.size) {
+                    "Try other lengths or shelves, or show hidden sections in Edit."
+                } else {
+                    "Try other lengths or shelves."
+                },
+                action = "Clear Filter",
+                actionTag = "recovery-empty-clear",
+                onAction = onClearFilter,
+            )
+        }
     }
 }
 
@@ -450,8 +479,8 @@ private fun RecoveryShelf(shelf: Shelf, modes: List<Mode>, tileWidth: Dp, onOpen
 private fun RecoveryTileLink(mode: Mode, width: Dp, onClick: () -> Unit) {
     ModeTile(
         mode,
+        width,
         Modifier
-            .width(width)
             .clickable(role = Role.Button, onClick = onClick)
             .testTag("mode-${mode.id}"),
     )
@@ -486,9 +515,8 @@ private fun RecoveryEmptyState(
     }
 }
 
-/** While searching, the matches show together in two columns. */
-@Composable
-private fun RecoverySearchResults(
+/** While searching, the matches show together in two columns, a row per list item. */
+private fun LazyListScope.recoverySearchResults(
     modes: List<Mode>,
     tileWidth: Dp,
     filterActive: Boolean,
@@ -496,34 +524,35 @@ private fun RecoverySearchResults(
     onOpen: (Mode) -> Unit,
 ) {
     if (modes.isEmpty()) {
-        Column(
-            Modifier.fillMaxWidth().padding(top = 80.dp, start = 22.dp, end = 22.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Icon(auraIcon("magnifyingglass"), contentDescription = null, tint = AuraColors.gray, modifier = Modifier.size(44.dp))
-            Text("No Results", style = AuraType.system(22, FontWeight.Bold), color = Color.Black)
-            Text(
-                if (filterActive) "Nothing matches both the search and the filter." else "Check the spelling or try a new search.",
-                style = AuraType.callout,
-                color = AuraColors.gray,
-                textAlign = TextAlign.Center,
-            )
-            if (filterActive) {
-                Spacer(Modifier.height(6.dp))
-                PillButton("Clear Filter", onClearFilter, Modifier.testTag("recovery-search-clear-filter"), style = PillStyle.Secondary)
+        item(key = "no-results") {
+            Column(
+                Modifier.fillMaxWidth().padding(top = 80.dp, start = 22.dp, end = 22.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Icon(auraIcon("magnifyingglass"), contentDescription = null, tint = AuraColors.gray, modifier = Modifier.size(44.dp))
+                Text("No Results", style = AuraType.system(22, FontWeight.Bold), color = Color.Black)
+                Text(
+                    if (filterActive) "Nothing matches both the search and the filter." else "Check the spelling or try a new search.",
+                    style = AuraType.callout,
+                    color = AuraColors.gray,
+                    textAlign = TextAlign.Center,
+                )
+                if (filterActive) {
+                    Spacer(Modifier.height(6.dp))
+                    PillButton("Clear Filter", onClearFilter, Modifier.testTag("recovery-search-clear-filter"), style = PillStyle.Secondary)
+                }
             }
         }
         return
     }
-    Column(
-        Modifier.padding(horizontal = 22.dp).padding(top = 24.dp),
-        verticalArrangement = Arrangement.spacedBy(18.dp),
-    ) {
-        modes.chunked(2).forEach { row ->
-            Row(horizontalArrangement = Arrangement.spacedBy(22.dp)) {
-                row.forEach { mode -> RecoveryTileLink(mode, tileWidth) { onOpen(mode) } }
-            }
+    val pairs = modes.chunked(2)
+    items(pairs.size, key = { "result-" + pairs[it].first().id }, contentType = { "result" }) { index ->
+        Row(
+            Modifier.padding(horizontal = 22.dp).padding(top = if (index == 0) 24.dp else 18.dp),
+            horizontalArrangement = Arrangement.spacedBy(22.dp),
+        ) {
+            pairs[index].forEach { mode -> RecoveryTileLink(mode, tileWidth) { onOpen(mode) } }
         }
     }
 }

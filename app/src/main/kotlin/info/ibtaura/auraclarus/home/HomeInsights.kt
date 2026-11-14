@@ -41,6 +41,7 @@ import info.ibtaura.auraclarus.design.Footnote
 import info.ibtaura.auraclarus.design.SectionTitle
 import info.ibtaura.auraclarus.design.auraIcon
 import info.ibtaura.auraclarus.shell.AppState
+import info.ibtaura.auraclarus.shell.CacheKeys
 import kotlinx.coroutines.CancellationException
 import java.time.Instant
 import java.time.ZoneId
@@ -52,15 +53,16 @@ import kotlin.math.roundToInt
  */
 @Composable
 internal fun HomeInsightsSection(app: AppState, onEventClick: ((CalendarEvent) -> Unit)? = null) {
-    var scores by remember { mutableStateOf<ScoresToday?>(null) }
+    // Both start from the screen cache, so a return to Home draws at once and refreshes quietly.
+    var scores by remember { mutableStateOf(app.cached<ScoresToday>(CacheKeys.SCORES)) }
     var scoresFailed by remember { mutableStateOf(false) }
-    var events by remember { mutableStateOf<List<CalendarEvent>?>(null) }
+    var events by remember { mutableStateOf(app.cachedCalendarEvents()) }
     var eventsFailed by remember { mutableStateOf(false) }
     var retry by remember { mutableIntStateOf(0) }
 
     LaunchedEffect(app.dataVersion, retry) {
         try {
-            scores = app.api.scoresToday()
+            scores = app.cache.load(CacheKeys.SCORES) { app.api.scoresToday() }
             scoresFailed = false
         } catch (e: CancellationException) {
             throw e
@@ -70,12 +72,10 @@ internal fun HomeInsightsSection(app: AppState, onEventClick: ((CalendarEvent) -
         }
     }
     LaunchedEffect(app.dataVersion, retry) {
-        val now = Instant.now()
         try {
-            val loaded = app.api.events(now, endOfToday(now))
-            // So the event editor finds a tapped one by its id.
-            app.rememberEvents(loaded)
-            events = loaded
+            // Calendar's range (yesterday to 13 days ahead), so opening Calendar next needs no new request; today is
+            // picked out below. It also remembers the events, so the editor finds a tapped one by its id.
+            events = app.loadCalendarEvents()
             eventsFailed = false
         } catch (e: CancellationException) {
             throw e

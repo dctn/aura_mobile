@@ -77,7 +77,10 @@ private val kcalColor = AuraColors.green
 @Composable
 fun CalorieTrackerScreen(app: AppState, nav: AuraNav) {
     val model = remember { LogbookModel(app) }
-    LaunchedEffect(app.dataVersion) { model.load(withCheckins = false, withWaterGoal = false) }
+    // A bump from this page's own save is skipped: the meal is already shown.
+    LaunchedEffect(app.dataVersion) {
+        if (model.own.shouldLoad(app.dataVersion)) model.load(withCheckins = false, withWaterGoal = false)
+    }
     LaunchedEffect(Unit) { model.loadSettings() }
     CalorieTrackerPage(model, onBack = { nav.pop() })
 }
@@ -144,6 +147,8 @@ private fun SummaryCard(model: LogbookModel, day: NutritionDay, date: LocalDate,
                 Icon(auraIcon("pencil"), contentDescription = null, tint = AuraColors.blue, modifier = Modifier.size(14.dp))
             }
         }
+        // A refused meal, pattern or goal (its sheet has already closed).
+        model.message?.let { Text(it, style = AuraType.callout, color = AuraColors.red, modifier = Modifier.testTag("calorie-save-error")) }
         when {
             !model.loaded && model.failed -> HomeRetryLine("Your meals didn't load.", retry, Modifier.testTag("calorie-retry"))
             !model.loaded -> SmallSpinner()

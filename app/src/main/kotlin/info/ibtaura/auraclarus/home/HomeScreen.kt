@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
@@ -24,6 +25,7 @@ import info.ibtaura.auraclarus.design.SectionTitle
 import info.ibtaura.auraclarus.shell.AppState
 import info.ibtaura.auraclarus.shell.AuraNav
 import info.ibtaura.auraclarus.shell.Route
+import kotlinx.coroutines.delay
 
 /**
  * The Home tab (iOS HomeView, Figma "iPhone 18 Pro - 4"): Insights, Today, Burnout, Work, Pins. Each section loads on
@@ -49,6 +51,14 @@ fun HomeScreen(app: AppState, nav: AuraNav) {
                 .background(Brush.verticalGradient(listOf(AuraColors.background, AuraColors.background.copy(alpha = 0f))))
                 .clearAndSetSemantics {},
         )
+    }
+    // Once Home's own loads settle, the pages most often opened from it are filled in the background (Tasks, Goals'
+    // habits, Calendar), which also wakes their slow backends. AppState keeps it rare, and off in UI tests.
+    LaunchedEffect(app.dataVersion) {
+        // Long enough for every section's load to have started.
+        delay(300)
+        app.cache.awaitIdle()
+        app.prefetchIfDue { prefetchFromHome(app) }
     }
 }
 

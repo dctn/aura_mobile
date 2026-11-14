@@ -80,12 +80,12 @@ class ServiceClientRequestTest {
     }
 
     @Test
-    fun neverMoreThanSixOpen() = runBlocking<Unit> {
+    fun neverMoreThanMaxInFlightOpen() = runBlocking<Unit> {
         val rig = NetRig()
         rig.server.on("/v1/tasks", listOf(netJson(200, emptyTasks)), delayMs = 20)
         netConcurrently(20) { rig.api.tasks() }
         assertEquals(20, rig.server.calls("/v1/tasks").size)
-        assertTrue(rig.server.peakOpen <= 6, "peak ${rig.server.peakOpen}")
+        assertTrue(rig.server.peakOpen <= ServiceClient.maxInFlight, "peak ${rig.server.peakOpen}")
         assertTrue(rig.server.peakOpen > 1, "calls do run side by side")
     }
 

@@ -57,7 +57,8 @@ fun LoggingScreen(app: AppState, nav: AuraNav) {
     val model = remember { LogbookModel(app) }
     var page by rememberSaveable { mutableStateOf<String?>(null) }
 
-    LaunchedEffect(app.dataVersion) { model.load() }
+    // A bump from this page's own save is skipped: the entry is already shown (and the water goal is read once).
+    LaunchedEffect(app.dataVersion) { if (model.own.shouldLoad(app.dataVersion)) model.load() }
     LaunchedEffect(Unit) { model.loadSettings() }
 
     val category = LogCategory.entries.firstOrNull { it.name == page }
@@ -89,25 +90,17 @@ private fun LoggingHome(model: LogbookModel, onBack: () -> Unit, open: (String) 
 
 // MARK: Today
 
+/**
+ * Water, mood and connection for today. A tap shows at once and saves in the app's scope, so taps don't wait for each
+ * other; a refusal takes the entry back and shows under the card.
+ */
 @Composable
 private fun TodayCard(model: LogbookModel) {
-    val scope = rememberCoroutineScope()
-    var busy by remember { mutableStateOf(false) }
-    var error by remember { mutableStateOf<String?>(null) }
+    val error = model.message
     val todayKey = model.todayKey
     val water = LogbookMaths.waterMl(model.logs, todayKey)
     val mood = LogbookMaths.latest(model.checkins, CheckinKind.mood, todayKey)?.mood
     val connection = LogbookMaths.latest(model.checkins, CheckinKind.connection, todayKey)?.connection
-
-    fun send(write: suspend () -> String?) {
-        if (busy) return
-        busy = true
-        error = null
-        scope.launch {
-            error = write()
-            busy = false
-        }
-    }
 
     AuraCard(padding = 22.dp, spacing = 16.dp) {
         CardHeader("drop.fill", "Water", SearchCategoryStyle.blue) {
@@ -122,7 +115,7 @@ private fun TodayCard(model: LogbookModel) {
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             listOf(250, 500).forEach { ml ->
                 Chip("+ $ml ml", false, "logging-water-$ml", Modifier.weight(1f)) {
-                    send { model.addLog(LogType.water, json("ml" to ml)) }
+                    model.addLogInBackground(LogType.water, json("ml" to ml))
                 }
             }
         }
@@ -131,16 +124,16 @@ private fun TodayCard(model: LogbookModel) {
             mood?.let { Text(ScaleWords.moodFaces[it - 1], style = AuraType.caption, color = AuraColors.gray) }
         }
         Text("How are you feeling right now?", style = AuraType.bodyMedium, color = Color.Black)
-        FaceRow(mood, ScaleWords.moodFaces, enabled = !busy, tag = "logging-mood") { value ->
-            send { model.addCheckin(CheckinKind.mood, json("mood" to value)) }
+        FaceRow(mood, ScaleWords.moodFaces, enabled = true, tag = "logging-mood") { value ->
+            model.addCheckinInBackground(CheckinKind.mood, json("mood" to value))
         }
         info.ibtaura.auraclarus.design.CardDivider()
         CardHeader(LogCategory.people.symbol, "Connection", LogCategory.people.color) {
             connection?.let { Text(ScaleWords.connectionFaces[it - 1], style = AuraType.caption, color = AuraColors.gray) }
         }
         Text("How connected to other people do you feel?", style = AuraType.bodyMedium, color = Color.Black)
-        FaceRow(connection, ScaleWords.connectionFaces, enabled = !busy, tag = "logging-connection") { value ->
-            send { model.addCheckin(CheckinKind.connection, json("connection" to value)) }
+        FaceRow(connection, ScaleWords.connectionFaces, enabled = true, tag = "logging-connection") { value ->
+            model.addCheckinInBackground(CheckinKind.connection, json("connection" to value))
         }
         error?.let { Text(it, style = AuraType.callout, color = AuraColors.red, modifier = Modifier.testTag("logging-today-error")) }
     }

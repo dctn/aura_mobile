@@ -52,7 +52,8 @@ fun SearchCategoryScreen(app: AppState, nav: AuraNav, route: Route.SearchCategor
     var section by remember {
         mutableStateOf(app.catalogue?.firstOrNull { it.id == route.sectionId })
     }
-    var availability by remember { mutableStateOf<List<FieldAvailability>?>(null) }
+    // The shared availability entry (Home's Pins and Search use it too), so a page seen before draws at once.
+    var availability by remember { mutableStateOf(app.cachedAvailability()) }
     var failed by remember { mutableStateOf(false) }
     var retry by remember { mutableIntStateOf(0) }
     val focus = LocalFocusManager.current
@@ -68,13 +69,13 @@ fun SearchCategoryScreen(app: AppState, nav: AuraNav, route: Route.SearchCategor
                 section = app.loadCatalogue().firstOrNull { it.id == route.sectionId }
                     ?: CatalogueSection(route.sectionId, route.title, emptyList())
             }
-            val span = MetricMaths.daySpan(MetricMaths.availabilityDays, Instant.now())
-            availability = app.api.availability(span.from, span.to)
+            availability = app.loadAvailability()
         } catch (e: CancellationException) {
             throw e
         } catch (e: Throwable) {
             app.note(e)
-            failed = true
+            // Rows already showing stay; only a page with nothing to show offers a retry.
+            failed = availability == null || section == null
         }
     }
 

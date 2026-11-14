@@ -39,6 +39,7 @@ import info.ibtaura.auraclarus.health.HealthAvailability
 import info.ibtaura.auraclarus.health.healthAvailability
 import info.ibtaura.auraclarus.health.openHealthConnectInstall
 import info.ibtaura.auraclarus.shell.AppState
+import info.ibtaura.auraclarus.shell.CacheKeys
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import java.time.Instant
@@ -81,7 +82,7 @@ internal fun CheckinCard(app: AppState, onSent: () -> Unit) {
     LaunchedEffect(Unit) {
         if (scheduleLoaded) return@LaunchedEffect
         try {
-            val schedule = app.api.sleepSchedule()
+            val schedule = app.cache.load(CacheKeys.SLEEP_SCHEDULE) { app.api.sleepSchedule() }
             scheduleLoaded = true
             if (schedule != null) {
                 clockTime(schedule.bedtime)?.let { fellAsleep = it }

@@ -2,6 +2,7 @@ package info.ibtaura.auraclarus.shell
 
 import info.ibtaura.aura.core.AuraApi
 import info.ibtaura.aura.core.AuthService
+import info.ibtaura.aura.core.SampleApi
 import info.ibtaura.aura.core.StubApi
 import info.ibtaura.aura.core.StubAuth
 
@@ -16,3 +17,6 @@ fun stubServices(flags: LaunchFlags): Pair<AuraApi, AuthService> {
     }
     return api to StubAuth()
 }
+
+/** Sample mode: weeks of made-up data, edits kept in memory until the app restarts. No network. */
+fun sampleServices(): Pair<AuraApi, AuthService> = SampleApi() to StubAuth()

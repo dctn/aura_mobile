@@ -102,9 +102,7 @@ class FindTimeWalkTest : WalkTestCase() {
     private fun openCalendarFromHome() {
         Walk.openTab("Home")
         Walk.findText("Insights", timeoutMs = 20_000)
-        Walk.find("home-work-calendar", "Calendar row")
-        Walk.dragPage(0.7, 0.2)
-        Walk.dragPage(0.7, 0.2)
+        Walk.bringIntoView("home-work-calendar")
         Walk.open("home-work-calendar", until = "calendar-zone-line", message = "Calendar didn't open")
     }
 }

@@ -42,6 +42,7 @@ import info.ibtaura.auraclarus.design.SectionTitle
 import info.ibtaura.auraclarus.design.auraIcon
 import info.ibtaura.auraclarus.design.hex
 import info.ibtaura.auraclarus.shell.AppState
+import info.ibtaura.auraclarus.shell.CacheKeys
 import kotlinx.coroutines.CancellationException
 import java.time.LocalDate
 import java.util.Locale
@@ -49,16 +50,20 @@ import java.util.Locale
 /** Burnout: the newest risk of the last 14 days and its 12 dots (iOS HomeBurnoutSection). */
 @Composable
 internal fun HomeBurnoutSection(app: AppState) {
-    var latest by remember { mutableStateOf<DailyMetrics?>(null) }
-    var loaded by remember { mutableStateOf(false) }
+    // Started from the screen cache, so a return to Home shows the line at once.
+    val cachedDays = remember { app.cached<List<DailyMetrics>>(burnoutKey()) }
+    var latest by remember { mutableStateOf(cachedDays?.let(::newestBurnout)) }
+    var loaded by remember { mutableStateOf(cachedDays != null) }
     var failed by remember { mutableStateOf(false) }
     var retry by remember { mutableIntStateOf(0) }
 
     LaunchedEffect(app.dataVersion, retry) {
         val today = LocalDate.now(DayKey.zone)
+        val from = DayKey.string(today.minusDays(13))
+        val to = DayKey.string(today)
         try {
-            val days = app.api.dailyMetrics(DayKey.string(today.minusDays(13)), DayKey.string(today))
-            latest = days.sortedByDescending { it.date }.firstOrNull { it.burnoutIndexScore != null || it.burnoutIndexRisk != null }
+            val days = app.cache.load(CacheKeys.dailyMetrics(from, to)) { app.api.dailyMetrics(from, to) }
+            latest = newestBurnout(days)
             loaded = true
             failed = false
         } catch (e: CancellationException) {
@@ -96,6 +101,16 @@ internal fun HomeBurnoutSection(app: AppState) {
         Footnote(HomeCopy.footnote, linkTitle = HomeCopy.privacyLink)
     }
 }
+
+/** The last 14 days, today included: the cache key of the days the card reads. */
+private fun burnoutKey(): String {
+    val today = LocalDate.now(DayKey.zone)
+    return CacheKeys.dailyMetrics(DayKey.string(today.minusDays(13)), DayKey.string(today))
+}
+
+/** The newest day with a burnout score or risk. */
+private fun newestBurnout(days: List<DailyMetrics>): DailyMetrics? =
+    days.sortedByDescending { it.date }.firstOrNull { it.burnoutIndexScore != null || it.burnoutIndexRisk != null }
 
 /** The backend's risk word when it sends one, otherwise the score against the backend's own bands. */
 private fun burnoutLine(day: DailyMetrics?): String {

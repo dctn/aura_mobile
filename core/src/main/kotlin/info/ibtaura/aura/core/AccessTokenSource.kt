@@ -1,6 +1,8 @@
 package info.ibtaura.aura.core
 
 import kotlinx.coroutines.delay
+import okhttp3.ConnectionPool
+import okhttp3.Dispatcher
 import okhttp3.OkHttpClient
 import java.time.Instant
 import java.util.concurrent.TimeUnit
@@ -29,10 +31,23 @@ interface AccessTokenSource {
     suspend fun tokenRejected(token: String): Boolean
 }
 
-/** One OkHttp client for the API and sign-in: 25 s timeouts and no disk cache, so no health data is kept on disk. */
+/**
+ * One OkHttp client for the API and sign-in: 25 s timeouts and no disk cache, so no health data is kept on disk.
+ *
+ * The services are about ten API Gateway hosts that speak HTTP/1.1 only, so every call running at once needs its own
+ * connection, and a new one costs a second or more on a phone. The pool keeps up to 16 idle connections for five
+ * minutes (OkHttp's default is 5), and the dispatcher lets 16 calls run per host (its default of 5 sat under
+ * `ServiceClient.maxInFlight`).
+ */
 fun auraHttpClient(): OkHttpClient = OkHttpClient.Builder()
+    .connectionPool(ConnectionPool(16, 5, TimeUnit.MINUTES))
+    .dispatcher(Dispatcher().apply {
+        maxRequests = 64
+        maxRequestsPerHost = 16
+    })
     .connectTimeout(25, TimeUnit.SECONDS)
     .readTimeout(25, TimeUnit.SECONDS)
     .writeTimeout(25, TimeUnit.SECONDS)
     .callTimeout(30, TimeUnit.SECONDS)
+    .eventListenerFactory(PerfEventListener.factory)
     .build()

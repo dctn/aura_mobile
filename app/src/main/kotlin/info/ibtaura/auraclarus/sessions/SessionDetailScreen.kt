@@ -46,6 +46,7 @@ import info.ibtaura.auraclarus.design.auraIcon
 import info.ibtaura.auraclarus.home.HomeRetryLine
 import info.ibtaura.auraclarus.run.DifficultyPicker
 import info.ibtaura.auraclarus.shell.AppState
+import info.ibtaura.auraclarus.shell.CacheKeys
 import info.ibtaura.auraclarus.shell.AuraNav
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
@@ -58,13 +59,14 @@ import kotlin.math.roundToInt
  */
 @Composable
 fun SessionDetailScreen(app: AppState, nav: AuraNav, sessionId: String) {
-    var detail by remember(sessionId) { mutableStateOf<SessionDetail?>(null) }
+    // The session and its trace start from the screen cache, so opening it again draws at once.
+    var detail by remember(sessionId) { mutableStateOf(app.cached<SessionDetail>(CacheKeys.session(sessionId))) }
     var gone by remember(sessionId) { mutableStateOf(false) }
     var failed by remember(sessionId) { mutableStateOf(false) }
     var retry by remember(sessionId) { mutableIntStateOf(0) }
     var reload by remember(sessionId) { mutableIntStateOf(0) }
 
-    var trace by remember(sessionId) { mutableStateOf<SessionTrace?>(null) }
+    var trace by remember(sessionId) { mutableStateOf(app.cached<SessionTrace>(CacheKeys.trace(sessionId))) }
     var traceFailed by remember(sessionId) { mutableStateOf(false) }
     var traceRetry by remember(sessionId) { mutableIntStateOf(0) }
 
@@ -75,7 +77,8 @@ fun SessionDetailScreen(app: AppState, nav: AuraNav, sessionId: String) {
     LaunchedEffect(sessionId, retry, reload) {
         failed = false
         try {
-            detail = app.api.session(sessionId)
+            // A quiet reload after rating asks again, whatever the cache holds.
+            detail = app.cache.load(CacheKeys.session(sessionId), force = reload > 0) { app.api.session(sessionId) }
             gone = false
         } catch (e: CancellationException) {
             throw e
@@ -93,12 +96,13 @@ fun SessionDetailScreen(app: AppState, nav: AuraNav, sessionId: String) {
     LaunchedEffect(sessionId, traceRetry) {
         traceFailed = false
         try {
-            trace = app.api.sessionTrace(sessionId)
+            trace = app.cache.load(CacheKeys.trace(sessionId)) { app.api.sessionTrace(sessionId) }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Throwable) {
             app.note(e)
-            traceFailed = true
+            // A trace already showing stays.
+            traceFailed = trace == null
         }
     }
 

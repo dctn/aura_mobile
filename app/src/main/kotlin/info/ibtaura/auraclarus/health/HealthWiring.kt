@@ -26,6 +26,8 @@ enum class HealthAvailability {
  */
 fun makeSleepPort(context: Context, flags: LaunchFlags): SleepPort? {
     if (flags.isUiTesting) return HealthStubSleepPort(hasNight = flags.healthNight)
+    // Sample mode never touches Health Connect: a made-up night, sent to the in-memory backend.
+    if (flags.isSample) return HealthStubSleepPort(hasNight = true)
     val application = context.applicationContext as? Application ?: return null
     val debuggable = (application.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
     return HealthConnectSleepPort(sharedReader(application), sharedAsker(application), debuggable)
@@ -33,7 +35,7 @@ fun makeSleepPort(context: Context, flags: LaunchFlags): SleepPort? {
 
 /** Health Connect day sync; a stub that sends one stub day in UI tests. */
 fun makeHealthPort(context: Context, app: AppState): HealthPort? {
-    if (app.flags.isUiTesting) return HealthStubDayPort(app)
+    if (app.flags.isUiTesting || app.flags.isSample) return HealthStubDayPort(app)
     val application = context.applicationContext as? Application ?: return null
     return HealthConnectDayPort(application, app, sharedReader(application))
 }

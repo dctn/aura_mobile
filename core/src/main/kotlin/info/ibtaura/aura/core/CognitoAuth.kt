@@ -378,6 +378,13 @@ class CognitoAuth internal constructor(
     private val client = CognitoClient(endpoint = endpoint, clientId = config.clientId, http = http, now = now)
     private val session = AuthSession(client, store)
 
+    /**
+     * Called when a session begins or ends here (sign-in, sign-out, a refused token ending it), so what the API kept
+     * for the old account goes. LiveServices points it at `AuraApi.clearCaches`. Must be quick: it runs on the caller.
+     */
+    @Volatile
+    var onSessionChanged: (() -> Unit)? = null
+
     internal companion object {
         fun regionalEndpoint(region: String): HttpUrl =
             "https://cognito-idp.$region.amazonaws.com/".toHttpUrlOrNull() ?: "https://cognito-idp.invalid/".toHttpUrl()
@@ -415,6 +422,7 @@ class CognitoAuth internal constructor(
                 answerChallenge(step, digits)
             }
             session.begin(tokens)
+            onSessionChanged?.invoke()
             return AuthState.SignedIn(tokens.email)
         } catch (refused: CognitoRefusal) {
             throw refused.publicError
@@ -441,7 +449,9 @@ class CognitoAuth internal constructor(
 
     /** Clears the session first, then revokes as a best effort: signing out has to work offline. */
     override suspend fun signOut() {
-        val held = session.clear() ?: return
+        val held = session.clear()
+        onSessionChanged?.invoke()
+        if (held == null) return
         val body = buildJsonObject {
             put("ClientId", client.clientId)
             put("Token", held.refreshToken)
@@ -461,7 +471,8 @@ class CognitoAuth internal constructor(
 
     override suspend fun refreshedToken(rejected: String): String = session.refreshedToken(rejected)
 
-    override suspend fun tokenRejected(token: String): Boolean = session.tokenRejected(token)
+    override suspend fun tokenRejected(token: String): Boolean =
+        session.tokenRejected(token).also { ended -> if (ended) onSessionChanged?.invoke() }
 
     // The steps
 

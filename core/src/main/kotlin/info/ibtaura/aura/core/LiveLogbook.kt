@@ -95,7 +95,8 @@ internal data class WireWaterGoal(val waterGoalMl: Double? = null) {
 
 // MARK: Calls
 
-internal class LiveLogbook(private val client: ServiceClient) {
+/** `client` and `me` (the cached GET /v1/me) are LiveApi's. */
+internal class LiveLogbook(private val client: ServiceClient, private val me: MeCache) {
     companion object {
         /** `data` text is at most 500 characters on the server. */
         private const val maxText = 500
@@ -103,12 +104,8 @@ internal class LiveLogbook(private val client: ServiceClient) {
         /** Keys the check-in body sets itself, so an answer can't replace them. */
         private val reservedKeys = setOf("id", "kind", "takenAt")
 
-        private fun <T> decode(serializer: KSerializer<T>, text: String): T =
-            try {
-                wireJson.decodeFromString(serializer, text)
-            } catch (_: Exception) {
-                throw AuraError.Server("bad_response", "Aura sent an answer this app can't read.", 200)
-            }
+        /** Off the main thread (WireDecode.kt). */
+        private suspend fun <T> decode(serializer: KSerializer<T>, text: String): T = wireDecode(serializer, text)
 
         /** Text longer than the server takes is cut; everything else goes as it is. */
         internal fun cleaned(data: Map<String, JsonElement>): JsonObject = JsonObject(
@@ -166,19 +163,20 @@ internal class LiveLogbook(private val client: ServiceClient) {
 
     // MARK: Settings and goals (Identity)
 
-    suspend fun meSettings(): Map<String, JsonElement> = me().settings.orEmpty()
+    suspend fun meSettings(): Map<String, JsonElement> = profile().settings.orEmpty()
 
-    /** PUT /v1/me/settings: merged key by key on the server, a null value removes the key. Nothing goes for no changes. */
+    /**
+     * PUT /v1/me/settings: merged key by key on the server, a null value removes the key. Nothing goes for no changes.
+     * The answer (the whole profile) replaces the cached one.
+     */
     suspend fun putMeSettings(changes: Map<String, JsonElement?>) {
         if (changes.isEmpty()) return
         val body = JsonObject(changes.mapValues { it.value ?: JsonNull })
-        client.send(ServiceName.identity, "PUT", "/v1/me/settings", body = body.toString())
+        me.write { client.send(ServiceName.identity, "PUT", "/v1/me/settings", body = body.toString()) }
     }
 
-    suspend fun waterGoalMl(): Int? = me().waterGoalMl
+    suspend fun waterGoalMl(): Int? = profile().waterGoalMl
 
-    private suspend fun me(): WireLogbookMe {
-        val text = client.send(ServiceName.identity, "GET", "/v1/me")
-        return decode(WireLogbookMe.serializer(), text)
-    }
+    /** GET /v1/me through the shared cache. */
+    private suspend fun profile(): WireLogbookMe = decode(WireLogbookMe.serializer(), me.text())
 }

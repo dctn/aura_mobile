@@ -266,22 +266,41 @@ internal class HealthConnectReader(private val context: Context) {
 
     private fun origin(record: Record): String = record.metadata.dataOrigin.packageName
 
-    /** Every page of one record type in the range, up to a cap that keeps one sync light. */
+    /**
+     * Every page of one record type in the range, up to a cap that keeps one sync light. On Android 13 (the Health
+     * Connect app, not the built-in one) the last page's token is `""`, not null; treating that as "more" re-read the
+     * first page until Health Connect rate-limited the app, which is why every sync on 14 Nov 2026 failed.
+     */
     private suspend fun <T : Record> readAll(type: KClass<T>, range: TimeRangeFilter): List<T> {
         val out = mutableListOf<T>()
         var token: String? = null
+        var pages = 0
         do {
             val response = client.readRecords(
                 ReadRecordsRequest(recordType = type, timeRangeFilter = range, pageSize = 1000, pageToken = token),
             )
             out.addAll(response.records)
-            token = response.pageToken
-        } while (token != null && out.size < MAX_RECORDS)
+            pages += 1
+            token = nextPageToken(response.pageToken, response.records.size, out.size, pages)
+        } while (token != null)
         return out
     }
 
     companion object {
+        /**
+         * The token for the next page, or null to stop: no token or an empty one (Android 13 sends `""` on the last
+         * page), an empty page, the record cap, or the page cap. Each page is one request against Health Connect's quota.
+         */
+        internal fun nextPageToken(token: String?, pageRecords: Int, total: Int, pages: Int): String? = when {
+            token.isNullOrEmpty() -> null
+            pageRecords == 0 -> null
+            total >= MAX_RECORDS -> null
+            pages >= MAX_PAGES -> null
+            else -> token
+        }
+
         private const val MAX_RECORDS = 5_000
+        private const val MAX_PAGES = 10
         private const val MAX_WORKOUT_TOTALS = 10
         private const val MAX_WORKOUTS = 60
 

@@ -83,15 +83,19 @@ class EventEditorWalkTest : WalkTestCase() {
     private fun openBlock(name: String, message: String) {
         repeat(2) { attempt ->
             if (attempt == 1) {
-                Walk.bringIntoView("calendar-day-1")
+                // The day chips sit at the top of the page; scroll back up to them.
+                repeat(4) { Walk.dragPage(0.3, 0.8) }
                 Walk.tap("calendar-day-1", "Tomorrow chip")
             }
             repeat(2) {
+                // A slow emulator can open the editor after the wait below; don't go looking for the block again.
+                if (Walk.exists("event-editor")) return
                 val block = scrollToBlock(name) ?: return@repeat
                 block.click()
-                if (Walk.exists("event-delete", timeoutMs = 4_000)) return
+                if (Walk.exists("event-editor", timeoutMs = 10_000)) return
             }
         }
+        if (Walk.exists("event-editor", timeoutMs = 5_000)) return
         fail(message)
     }
 

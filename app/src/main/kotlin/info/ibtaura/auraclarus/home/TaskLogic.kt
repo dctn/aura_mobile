@@ -250,3 +250,68 @@ internal object TaskPlanning {
         return null
     }
 }
+
+// MARK: Instant saves
+
+/** What the editor did, for the page to show at once. */
+internal sealed class TaskEdit {
+    abstract val id: String
+
+    data class Saved(val task: TaskItem) : TaskEdit() {
+        override val id: String get() = task.id
+    }
+
+    data class Deleted(override val id: String) : TaskEdit()
+}
+
+/** How to put the list back when a background save fails: the row as it was, or null to take a new row out again. */
+internal data class TaskUndo(val id: String, val before: TaskItem?)
+
+/** A background save that failed: what to put back, the words to show, and whether to load the list again. */
+internal data class TaskSaveFailure(val undo: TaskUndo, val words: String, val reload: Boolean)
+
+/** `list` with `edit` shown: a saved task in place (or added), a deleted one gone. */
+internal fun List<TaskItem>.applying(edit: TaskEdit): List<TaskItem> = when (edit) {
+    is TaskEdit.Saved -> replacing(edit.task)
+    is TaskEdit.Deleted -> filterNot { it.id == edit.id }
+}
+
+/** `list` as it was before a save that failed. Only that row changes, so other saves on their way stay. */
+internal fun List<TaskItem>.undoing(undo: TaskUndo): List<TaskItem> =
+    undo.before?.let { replacing(it) } ?: filterNot { it.id == undo.id }
+
+/**
+ * A freshly loaded list with the saves still on their way shown over it, so a reload during a save doesn't make a
+ * new task blink out or a ticked one come back.
+ */
+internal fun List<TaskItem>.withPending(pending: Collection<TaskEdit>): List<TaskItem> =
+    pending.fold(this) { list, edit -> list.applying(edit) }
+
+/**
+ * A new task as the page shows it while the create is on its way. The id is the one sent with the create (chosen
+ * on the phone), so the server's answer replaces this row in place.
+ */
+internal fun TaskDraft.previewTask(id: String, zone: ZoneId = DayKey.zone): TaskItem {
+    val due = dueAt(zone)
+    return TaskItem(
+        id = id,
+        title = title.trim(),
+        at = due?.takeIf { hasTime },
+        autoAllocate = placesItself,
+        priority = priority,
+        dueAt = due,
+        hasTime = hasTime,
+        notes = notes.trim().ifEmpty { null },
+        horizon = horizon,
+        flagged = flagged,
+        estimateMinutes = estimateMinutes,
+        workMode = workMode,
+        workType = workType,
+        demand = demand,
+        demandSource = demand?.let { "manual" },
+    )
+}
+
+/** True when a failed save means the list on screen is out of date (changed or deleted elsewhere). */
+internal fun taskNeedsReload(error: Throwable): Boolean =
+    error is AuraError.Server && (error.status == 404 || error.status == 409 || error.status == 412)

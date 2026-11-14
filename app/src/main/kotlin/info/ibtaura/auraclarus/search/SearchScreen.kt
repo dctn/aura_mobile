@@ -81,6 +81,36 @@ fun SearchScreen(app: AppState, nav: AuraNav) {
         }
     }
 
+    // The categories fold to a few, those with data first. The order is fixed from what was known when the page
+    // opened, so rows never jump while it shows; it is saved, so tab switches and back keep it. An order made before
+    // availability was known is made again the next time the page opens with it.
+    var expanded by rememberSaveable { mutableStateOf(false) }
+    val openedWith = remember { app.cachedAvailability() }
+    // The ids, comma-separated (a plain string saves anywhere).
+    var savedOrder by rememberSaveable { mutableStateOf("") }
+    var savedWithData by rememberSaveable { mutableStateOf(false) }
+    val order: List<String>? = sections?.let { loaded ->
+        savedOrder.takeIf { it.isNotEmpty() && (savedWithData || openedWith == null) }?.split(",")
+            ?: SearchCategoryOrder.ids(loaded, openedWith)
+    }
+    LaunchedEffect(order) {
+        val joined = order?.joinToString(",")
+        if (joined != null && joined != savedOrder) {
+            savedOrder = joined
+            savedWithData = openedWith != null
+        }
+    }
+    // Fills the shared availability entry (Home's Pins and the category pages use it too) for the next opening.
+    LaunchedEffect(app.dataVersion) {
+        try {
+            app.loadAvailability()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Throwable) {
+            // Only the order depends on it; the category page reports its own failures.
+        }
+    }
+
     val isSearching = query.isNotBlank()
     AuraPage(spacing = 23.dp) {
         Text(
@@ -96,7 +126,19 @@ fun SearchScreen(app: AppState, nav: AuraNav) {
             val loaded = sections
             when {
                 loaded != null && loaded.isEmpty() -> MetricEmptyState("No categories yet")
-                loaded != null -> SearchCategoriesCard(loaded, go)
+                loaded != null -> {
+                    val arranged = SearchCategoryOrder.arrange(loaded, order.orEmpty())
+                    val folds = arranged.size > SearchCategoryOrder.SHOWN
+                    SearchCategoriesCard(
+                        if (expanded || !folds) arranged else arranged.take(SearchCategoryOrder.SHOWN),
+                        go,
+                        footer = if (folds) {
+                            { SearchExploreRow(expanded, onToggle = { expanded = !expanded }) }
+                        } else {
+                            null
+                        },
+                    )
+                }
                 failed -> MetricRetryState(onRetry = { retry += 1 })
                 else -> SearchSpinner()
             }
@@ -113,9 +155,13 @@ internal fun SearchSpinner() {
     }
 }
 
-/** The 25 categories. */
+/** The categories (all 25, or the first few with "Explore more" as `footer`). */
 @Composable
-private fun SearchCategoriesCard(sections: List<CatalogueSection>, go: (Route) -> Unit) {
+private fun SearchCategoriesCard(
+    sections: List<CatalogueSection>,
+    go: (Route) -> Unit,
+    footer: (@Composable () -> Unit)? = null,
+) {
     SearchGroupCard {
         sections.forEachIndexed { index, section ->
             if (index > 0) SearchRowDivider()
@@ -128,6 +174,38 @@ private fun SearchCategoriesCard(sections: List<CatalogueSection>, go: (Route) -
                 onClick = { go(Route.SearchCategory(section.id, section.title)) },
             )
         }
+        if (footer != null) {
+            if (sections.isNotEmpty()) SearchRowDivider(leading = 20.dp)
+            footer()
+        }
+    }
+}
+
+/** The card's last row: "Explore more" shows every category, then "Show less" folds them again. */
+@Composable
+private fun SearchExploreRow(expanded: Boolean, onToggle: () -> Unit) {
+    val title = if (expanded) "Show less" else "Explore more"
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .heightIn(min = 52.dp)
+            .clickable(
+                role = Role.Button,
+                onClickLabel = if (expanded) "Shows fewer categories" else "Shows every category",
+                onClick = onToggle,
+            )
+            .testTag("search-explore-more")
+            .padding(horizontal = 20.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Text(title, style = AuraType.calloutMedium, color = AuraColors.blue, modifier = Modifier.weight(1f))
+        Icon(
+            auraIcon(if (expanded) "chevron.up" else "chevron.down"),
+            contentDescription = null,
+            tint = AuraColors.blue,
+            modifier = Modifier.size(22.dp),
+        )
     }
 }
 

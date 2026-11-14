@@ -245,6 +245,23 @@ interface AuraApi {
      * block stays as a record). Returns how many were deleted. Reopening a task doesn't put them back.
      */
     suspend fun removePlannerBlocks(taskId: String): Int
+
+    // MARK: Speed (network layer). Defaults do the plain thing, so stubs need nothing.
+    /**
+     * `removePlannerBlocks` for a task as the caller last read it (before completing or deleting it). The live API
+     * skips the calendar read when the task can't have planner blocks: no block or schedule mirrored on it, and not
+     * placed by Find a time in this run of the app.
+     */
+    suspend fun removePlannerBlocks(task: TaskItem): Int = removePlannerBlocks(task.id)
+    /** `unpinTaskFromPlanner` with the version the caller already has, so no read comes first. Null reads it. */
+    suspend fun unpinTaskFromPlanner(taskId: String, version: Int?) = unpinTaskFromPlanner(taskId)
+    /**
+     * Opens connections to the service hosts ahead of the screens' calls (no token, no Lambda). Errors are ignored and a
+     * second call within 30 s does nothing, so call it freely: on sign-in or restore, and when the app comes back.
+     */
+    suspend fun warmUp() {}
+    /** Forgets what is kept between calls (the profile from GET /v1/me). Call on sign-out. */
+    fun clearCaches() {}
 }
 
 sealed class AuthState {

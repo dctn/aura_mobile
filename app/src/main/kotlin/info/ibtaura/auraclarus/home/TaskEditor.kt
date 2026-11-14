@@ -77,6 +77,8 @@ import info.ibtaura.auraclarus.design.PillButton
 import info.ibtaura.auraclarus.design.PillStyle
 import info.ibtaura.auraclarus.design.hex
 import info.ibtaura.auraclarus.shell.AppState
+import info.ibtaura.auraclarus.shell.OwnSaves
+import info.ibtaura.auraclarus.shell.saveInBackground
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import java.time.Instant
@@ -85,12 +87,6 @@ import java.time.LocalTime
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
-
-/** What the editor did, for the page to show at once. */
-internal sealed class TaskEdit {
-    data class Saved(val task: TaskItem) : TaskEdit()
-    data class Deleted(val id: String) : TaskEdit()
-}
 
 /**
  * Makes or changes one task, in a sheet over the Tasks page: title, notes, priority, list, due date with an optional
@@ -101,6 +97,11 @@ internal sealed class TaskEdit {
  * and when it's on, How hard and Work type for the Planner. "Schedule" saves the task with Auto-schedule on, closes
  * the sheet and calls `onSchedule` with it, which opens Find a time for just that task. Deleting a task also removes
  * its future planner blocks.
+ *
+ * Instant saves: Add, Save and Delete show the change through `onDone` and close the sheet at once; the write runs in
+ * the app's scope. `onSaved` then gets the server's version, or `onFailed` what to put back and the words to show.
+ * The title check still keeps the sheet open. Schedule waits for its save, since Find a time plans the task on the
+ * server. `own` marks the planner-block clean-up's data bump as the page's own, so the page doesn't load again.
  */
 @Composable
 internal fun TaskEditorSheet(
@@ -109,7 +110,10 @@ internal fun TaskEditorSheet(
     horizon: TaskHorizon,
     onClose: () -> Unit,
     onDone: (TaskEdit) -> Unit,
+    onSaved: (TaskEdit) -> Unit = {},
+    onFailed: (TaskSaveFailure) -> Unit = {},
     onSchedule: (TaskItem) -> Unit = {},
+    own: OwnSaves? = null,
 ) {
     var draft by remember(task?.id) { mutableStateOf(task?.let { TaskDraft(it) } ?: TaskDraft(horizon = horizon)) }
     // Chosen once, so a create retried after a lost answer gives back the same task.
@@ -123,6 +127,18 @@ internal fun TaskEditorSheet(
     val isNew = task == null
     val problem = draft.problem
 
+    /** Shows `edit` at once, closes the sheet and saves in the app's scope; a failure puts `undo` back. */
+    fun showAndSave(action: String, edit: TaskEdit, undo: TaskUndo, write: suspend () -> TaskEdit) {
+        onDone(edit)
+        onClose()
+        app.saveInBackground(
+            write = write,
+            onFailed = { e -> onFailed(TaskSaveFailure(undo, TaskText.errorWords(e, action), taskNeedsReload(e))) },
+            onSaved = onSaved,
+        )
+    }
+
+    /** Waits for the write with the sheet open (Schedule), then closes. */
     fun run(action: String, after: (TaskEdit?) -> Unit = {}, write: suspend () -> TaskEdit?) {
         saving = true
         errorText = null
@@ -130,7 +146,11 @@ internal fun TaskEditorSheet(
             try {
                 val result = write()
                 saving = false
-                result?.let(onDone)
+                // Already saved: shown and confirmed in one go.
+                result?.let {
+                    onDone(it)
+                    onSaved(it)
+                }
                 onClose()
                 after(result)
             } catch (e: CancellationException) {
@@ -225,11 +245,21 @@ internal fun TaskEditorSheet(
                         focus.clearFocus()
                         if (problem != null) return@PillButton
                         val current = draft
-                        run("save") {
-                            if (task == null) {
+                        if (task == null) {
+                            // The id is chosen here, so the row shown now is the one the server answers for.
+                            val shown = current.previewTask(newId)
+                            showAndSave("save", TaskEdit.Saved(shown), TaskUndo(newId, null)) {
                                 TaskEdit.Saved(app.api.createTask(current, newId))
-                            } else {
-                                app.api.updateTask(task.id, task.version, current.changes(task))?.let { TaskEdit.Saved(it) }
+                            }
+                        } else {
+                            val changes = current.changes(task)
+                            if (changes.isEmpty) {
+                                onClose()
+                                return@PillButton
+                            }
+                            val shown = changes.appliedTo(task)
+                            showAndSave("save", TaskEdit.Saved(shown), TaskUndo(task.id, task)) {
+                                TaskEdit.Saved(app.api.updateTask(task.id, task.version, changes) ?: shown)
                             }
                         }
                     },
@@ -287,10 +317,11 @@ internal fun TaskEditorSheet(
             confirmTitle = "Delete",
             onConfirm = {
                 confirmingDelete = false
-                run("delete") {
+                showAndSave("delete", TaskEdit.Deleted(task.id), TaskUndo(task.id, task)) {
                     app.api.deleteTask(task.id)
-                    // Planner leaves a deleted task's blocks on the calendar.
-                    clearPlannerBlocks(app, task.id)
+                    // Planner leaves a deleted task's blocks on the calendar. The task is gone either way, so this
+                    // runs on its own and a failure here is only noted.
+                    app.launch { clearPlannerBlocks(app, task, own) }
                     TaskEdit.Deleted(task.id)
                 }
             },

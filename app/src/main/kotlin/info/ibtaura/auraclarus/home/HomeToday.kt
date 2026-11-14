@@ -45,6 +45,7 @@ import info.ibtaura.auraclarus.design.auraIcon
 import info.ibtaura.auraclarus.design.color
 import info.ibtaura.auraclarus.design.symbol
 import info.ibtaura.auraclarus.shell.AppState
+import info.ibtaura.auraclarus.shell.CacheKeys
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import java.time.Instant
@@ -58,7 +59,9 @@ import kotlin.math.roundToInt
 internal fun HomeTodaySection(app: AppState, onStart: (modeId: String, headline: String) -> Unit) {
     // The morning check-in was sent from this card, so it stays to say thanks.
     var checkinSentHere by rememberSaveable { mutableStateOf(false) }
-    var alerts by remember { mutableStateOf<List<AlertItem>>(emptyList()) }
+    val alertsKey = DayKey.string(Instant.now()).let { CacheKeys.alerts(it, it) }
+    // From the screen cache first, so a return to Home shows them at once.
+    var alerts by remember { mutableStateOf(app.cached<List<AlertItem>>(alertsKey).orEmpty()) }
     // Skipped or started here. A reload can't bring them back while the backend catches up.
     val handled = remember { mutableStateListOf<String>() }
     var failed by remember { mutableStateOf(false) }
@@ -68,13 +71,14 @@ internal fun HomeTodaySection(app: AppState, onStart: (modeId: String, headline:
     LaunchedEffect(app.dataVersion, retry) {
         val today = DayKey.string(Instant.now())
         try {
-            alerts = app.api.alerts(today, today)
+            alerts = app.cache.load(CacheKeys.alerts(today, today)) { app.api.alerts(today, today) }
             failed = false
         } catch (e: CancellationException) {
             throw e
         } catch (e: Throwable) {
             app.note(e)
-            failed = alerts.isEmpty()
+            // Alerts already shown (or cached) stay; only a first load that fails says so.
+            failed = alerts.isEmpty() && !app.cache.has(alertsKey)
         }
     }
 
@@ -94,6 +98,8 @@ internal fun HomeTodaySection(app: AppState, onStart: (modeId: String, headline:
                 onSkip = {
                     // Hides at once and comes back if the backend refuses.
                     handled.add(alert.id)
+                    // So the next visit, drawn from the cache, doesn't bring it back.
+                    app.cache.update<List<AlertItem>>(alertsKey) { list -> list.filterNot { it.id == alert.id } }
                     scope.launch {
                         try {
                             app.api.markAlertDone(alert.id)
@@ -102,11 +108,13 @@ internal fun HomeTodaySection(app: AppState, onStart: (modeId: String, headline:
                         } catch (e: Throwable) {
                             app.note(e)
                             handled.remove(alert.id)
+                            app.cache.markStale(alertsKey)
                         }
                     }
                 },
                 onStart = { mode ->
                     handled.add(alert.id)
+                    app.cache.update<List<AlertItem>>(alertsKey) { list -> list.filterNot { it.id == alert.id } }
                     onStart(mode.id, alert.title)
                     app.launch { runCatching { app.api.markAlertDone(alert.id) }.onFailure { app.note(it) } }
                 },

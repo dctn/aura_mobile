@@ -31,7 +31,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -65,8 +64,14 @@ import info.ibtaura.auraclarus.design.PillStyle
 import info.ibtaura.auraclarus.design.auraIcon
 import info.ibtaura.auraclarus.shell.AppState
 import info.ibtaura.auraclarus.shell.AuraNav
+import info.ibtaura.auraclarus.shell.OwnSaves
 import info.ibtaura.auraclarus.shell.Route
+import info.ibtaura.auraclarus.shell.rememberSaveMessenger
+import info.ibtaura.auraclarus.shell.saveInBackground
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import java.time.Duration
 import java.time.Instant
@@ -89,7 +94,8 @@ private sealed class EditorTarget {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun TasksScreen(app: AppState, nav: AuraNav) {
-    var tasks by remember { mutableStateOf<List<TaskItem>?>(null) }
+    // What Tasks last showed (TasksMemo), at once, while the fresh list loads behind it.
+    var tasks by remember { mutableStateOf(TasksMemo.tasks(app)) }
     var failed by remember { mutableStateOf(false) }
     var retry by remember { mutableIntStateOf(0) }
     var refreshing by remember { mutableStateOf(false) }
@@ -98,15 +104,21 @@ fun TasksScreen(app: AppState, nav: AuraNav) {
     var showDone by rememberSaveable { mutableStateOf(false) }
     var editing by remember { mutableStateOf<EditorTarget?>(null) }
     var message by remember { mutableStateOf<String?>(null) }
-    // Tasks with a tick on its way, so a second tap waits for the first.
+    // Tasks with a write on its way (a tick, or a new task not yet on the server), so a tick waits for it.
     var busy by remember { mutableStateOf(emptySet<String>()) }
+    // Saves on their way, by task id, shown over a reload that lands before them.
+    var pending by remember { mutableStateOf(emptyMap<String, TaskEdit>()) }
     // Today's and tomorrow's stored plans, for the schedule line under each row.
-    var plans by remember { mutableStateOf(emptyList<DayPlan>()) }
-    val scope = rememberCoroutineScope()
+    var plans by remember { mutableStateOf(TasksMemo.plans(app).orEmpty()) }
+    // The dataVersion the list on screen is current for; -1 until the first load.
+    var currentFor by remember { mutableIntStateOf(-1) }
+    val own = remember { OwnSaves() }
+    val messenger = rememberSaveMessenger { message = it }
 
-    LaunchedEffect(app.dataVersion, retry) {
+    /** The task list. A failure keeps what's shown and says so. */
+    suspend fun loadTasks() {
         try {
-            tasks = app.api.tasks()
+            tasks = app.api.tasks().withPending(pending.values)
             failed = false
         } catch (e: CancellationException) {
             throw e
@@ -114,44 +126,92 @@ fun TasksScreen(app: AppState, nav: AuraNav) {
             app.note(e)
             failed = tasks == null
             if (tasks != null) message = "Couldn't reload your tasks."
-        } finally {
-            refreshing = false
         }
-        // The plans only add words under the rows, so a failure here is noted and left out.
+    }
+
+    /** The plans only add words under the rows, so a failure here is noted and left out. */
+    suspend fun loadPlans() {
         plans = storedPlans(app)
     }
 
+    // The tasks and both plans load side by side. A data bump from this page's own save is skipped: the list
+    // already shows the change.
+    LaunchedEffect(app.dataVersion, retry) {
+        val version = app.dataVersion
+        if (!own.shouldLoad(version, retry) && tasks != null) {
+            currentFor = version
+            refreshing = false
+            return@LaunchedEffect
+        }
+        coroutineScope {
+            launch { loadTasks() }
+            launch { loadPlans() }
+        }
+        refreshing = false
+        currentFor = version
+    }
+
+    // Kept for Find a time and the next visit, once the list is current.
+    LaunchedEffect(tasks, plans, currentFor) {
+        if (currentFor == app.dataVersion && tasks != null) TasksMemo.remember(app, tasks, plans)
+    }
+
+    /** Hands Find a time the list as shown right now (a task saved a moment ago included), or nothing to reuse. */
+    fun openFindATime(ids: List<String>) {
+        val shown = tasks
+        if (shown != null && currentFor == app.dataVersion) TasksMemo.remember(app, shown, plans) else TasksMemo.forget(app)
+        nav.push(Route.FindATime(DayKey.string(Instant.now()), ids))
+    }
+
+    /** Shows a save at once; it stays over reloads until it's confirmed or put back. */
+    fun show(edit: TaskEdit) {
+        tasks = tasks?.applying(edit)
+        pending = pending + (edit.id to edit)
+    }
+
+    fun confirm(edit: TaskEdit) {
+        pending = pending - edit.id
+        tasks = tasks?.applying(edit)
+    }
+
+    fun putBack(failure: TaskSaveFailure) {
+        pending = pending - failure.undo.id
+        tasks = tasks?.undoing(failure.undo)
+        messenger.tell(failure.words)
+        // Changed or deleted elsewhere: the list is out of date, so load it again.
+        if (failure.reload) retry += 1
+    }
+
+    // Shown at once and saved in the app's scope, so leaving the page doesn't cancel it.
     fun toggle(task: TaskItem) {
         if (task.id in busy) return
         val reopening = task.done
         val shown = task.withStatus(if (reopening) TaskStatus.pending else TaskStatus.completed)
-        tasks = tasks?.replacing(shown)
+        show(TaskEdit.Saved(shown))
         busy = busy + task.id
         message = null
-        scope.launch {
-            try {
+        app.saveInBackground(
+            write = {
                 if (reopening) {
-                    val saved = app.api.reopenTask(task.id, task.version)
-                    tasks = tasks?.replacing(saved)
+                    listOf(app.api.reopenTask(task.id, task.version))
                 } else {
                     val done = app.api.completeTask(task.id)
-                    var list = tasks?.replacing(done.task)
+                    // Its future blocks go on their own; the tick is saved either way.
+                    app.launch { clearPlannerBlocks(app, task, own) }
                     // A repeating task's next copy joins the list.
-                    done.next?.let { list = list?.replacing(it) }
-                    tasks = list
-                    clearPlannerBlocks(app, task.id)
+                    listOfNotNull(done.task, done.next)
                 }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Throwable) {
-                // Put it back as it was.
-                tasks = tasks?.replacing(task)
-                message = TaskText.errorWords(e, if (reopening) "reopen it" else "complete it")
-                app.note(e)
-            } finally {
+            },
+            onFailed = { e ->
                 busy = busy - task.id
-            }
-        }
+                putBack(TaskSaveFailure(TaskUndo(task.id, task), TaskText.errorWords(e, if (reopening) "reopen it" else "complete it"),
+                    taskNeedsReload(e)))
+            },
+            onSaved = { saved ->
+                busy = busy - task.id
+                saved.forEach { confirm(TaskEdit.Saved(it)) }
+            },
+        )
     }
 
     PullToRefreshBox(
@@ -179,7 +239,7 @@ fun TasksScreen(app: AppState, nav: AuraNav) {
                 val ids = TaskPlanning.planMyDayIds(loaded)
                 PillButton(
                     "Plan my day",
-                    { nav.push(Route.FindATime(DayKey.string(Instant.now()), ids)) },
+                    { openFindATime(ids) },
                     Modifier.testTag("tasks-plan-day"),
                     style = PillStyle.Secondary,
                     fills = true,
@@ -247,45 +307,60 @@ fun TasksScreen(app: AppState, nav: AuraNav) {
             horizon = horizon,
             onClose = { editing = null },
             onDone = { edit ->
-                when (edit) {
-                    is TaskEdit.Saved -> {
-                        tasks = tasks?.replacing(edit.task)
-                        // A new or moved task shows on the list it's now on.
-                        horizonRaw = edit.task.horizon.raw
-                    }
-                    is TaskEdit.Deleted -> tasks = tasks?.filterNot { it.id == edit.id }
+                val isNew = tasks?.none { it.id == edit.id } == true
+                show(edit)
+                if (edit is TaskEdit.Saved) {
+                    // A new or moved task shows on the list it's now on.
+                    horizonRaw = edit.task.horizon.raw
+                    // A new task isn't on the server yet, so its tick waits for the create.
+                    if (isNew) busy = busy + edit.id
                 }
                 message = null
             },
-            onSchedule = { scheduled ->
-                nav.push(Route.FindATime(DayKey.string(Instant.now()), listOf(scheduled.id)))
+            onSaved = { edit ->
+                busy = busy - edit.id
+                confirm(edit)
             },
+            onFailed = { failure ->
+                busy = busy - failure.undo.id
+                putBack(failure)
+            },
+            onSchedule = { scheduled ->
+                openFindATime(listOf(scheduled.id))
+            },
+            own = own,
         )
     }
 }
 
-/** Today's and tomorrow's stored plans; a day without one, or that fails to load, is left out. */
-private suspend fun storedPlans(app: AppState): List<DayPlan> {
+/** Today's and tomorrow's stored plans, side by side; a day without one, or that fails to load, is left out. */
+private suspend fun storedPlans(app: AppState): List<DayPlan> = coroutineScope {
     val now = Instant.now()
-    return listOf(now, now.plus(Duration.ofDays(1))).mapNotNull { at ->
-        try {
-            app.api.plan(DayKey.string(at))
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Throwable) {
-            app.note(e)
-            null
+    listOf(now, now.plus(Duration.ofDays(1))).map { at ->
+        async {
+            try {
+                app.api.plan(DayKey.string(at))
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                app.note(e)
+                null
+            }
         }
-    }
+    }.awaitAll().filterNotNull()
 }
 
 /**
  * After a task is completed or deleted: removes its future planner blocks (Planner leaves them on the calendar) and
- * makes the calendar load again. A failure is noted; the task itself is already saved.
+ * makes the calendar load again. `own` marks that bump as the Tasks page's own, so Tasks itself doesn't load again
+ * (its list already shows the change). A failure is noted; the task itself is already saved.
  */
-internal suspend fun clearPlannerBlocks(app: AppState, taskId: String) {
+internal suspend fun clearPlannerBlocks(app: AppState, task: TaskItem, own: OwnSaves? = null) {
     try {
-        if (app.api.removePlannerBlocks(taskId) > 0) app.dataVersion += 1
+        // The task as it was read: the live API skips the calendar read when it never had a block.
+        if (app.api.removePlannerBlocks(task) > 0) {
+            if (own != null) own.bump(app) else app.dataVersion += 1
+        }
     } catch (e: CancellationException) {
         throw e
     } catch (e: Throwable) {

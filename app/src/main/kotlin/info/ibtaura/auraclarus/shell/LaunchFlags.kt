@@ -25,6 +25,10 @@ data class LaunchFlags(val raw: Set<String> = emptySet()) {
     val healthNight: Boolean get() = has(HEALTH_NIGHT)
     /** `--uitesting-checkin`: the morning check-in shows on Home. Other walks start with it already sent. */
     val checkin: Boolean get() = has(CHECKIN)
+    /** `--sample-data`: set by Settings' "Use sample data" switch (debug builds), never by tests. Made-up data, offline. */
+    val isSample: Boolean get() = has(SAMPLE)
+
+    fun with(flag: String): LaunchFlags = LaunchFlags(raw + flag)
 
     companion object {
         const val EXTRA = "aura.flags"
@@ -37,6 +41,7 @@ data class LaunchFlags(val raw: Set<String> = emptySet()) {
         const val SHORT_CHECK = "--uitesting-short-check"
         const val HEALTH_NIGHT = "--uitesting-health-night"
         const val CHECKIN = "--uitesting-checkin"
+        const val SAMPLE = "--sample-data"
 
         fun parse(text: String?): LaunchFlags =
             LaunchFlags(text.orEmpty().split(' ', '\t', '\n').filter { it.isNotBlank() }.toSet())

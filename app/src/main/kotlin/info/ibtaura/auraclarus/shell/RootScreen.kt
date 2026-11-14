@@ -1,5 +1,6 @@
 package info.ibtaura.auraclarus.shell
 
+import info.ibtaura.auraclarus.perf.PerfMarks
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
@@ -94,6 +95,8 @@ fun RootScreen(app: AppState) {
     LaunchedEffect(Unit) { app.restore() }
     val auth = app.authState
     LaunchedEffect(auth) {
+        // A restored session or a new sign-in: wake the backend while Home's first calls go out.
+        app.warmUp()
         app.sendTimeZoneIfNeeded()
         app.syncSleepIfNeeded()
         app.syncHealthIfNeeded()
@@ -101,6 +104,8 @@ fun RootScreen(app: AppState) {
     // Last night is sent the first time the app is opened after waking.
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
         app.reloadIfNewDay()
+        // Connections and cold functions go idle in the background; does nothing until signed in.
+        app.warmUp()
         app.launch {
             app.syncSleepIfNeeded()
             app.syncHealthIfNeeded()
@@ -123,6 +128,13 @@ private fun MainTabs(app: AppState) {
     var barsHeight by remember { mutableStateOf(TabBarHeight) }
     val navBarHeight = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
     val covered = app.runExpanded || nav.quickCheckOpen
+    // A run or a Quick check can change sessions and scores without a `dataVersion` change, so when its cover closes
+    // the cached pages are marked stale: they still show, and refresh the next time they open.
+    var wasCovered by remember { mutableStateOf(covered) }
+    LaunchedEffect(covered) {
+        if (wasCovered && !covered) app.cache.markStale()
+        wasCovered = covered
+    }
 
     Box(Modifier.fillMaxSize().background(AuraColors.background)) {
         // Every tab page pads its bottom by this (bottomPadding() adds the gap), so its last item scrolls clear.
@@ -142,6 +154,7 @@ private fun MainTabs(app: AppState) {
                     .onSizeChanged { barsHeight = with(density) { it.height.toDp() } },
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
+                if (app.flags.isSample) SampleDataPill()
                 if (app.run?.showsMiniBar == true && !app.runExpanded) MiniRunBar(app, nav)
                 AuraTabBar(selected = nav.tab, onSelect = nav::selectTab)
             }
@@ -184,7 +197,12 @@ private fun TabHost(app: AppState, nav: AuraNav, tab: Tab) {
     val controller = rememberNavController()
     DisposableEffect(controller, tab) {
         nav.controllers[tab] = controller
-        onDispose { if (nav.controllers[tab] === controller) nav.controllers.remove(tab) }
+        val perf = PerfMarks.destinationListener(tab.name)
+        perf?.let(controller::addOnDestinationChangedListener)
+        onDispose {
+            perf?.let(controller::removeOnDestinationChangedListener)
+            if (nav.controllers[tab] === controller) nav.controllers.remove(tab)
+        }
     }
     NavHost(
         navController = controller,
@@ -279,4 +297,20 @@ private fun AuraTabBar(selected: Tab, onSelect: (Tab) -> Unit) {
             }
         }
     }
+}
+
+/** Sample mode's reminder above the tab bar, so made-up numbers are never mistaken for the account's own. */
+@Composable
+private fun SampleDataPill() {
+    Text(
+        "Sample data",
+        style = AuraType.caption,
+        color = Color.White,
+        modifier = Modifier
+            .padding(bottom = 6.dp)
+            .clip(CircleShape)
+            .background(AuraColors.orange)
+            .padding(horizontal = 12.dp, vertical = 4.dp)
+            .testTag("sample-data-pill"),
+    )
 }

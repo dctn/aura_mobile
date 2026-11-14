@@ -22,7 +22,11 @@ internal object StubSessionHistory {
     /** The day a seed id names. */
     private fun dayOf(id: String): LocalDate? = DayKey.localDate(id.removePrefix(prefix).take(10))
 
-    private data class Plan(
+    /**
+     * One seed's plan. Sample mode (SampleActivity) also sets the outcome, the active minutes, the interruptions, the
+     * notes and, with `rated`, the rating (null for not rated); left null, each is worked out from the day as before.
+     */
+    internal data class Plan(
         val hour: Int,
         val minute: Int,
         val kind: String,
@@ -30,10 +34,20 @@ internal object StubSessionHistory {
         val minutes: Int,
         val mode: String,
         val recoveryType: RecoveryType? = null,
+        val outcome: String? = null,
+        val rating: Difficulty? = null,
+        val rated: Boolean = false,
+        val interruptions: Int? = null,
+        val active: Int? = null,
+        val notes: List<String>? = null,
     )
 
-    /** One day's plan by how many days back it is: a rest day every sixth day, lighter weekends. */
-    private fun plans(back: Int, day: LocalDate): List<Plan> {
+    /**
+     * One day's plan by how many days back it is: a rest day every sixth day, lighter weekends. Sample mode takes the
+     * day's sessions from SampleActivity instead.
+     */
+    private fun plans(back: Int, day: LocalDate, zone: ZoneId, sample: Boolean): List<Plan> {
+        if (sample) return SampleActivity.sessionPlans(day, zone)
         if (back % 6 == 5) return emptyList()
         val weekend = day.dayOfWeek.value >= 6
         val list = mutableListOf<Plan>()
@@ -47,18 +61,30 @@ internal object StubSessionHistory {
     }
 
     /** Every seed from `days` back to two days ago, oldest first. `ratings` replaces a focus seed's difficulty. */
-    fun seeds(today: LocalDate, zone: ZoneId, ratings: Map<String, Difficulty> = emptyMap()): List<SessionDetail> =
-        (days downTo 2).flatMap { back -> seedsOn(today.minusDays(back.toLong()), back, zone, ratings) }
+    fun seeds(
+        today: LocalDate,
+        zone: ZoneId,
+        ratings: Map<String, Difficulty> = emptyMap(),
+        sample: Boolean = false,
+    ): List<SessionDetail> =
+        (days downTo 2).flatMap { back -> seedsOn(today.minusDays(back.toLong()), back, zone, ratings, sample) }
 
-    private fun seedsOn(day: LocalDate, back: Int, zone: ZoneId, ratings: Map<String, Difficulty>): List<SessionDetail> {
+    private fun seedsOn(
+        day: LocalDate,
+        back: Int,
+        zone: ZoneId,
+        ratings: Map<String, Difficulty>,
+        sample: Boolean,
+    ): List<SessionDetail> {
         var capacity = 82.0 - (back % 7)
-        return plans(back, day).mapIndexed { index, plan ->
+        return plans(back, day, zone, sample).mapIndexed { index, plan ->
             val id = "$prefix${DayKey.string(day)}-$index"
             val start = day.atTime(plan.hour, plan.minute).atZone(zone).toInstant()
             val end = start.plusSeconds(plan.minutes * 60L)
-            val interruptions = if (plan.kind == "focus") (back + index) % 4 else 0
-            val active = if (plan.kind == "focus") plan.minutes - interruptions * 2 else plan.minutes
-            val difficulty = if (plan.kind == "focus") ratings[id] ?: defaultRating(back, index) else null
+            val interruptions = plan.interruptions ?: if (plan.kind == "focus") (back + index) % 4 else 0
+            val active = plan.active ?: if (plan.kind == "focus") plan.minutes - interruptions * 2 else plan.minutes
+            val seeded = if (plan.rated) plan.rating else defaultRating(back, index)
+            val difficulty = if (plan.kind == "focus") ratings[id] ?: seeded else null
             val cost = when (plan.kind) {
                 "focus" -> StubApi.charge(difficulty).cost * active / 50.0
                 "meeting" -> 0.3
@@ -67,7 +93,7 @@ internal object StubSessionHistory {
             }
             val before = capacity
             capacity -= cost
-            val outcome = when {
+            val outcome = plan.outcome ?: when {
                 plan.kind == "focus" && back % 9 == 3 && index == 0 -> "stopped"
                 else -> "completed"
             }
@@ -86,7 +112,8 @@ internal object StubSessionHistory {
                 protectedMinutes = (active - interruptions * 3).coerceAtLeast(0),
                 interruptions = interruptions,
                 capacity = SessionCapacity(before = round1(before), after = round1(capacity), cost = round1(cost), charged = true),
-                notes = if (plan.kind == "brainstorm") notes(start) else emptyList(),
+                notes = plan.notes?.mapIndexed { i, text -> SessionNote(start.plusSeconds((4 + 9 * i) * 60L), text) }
+                    ?: if (plan.kind == "brainstorm") notes(start) else emptyList(),
                 xpEarned = if (plan.kind == "focus") active else null,
             )
         }
@@ -107,11 +134,11 @@ internal object StubSessionHistory {
     )
 
     /** A seed by id, with its rating applied, or null. */
-    fun find(id: String, today: LocalDate, zone: ZoneId, ratings: Map<String, Difficulty>): SessionDetail? {
+    fun find(id: String, today: LocalDate, zone: ZoneId, ratings: Map<String, Difficulty>, sample: Boolean = false): SessionDetail? {
         val day = dayOf(id) ?: return null
         val back = (today.toEpochDay() - day.toEpochDay()).toInt()
         if (back < 2 || back > days) return null
-        return seedsOn(day, back, zone, ratings).firstOrNull { it.id == id }
+        return seedsOn(day, back, zone, ratings, sample).firstOrNull { it.id == id }
     }
 
     /** A believable trace for a seed: heart rate a minute through it, stress for its hours. */

@@ -401,7 +401,8 @@ class LiveTasksTest {
                 "/v1/calendar/events/plan-2030-01-03-t1-p2",
                 "/v1/calendar/events/plan-2030-01-03-t1-rest",
             ),
-            deletes,
+            deletes.sorted(),
+            "The deletes run side by side, so in any order",
         )
         assertEquals(3, removed)
     }
