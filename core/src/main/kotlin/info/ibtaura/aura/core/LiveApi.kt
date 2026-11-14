@@ -266,16 +266,29 @@ class LiveApi(
         post(ServiceName.calendar, "/v1/calendar/events", body)
     }
 
-    /** Without a version from the read, the event is read again for one (GET /v1/calendar/events/{id}). */
+    /**
+     * Without a version from the read, the event is read again for one (GET /v1/calendar/events/{id}). A 412 (changed
+     * elsewhere since it was read) reads the latest version and sends the same changes once more, so only what the
+     * person changed is written over the newer copy; a second 412 is thrown. An event that still has no version throws
+     * `event_version_missing`.
+     */
     override suspend fun updateEvent(event: CalendarEvent, to: EventDraft) {
         val changes = to.changes(event)
         if (changes.isEmpty()) return
         val path = "/v1/calendar/events/${esc(event.id)}"
-        val version = event.version
-            ?: get(WireEventAnswer.serializer(), ServiceName.calendar, path, emptyMap()).event.version
-            ?: throw badResponse
-        client.send(ServiceName.calendar, "PATCH", path, body = changes.toString(),
-            headers = mapOf("If-Match" to "\"v$version\""))
+        var version = event.version ?: eventVersion(path)
+        var retried = false
+        while (true) {
+            try {
+                client.send(ServiceName.calendar, "PATCH", path, body = changes.toString(),
+                    headers = mapOf("If-Match" to "\"v$version\""))
+                return
+            } catch (error: AuraError.Server) {
+                if (error.status != 412 || retried) throw error
+                retried = true
+                version = eventVersion(path)
+            }
+        }
     }
 
     override suspend fun deleteEvent(id: String) {
@@ -705,6 +718,83 @@ class LiveApi(
         logbook.addCheckin(id, kind, takenAt, answers)
 
     override suspend fun waterGoalMl(): Int? = logbook.waterGoalMl()
+
+    // MARK: Events (editor round 2)
+
+    override suspend fun moveEvent(id: String, to: String?, start: Instant?, end: Instant?): CalendarEvent {
+        val body = eventMoveBody(to, start, end)
+        val text = client.send(ServiceName.calendar, "POST", "/v1/calendar/events/${esc(id)}/move", body = body.toString())
+        return decode(WireEventAnswer.serializer(), text).event.model ?: throw badResponse
+    }
+
+    override suspend fun unpinTaskFromPlanner(taskId: String) {
+        val body = buildJsonObject { put("autoAllocate", false) }
+        try {
+            patchTask(taskId, null, body)
+        } catch (error: AuraError.Server) {
+            if (error.status != 404) throw error
+        }
+    }
+
+    override suspend fun task(id: String): TaskItem? {
+        val text = try {
+            client.send(ServiceName.task, "GET", "/v1/tasks/${esc(id)}")
+        } catch (error: AuraError.Server) {
+            if (error.status == 404) return null
+            throw error
+        }
+        return decode(WireTaskAnswer.serializer(), text).task.model
+    }
+
+    /** The event's current version (GET /v1/calendar/events/{id}); `event_version_missing` when the answer has none. */
+    private suspend fun eventVersion(path: String): Int =
+        get(WireEventAnswer.serializer(), ServiceName.calendar, path, emptyMap()).event.version
+            ?: throw AuraError.Server("event_version_missing", "Calendar didn't send this event's version.", 0)
+
+    // MARK: Tasks (auto-allocation)
+
+    /**
+     * Lists today to 14 days on (DayKeys, well inside the route's 62) by `source=planner`, following every page, and
+     * deletes this task's blocks that start now or later: those carrying its `taskId`, and those without one whose id
+     * is Planner's own for it (`plan-<date>-<task>`, its `-p<n>` pieces and its `-rest` break). Planner writes the
+     * break with no `taskId`, so listing by `taskId` alone left the break on the calendar.
+     */
+    override suspend fun removePlannerBlocks(taskId: String): Int {
+        val start = now()
+        val days = 14L
+        val query = mapOf(
+            "from" to DayKey.string(start),
+            "to" to DayKey.string(start.plusSeconds(days * 24 * 60 * 60)),
+            "source" to "planner",
+        )
+        val blocks = allPages(WirePlannerBlockPage.serializer(), ServiceName.calendar, "/v1/calendar/events", query)
+        val owned = Regex("^plan-\\d{4}-\\d{2}-\\d{2}-${Regex.escape(planTaskPart(taskId))}(-p\\d+|-rest)?$")
+        var removed = 0
+        for (block in blocks.distinctBy { it.id }) {
+            if (block.source != "planner") continue
+            val mine = block.taskId?.let { it == taskId } ?: owned.matches(block.id)
+            if (!mine) continue
+            val at = WireDate.parse(block.start) ?: continue
+            if (at < start) continue
+            try {
+                client.send(ServiceName.calendar, "DELETE", "/v1/calendar/events/${esc(block.id)}")
+            } catch (error: AuraError.Server) {
+                if (error.status != 404) throw error
+            }
+            removed += 1
+        }
+        return removed
+    }
+
+    /**
+     * The task part of Planner's block ids (planner `ids.ts`): the id itself, or the first 32 hex of its sha256 when
+     * it holds `@` or is longer than 160 characters.
+     */
+    private fun planTaskPart(taskId: String): String {
+        if (taskId.length <= 160 && !taskId.contains('@')) return taskId
+        val digest = java.security.MessageDigest.getInstance("SHA-256").digest(taskId.toByteArray(Charsets.UTF_8))
+        return digest.joinToString("") { "%02x".format(it) }.take(32)
+    }
 
     // MARK: Helpers
 

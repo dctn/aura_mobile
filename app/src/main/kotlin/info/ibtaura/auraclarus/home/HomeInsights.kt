@@ -1,6 +1,7 @@
 package info.ibtaura.auraclarus.home
 
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -24,6 +25,8 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -43,9 +46,12 @@ import java.time.Instant
 import java.time.ZoneId
 import kotlin.math.roundToInt
 
-/** Insights: three rings and the next two events of today (iOS HomeInsightsSection). */
+/**
+ * Insights: three rings and the next two events of today (iOS HomeInsightsSection). Tapping an event calls
+ * `onEventClick` (Home opens it in the event editor).
+ */
 @Composable
-internal fun HomeInsightsSection(app: AppState) {
+internal fun HomeInsightsSection(app: AppState, onEventClick: ((CalendarEvent) -> Unit)? = null) {
     var scores by remember { mutableStateOf<ScoresToday?>(null) }
     var scoresFailed by remember { mutableStateOf(false) }
     var events by remember { mutableStateOf<List<CalendarEvent>?>(null) }
@@ -66,7 +72,10 @@ internal fun HomeInsightsSection(app: AppState) {
     LaunchedEffect(app.dataVersion, retry) {
         val now = Instant.now()
         try {
-            events = app.api.events(now, endOfToday(now))
+            val loaded = app.api.events(now, endOfToday(now))
+            // So the event editor finds a tapped one by its id.
+            app.rememberEvents(loaded)
+            events = loaded
             eventsFailed = false
         } catch (e: CancellationException) {
             throw e
@@ -88,7 +97,7 @@ internal fun HomeInsightsSection(app: AppState) {
         AuraCard(padding = 20.dp, spacing = 12.dp) {
             Row(horizontalArrangement = Arrangement.spacedBy(32.dp), verticalAlignment = Alignment.CenterVertically) {
                 HomeRings(scores, Modifier.padding(start = 9.dp))
-                HomeUpcomingList(upcoming, Modifier.weight(1f))
+                HomeUpcomingList(upcoming, onEventClick, Modifier.weight(1f))
             }
             if (scoresFailed || eventsFailed) {
                 HomeRetryLine("Couldn't load all of this.", retry = { retry += 1 })
@@ -137,9 +146,9 @@ private fun HomeRing(title: String, value: Double?, color: Color, diameter: Dp) 
     }
 }
 
-/** The blue "Upcoming" header and up to two events. */
+/** The blue "Upcoming" header and up to two events, each a button when `onEventClick` is set ("home-upcoming-<id>"). */
 @Composable
-private fun HomeUpcomingList(events: List<CalendarEvent>?, modifier: Modifier = Modifier) {
+private fun HomeUpcomingList(events: List<CalendarEvent>?, onEventClick: ((CalendarEvent) -> Unit)?, modifier: Modifier = Modifier) {
     Column(modifier, verticalArrangement = Arrangement.spacedBy(14.dp)) {
         Row(
             Modifier.semantics(mergeDescendants = true) {},
@@ -153,7 +162,16 @@ private fun HomeUpcomingList(events: List<CalendarEvent>?, modifier: Modifier = 
             if (events.isEmpty()) {
                 Text("Nothing else today", style = AuraType.callout, color = AuraColors.footnote)
             } else {
-                events.forEach { HomeEventRow(it) }
+                events.forEach { event ->
+                    val rowModifier = if (onEventClick != null) {
+                        Modifier
+                            .fillMaxWidth()
+                            .clickable(role = Role.Button, onClickLabel = "Opens the event to change it") { onEventClick(event) }
+                    } else {
+                        Modifier
+                    }
+                    HomeEventRow(event, rowModifier.testTag("home-upcoming-${event.id}"))
+                }
             }
         }
     }

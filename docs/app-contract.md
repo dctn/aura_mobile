@@ -101,7 +101,7 @@ Route to composable (registered in `shell/RootScreen.kt` `auraDestinations`):
 | `Home`, `Recovery`, `Search` | `HomeScreen`, `RecoveryScreen(pushed = false)`, `SearchScreen` (tab roots) |
 | `Calendar`, `Tasks`, `Sessions`, `ReviewInbox` | `home/` screens |
 | `EventEditor(eventId?)` | `EventEditorScreen(route)`; null id = new event |
-| `FindATime(date)` | `FindATimeSheet(route)`; on confirm `app.dataVersion += 1; nav.pop()` |
+| `FindATime(date, taskIds?)` | `FindATimeSheet(route)`; `taskIds` ticks those tasks first (null: every auto-scheduled task); on confirm `app.dataVersion += 1`, "Added N blocks", then `nav.pop()` |
 | `Settings`, `WorkHours` | `SettingsScreen`, `WorkHoursScreen` (done) |
 | `Metric(name, field, unit, format?, backTitle)`, `Recorded(...)`, `Sources(name)` | `metric/` screens |
 | `ModeDetail(modeId, headline?)` | `ModeDetailScreen(route)` |
@@ -170,7 +170,7 @@ Components (`design/Components.kt`):
 - Screenshot names follow the iOS walks (`aura_ios_app/docs/screenshots/2026-11-10_888b455/`): `00-launch`;
   `01-home`, `02-recovery`, `03-search`; 10–18 Home/Calendar/Settings/Work hours (`14-settings`, `15-work-hours`,
   `17-work-hours-new`); 20–34 Recovery and runs; 40–48 Search and metrics; 50–58 Find a time and Quick check;
-  59–62 breaks; 63–66 sessions and review; 67–68 check-in; 69–72 event editor.
+  59–62 breaks; 63–66 sessions and review; 67–68 check-in; 69–72 event editor; 73–77 tasks and auto-allocation.
 - No emulator locally; CI runs the walks.
 
 ## Build

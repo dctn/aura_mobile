@@ -53,6 +53,8 @@ private class ServiceFailure(status: Int, text: String) {
     val hasErrorBody: Boolean
     val code: String
     val message: String
+    /** `error.details` when the body has one (e.g. work_limit_reached's minutes). */
+    val details: JsonObject?
 
     init {
         val json = try {
@@ -65,8 +67,10 @@ private class ServiceFailure(status: Int, text: String) {
             hasErrorBody = true
             code = stringOf(error["code"]) ?: "http_$status"
             message = stringOf(error["message"]) ?: "HTTP $status"
+            details = error["details"] as? JsonObject
         } else {
             hasErrorBody = false
+            details = null
             code = "http_$status"
             message = stringOf(json?.get("message")) ?: "HTTP $status"
         }
@@ -156,7 +160,7 @@ class ServiceClient(
                 consentTries += 1
                 continue
             }
-            throw AuraError.Server(failure.code, failure.message, reply.status)
+            throw AuraError.Server(failure.code, failure.message, reply.status).apply { details = failure.details }
         }
     }
 

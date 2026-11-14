@@ -2,6 +2,7 @@ package info.ibtaura.auraclarus
 
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.uiautomator.By
+import androidx.test.uiautomator.BySelector
 import androidx.test.uiautomator.UiObject2
 import androidx.test.uiautomator.Until
 import org.junit.Assert.assertEquals
@@ -10,11 +11,16 @@ import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
 import org.junit.runner.RunWith
+import java.util.regex.Pattern
 
-/** The event editor on the Calendar page (iOS EventEditorWalkTests): a new event added, changed, then deleted. */
+/**
+ * The event editor on the Calendar page (iOS EventEditorWalkTests): a new event added, opened from its block on the
+ * hour grid, renamed and saved, then opened from the grid again and deleted.
+ */
 @RunWith(AndroidJUnit4::class)
 class EventEditorWalkTest : WalkTestCase() {
     private val title = "Walk with Ana"
+    private val renamed = "Walk with Ana and Sam"
 
     @Test
     fun addChangeAndDeleteAnEvent() {
@@ -32,16 +38,22 @@ class EventEditorWalkTest : WalkTestCase() {
         Walk.tap("event-save", "Add button")
         Walk.waitUntilGone("event-save", "The editor stayed open after Add")
 
-        openRow("The event didn't open in the editor")
+        // The hour grid's block opens it.
+        openBlock(title, "The event's block on the hour grid didn't open the editor")
         assertEquals(title, Walk.find("event-title").text)
+        assertTrue("No back arrow on the editor", Walk.exists("back"))
 
+        Walk.type("event-title", renamed)
+        Walk.bringIntoView("event-kind-Meeting")
         Walk.tap("event-kind-Meeting", "Meeting kind")
         save("70-event-edit")
         Walk.bringIntoView("event-save")
         Walk.tap("event-save", "Save button")
         Walk.waitUntilGone("event-save", "The editor stayed open after Save")
 
-        openRow("The event didn't open again")
+        openBlock(renamed, "The renamed event's block didn't open the editor")
+        assertEquals(renamed, Walk.find("event-title").text)
+        Walk.bringIntoView("event-kind-Meeting")
         assertTrue("The new kind wasn't kept", Walk.find("event-kind-Meeting").isSelected)
         Walk.bringIntoView("event-delete")
         Walk.tap("event-delete", "Delete event")
@@ -50,39 +62,54 @@ class EventEditorWalkTest : WalkTestCase() {
         Walk.tap("event-delete-confirm", "Delete confirmation")
         Walk.waitUntilGone("event-delete", "The editor stayed open after Delete")
         assertTrue(
-            "The deleted event is still on the Calendar",
-            Walk.device.wait(Until.gone(rowSelector()), 10_000) == true,
+            "The deleted event is still on the hour grid",
+            Walk.device.wait(Until.gone(blockSelector(renamed)), 10_000) == true,
+        )
+        assertTrue(
+            "The deleted event is still listed",
+            Walk.device.wait(Until.gone(By.descStartsWith("$renamed, ")), 10_000) == true,
         )
         save("72-calendar-after-delete")
     }
 
-    /** A Calendar row: its description starts with the title, then the times. The hour grid's summary only contains it. */
-    private fun rowSelector() = By.descStartsWith("$title, ")
+    /** An hour-grid block ("zone-block-<id>"), read as "<title>, <start> to <end>". */
+    private fun blockSelector(name: String): BySelector =
+        By.res(Pattern.compile("zone-block-.*")).descStartsWith("$name, ")
 
-    /** Scrolls the Calendar until the event's row is in view (it can sit below the zones), then opens it. */
-    private fun openRow(message: String) {
-        repeat(3) {
-            val row = scrollToRow() ?: return@repeat
-            row.click()
-            if (Walk.exists("event-delete", timeoutMs = 4_000)) return
+    /**
+     * Scrolls the Calendar until the event's block is in view, then taps it. A new event made late in the evening
+     * starts tomorrow, so Tomorrow's chip is tried when today's grid hasn't got it.
+     */
+    private fun openBlock(name: String, message: String) {
+        repeat(2) { attempt ->
+            if (attempt == 1) {
+                Walk.bringIntoView("calendar-day-1")
+                Walk.tap("calendar-day-1", "Tomorrow chip")
+            }
+            repeat(2) {
+                val block = scrollToBlock(name) ?: return@repeat
+                block.click()
+                if (Walk.exists("event-delete", timeoutMs = 4_000)) return
+            }
         }
         fail(message)
     }
 
-    private fun scrollToRow(): UiObject2? {
-        Walk.device.wait(Until.hasObject(rowSelector()), 5_000)
+    private fun scrollToBlock(name: String): UiObject2? {
+        val selector = blockSelector(name)
+        Walk.device.wait(Until.hasObject(selector), 5_000)
         val lowest = Walk.device.displayHeight * 0.7
         val highest = Walk.device.displayHeight * 0.15
         repeat(12) {
-            val row = Walk.device.findObject(rowSelector())
+            val block = Walk.device.findObject(selector)
             when {
-                row == null -> Walk.dragPage(0.6, 0.35)
-                row.visibleBounds.centerY() > lowest -> Walk.dragPage(0.6, 0.35)
-                row.visibleBounds.centerY() < highest -> Walk.dragPage(0.35, 0.6)
-                else -> return row
+                block == null -> Walk.dragPage(0.6, 0.35)
+                block.visibleBounds.centerY() > lowest -> Walk.dragPage(0.6, 0.35)
+                block.visibleBounds.centerY() < highest -> Walk.dragPage(0.35, 0.6)
+                else -> return block
             }
         }
-        return Walk.device.findObject(rowSelector())
+        return Walk.device.findObject(selector)
     }
 
     /** Scrolls Home down to the Calendar row and opens it. */

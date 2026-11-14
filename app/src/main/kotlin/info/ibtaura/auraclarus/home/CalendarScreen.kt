@@ -18,9 +18,11 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
@@ -50,19 +52,20 @@ import kotlinx.coroutines.delay
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
-import java.time.format.DateTimeFormatter
 
 /**
- * Home > Work > Calendar (iOS HomeCalendarList): today's zones, Find a time and New event, today's events, the work
- * hours, then the events of the next 6 days by day. Tapping an event opens it in the editor.
+ * Home > Work > Calendar (iOS HomeCalendarList): today's zones, Find a time and New event, the day chips (yesterday to
+ * 13 days ahead), the chosen day's hour grid, the work hours, then the day's events. On today, events that already
+ * ended sit dimmed under "Earlier today" and the next 6 days follow by day. Tapping an event, on the grid or in a
+ * list, opens it in the editor.
  */
 @Composable
 fun CalendarScreen(app: AppState, nav: AuraNav) {
-    // Events still to come in the next 7 days, for the lists.
+    // Every event from yesterday to 13 days ahead (15 days, inside the route's 62), loaded at once; the chips pick one.
     var events by remember { mutableStateOf<List<CalendarEvent>?>(null) }
-    // All of today's events, past ones too, for the hour grid.
-    var todayEvents by remember { mutableStateOf<List<CalendarEvent>>(emptyList()) }
     var failed by remember { mutableStateOf(false) }
+    // The day shown, as days from today (-1 is yesterday). Kept when the editor is pushed and popped.
+    var dayOffset by rememberSaveable { mutableIntStateOf(0) }
     var zoneDay by remember { mutableStateOf<ZoneDay?>(null) }
     var zonesFailed by remember { mutableStateOf(false) }
     var schedule by remember { mutableStateOf<WorkSchedule?>(null) }
@@ -70,19 +73,21 @@ fun CalendarScreen(app: AppState, nav: AuraNav) {
     var retry by remember { mutableIntStateOf(0) }
     var now by remember { mutableStateOf(Instant.now()) }
 
-    // Events, today's zones and the work hours load together; each can fail on its own.
+    val zone = ZoneId.systemDefault()
+    val todayDate = now.atZone(zone).toLocalDate()
+    val selectedDate = todayDate.plusDays(dayOffset.toLong())
+    val selectedKey = DayKey.string(selectedDate)
+    val isToday = dayOffset == 0
+
+    // Events, the chosen day's zones and the work hours load on their own; each can fail on its own.
     LaunchedEffect(app.dataVersion, retry) {
-        val start = Instant.now()
-        val zone = ZoneId.systemDefault()
-        val today = start.atZone(zone).toLocalDate()
-        val dayStart = today.atStartOfDay(zone).toInstant()
-        val tomorrow = today.plusDays(1).atStartOfDay(zone).toInstant()
-        val end = today.plusDays(7).atStartOfDay(zone).toInstant()
+        val today = Instant.now().atZone(zone).toLocalDate()
+        val from = today.plusDays(EventDays.FIRST.toLong()).atStartOfDay(zone).toInstant()
+        val to = today.plusDays(EventDays.LAST + 1L).atStartOfDay(zone).toInstant()
         try {
-            val loaded = app.api.events(dayStart, end)
+            val loaded = app.api.events(from, to)
             app.rememberEvents(loaded)
-            events = loaded.filter { it.end > start && it.start < end }
-            todayEvents = loaded.filter { it.end > dayStart && it.start < tomorrow }
+            events = loaded
             failed = false
         } catch (e: CancellationException) {
             throw e
@@ -91,18 +96,17 @@ fun CalendarScreen(app: AppState, nav: AuraNav) {
             failed = events == null
         }
     }
-    LaunchedEffect(app.dataVersion, retry) {
-        val todayKey = DayKey.string(Instant.now())
+    LaunchedEffect(app.dataVersion, retry, selectedKey) {
+        zonesFailed = false
         try {
-            val loaded = app.api.dayZones(todayKey, todayKey)
-            zoneDay = loaded.firstOrNull { it.date == todayKey } ?: loaded.firstOrNull()
-                ?: ZoneDay(date = todayKey, status = ZoneStatus.unknown)
-            zonesFailed = false
+            val loaded = app.api.dayZones(selectedKey, selectedKey)
+            zoneDay = loaded.firstOrNull { it.date == selectedKey } ?: loaded.firstOrNull()?.copy(date = selectedKey)
+                ?: ZoneDay(date = selectedKey, status = ZoneStatus.unknown)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Throwable) {
             app.note(e)
-            zonesFailed = zoneDay == null
+            zonesFailed = zoneDay?.date != selectedKey
         }
     }
     LaunchedEffect(app.dataVersion, retry) {
@@ -116,7 +120,7 @@ fun CalendarScreen(app: AppState, nav: AuraNav) {
             app.note(e)
         }
     }
-    // The hour grid's red line moves every minute.
+    // The hour grid's red line and the "Earlier today" split move every minute.
     LaunchedEffect(Unit) {
         while (true) {
             delay(60_000L - System.currentTimeMillis() % 60_000L)
@@ -124,46 +128,45 @@ fun CalendarScreen(app: AppState, nav: AuraNav) {
         }
     }
 
-    val readyDay = zoneDay?.takeIf { it.status == ZoneStatus.ready }
-    val zonesLoading = zoneDay == null && !zonesFailed
-    val zone = ZoneId.systemDefault()
-    val todayDate = now.atZone(zone).toLocalDate()
-    val days: List<Pair<LocalDate, List<CalendarEvent>>> = (events ?: emptyList())
-        .sortedBy { it.start }
-        .groupBy { it.start.atZone(zone).toLocalDate() }
-        .toSortedMap()
-        .toList()
-    val todayGroup = days.firstOrNull { it.first == todayDate }
-    val laterDays = days.filter { it.first != todayDate }
-    val openEditor: (CalendarEvent?) -> Unit = { event -> nav.push(Route.EventEditor(event?.id)) }
-    val editHours = { nav.push(Route.WorkHours) }
-
-    @Composable
-    fun eventsState() {
-        when {
-            failed -> HomeRetryLine("Couldn't load your calendar.", retry = { retry += 1 })
-            // Until today's zones arrive, an empty week may still get a zone grid: keep the spinner, not "Nothing".
-            events == null || (zonesLoading && days.isEmpty()) -> Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator(color = AuraColors.gray, strokeWidth = 3.dp, modifier = Modifier.size(28.dp))
-            }
-            days.isEmpty() && readyDay == null ->
-                Text("Nothing in the next 7 days", style = AuraType.callout, color = AuraColors.footnote)
-        }
+    // The zones of the day shown; a load for another day still on its way doesn't count.
+    val shownZone = zoneDay?.takeIf { it.date == selectedKey }
+    val readyDay = shownZone?.takeIf { it.status == ZoneStatus.ready }
+    val zonesLoading = shownZone == null && !zonesFailed
+    val dayStart = selectedDate.atStartOfDay(zone).toInstant()
+    val dayEnd = selectedDate.plusDays(1).atStartOfDay(zone).toInstant()
+    val sorted = (events ?: emptyList()).sortedBy { it.start }
+    val dayEvents = sorted.filter { it.end > dayStart && it.start < dayEnd }
+    val earlier = if (isToday) dayEvents.filter { it.end <= now } else emptyList()
+    val dayList = if (isToday) dayEvents.filter { it.end > now } else dayEvents
+    // On today, the next 6 days follow, each under its own title.
+    val laterDays: List<Pair<LocalDate, List<CalendarEvent>>> = if (!isToday) emptyList() else {
+        val weekEnd = todayDate.plusDays(7).atStartOfDay(zone).toInstant()
+        sorted.filter { it.start >= dayEnd && it.start < weekEnd }
+            .groupBy { it.start.atZone(zone).toLocalDate() }
+            .toSortedMap()
+            .toList()
     }
+    val showsGrid = readyDay != null || dayEvents.isNotEmpty()
+    // A new event starts on the day being shown (today: the next half hour; another day: 09:00).
+    val openEditor: (CalendarEvent?) -> Unit = { event ->
+        nav.push(Route.EventEditor(event?.id, day = if (event == null && !isToday) selectedKey else null))
+    }
+    val editHours = { nav.push(Route.WorkHours) }
+    val dayTitle = EventDays.title(selectedDate, todayDate)
 
     AuraPage(Modifier.testTag("calendar-page"), title = "Calendar", onBack = { nav.pop() }) {
         // A failed zones load only shows here, so the events still show.
-        val loadedZone = zoneDay
         if (zonesFailed) {
             AuraCard(padding = 20.dp) { HomeRetryLine("Couldn't load your zones.", retry = { retry += 1 }) }
-        } else if (loadedZone != null && loadedZone.status != ZoneStatus.unknown) {
-            ZoneLineCard(loadedZone, setHours = editHours)
+        } else if (isToday && shownZone != null && shownZone.status != ZoneStatus.unknown) {
+            ZoneLineCard(shownZone, setHours = editHours)
         }
         if (events != null || failed) {
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 PillButton(
                     "Find a time",
-                    { nav.push(Route.FindATime(DayKey.string(Instant.now()))) },
+                    // Find a time plans today or later, so yesterday plans today.
+                    { nav.push(Route.FindATime(DayKey.string(if (dayOffset < 0) todayDate else selectedDate))) },
                     Modifier.weight(1f).testTag("calendar-find-time"),
                     fills = true,
                 )
@@ -176,43 +179,65 @@ fun CalendarScreen(app: AppState, nav: AuraNav) {
                 )
             }
         }
-        if (readyDay != null) {
+        EventDayPicker(dayOffset, todayDate, onSelect = { dayOffset = it })
+
+        if (showsGrid) {
             // A confirmed plan reloads every screen through `dataVersion`, so its blocks show on the hour grid.
-            ZoneCardSection("Today", padding = 14.dp) {
-                ZoneDayGrid(readyDay.zones, todayEvents, schedule, now)
+            ZoneCardSection(dayTitle, padding = 14.dp) {
+                ZoneDayGrid(readyDay?.zones ?: emptyList(), dayEvents, schedule, now, day = selectedDate, onEventClick = openEditor)
             }
+        }
+        if (readyDay != null) {
             ZoneDayList(readyDay.zones)
             ZoneLegend()
-        } else {
-            eventsState()
-            todayGroup?.let { CalendarDayGroup(it.first, it.second, todayDate, openEditor) }
         }
         if (scheduleLoaded) {
             WorkHoursRow("Work hours", ZoneText.schedule(schedule), editHours, Modifier.testTag("calendar-work-hours"))
         }
-        if (readyDay != null) {
-            eventsState()
-            // The hour grid can't be tapped, so today's events are listed too, to open them in the editor.
-            todayGroup?.let { CalendarDayGroup(it.first, it.second, todayDate, openEditor) }
+
+        when {
+            failed -> HomeRetryLine("Couldn't load your calendar.", retry = { retry += 1 })
+            // Until the day's zones arrive, an empty day may still get a zone grid: keep the spinner, not "Nothing".
+            events == null || (zonesLoading && dayEvents.isEmpty()) -> Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator(color = AuraColors.gray, strokeWidth = 3.dp, modifier = Modifier.size(28.dp))
+            }
+            isToday && dayEvents.isEmpty() && laterDays.isEmpty() && readyDay == null ->
+                Text("Nothing in the next 7 days", style = AuraType.callout, color = AuraColors.footnote)
+            !isToday && dayEvents.isEmpty() && readyDay == null ->
+                Text(
+                    when (dayOffset) {
+                        -1 -> "Nothing yesterday"
+                        1 -> "Nothing tomorrow"
+                        else -> "Nothing on $dayTitle"
+                    },
+                    style = AuraType.callout,
+                    color = AuraColors.footnote,
+                    modifier = Modifier.testTag("calendar-day-empty"),
+                )
         }
-        laterDays.forEach { (date, list) -> CalendarDayGroup(date, list, todayDate, openEditor) }
+        if (earlier.isNotEmpty()) {
+            CalendarDayGroup("Earlier today", earlier, openEditor, Modifier.testTag("calendar-earlier"), dimmed = { true })
+        }
+        if (dayList.isNotEmpty()) {
+            // Yesterday's events, and any other that already ended, are dimmed too.
+            CalendarDayGroup(dayTitle, dayList, openEditor, dimmed = { it.end <= now })
+        }
+        laterDays.forEach { (date, list) -> CalendarDayGroup(EventDays.title(date, todayDate), list, openEditor) }
     }
 }
 
-private val dayTitleFormat: DateTimeFormatter = DateTimeFormatter.ofPattern("EEEE, MMMM d")
-
-private fun dayTitle(date: LocalDate, today: LocalDate): String = when (date) {
-    today -> "Today"
-    today.plusDays(1) -> "Tomorrow"
-    else -> dayTitleFormat.format(date)
-}
-
-/** One day's title and a card of its events; each row opens the editor. */
+/** One day's title and a card of its events; each row opens the editor. A dimmed row has already ended. */
 @Composable
-private fun CalendarDayGroup(date: LocalDate, events: List<CalendarEvent>, today: LocalDate, open: (CalendarEvent) -> Unit) {
-    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+private fun CalendarDayGroup(
+    title: String,
+    events: List<CalendarEvent>,
+    open: (CalendarEvent) -> Unit,
+    modifier: Modifier = Modifier,
+    dimmed: (CalendarEvent) -> Boolean = { false },
+) {
+    Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Text(
-            dayTitle(date, today),
+            title,
             style = AuraType.system(20, FontWeight.Bold),
             color = Color.Black,
             modifier = Modifier.semantics { heading() },
@@ -222,6 +247,7 @@ private fun CalendarDayGroup(date: LocalDate, events: List<CalendarEvent>, today
                 Row(
                     Modifier
                         .fillMaxWidth()
+                        .alpha(if (dimmed(event)) 0.5f else 1f)
                         .clickable(role = Role.Button, onClickLabel = "Opens the event to change it") { open(event) }
                         .testTag("calendar-event-${event.id}"),
                     verticalAlignment = Alignment.CenterVertically,

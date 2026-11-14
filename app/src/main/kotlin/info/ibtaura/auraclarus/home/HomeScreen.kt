@@ -33,7 +33,7 @@ import info.ibtaura.auraclarus.shell.Route
 fun HomeScreen(app: AppState, nav: AuraNav) {
     Box(Modifier.fillMaxSize()) {
         AuraPage(Modifier.testTag("home-page")) {
-            HomeInsightsSection(app)
+            HomeInsightsSection(app, onEventClick = { nav.push(Route.EventEditor(it.id)) })
             HomeTodaySection(app, onStart = { modeId, headline -> nav.push(Route.ModeDetail(modeId, headline)) })
             HomeBurnoutSection(app)
             HomeWorkSection(app, nav)

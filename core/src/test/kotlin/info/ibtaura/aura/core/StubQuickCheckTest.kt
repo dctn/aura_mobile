@@ -55,6 +55,20 @@ class StubQuickCheckTest {
     }
 
     @Test
+    fun bothLengthsCountAsTheBackendDoes() = runTest {
+        val stub = stubApi()
+        val short = stub.submitCheck(makeRun(seconds = 45, answers = 16))
+        assertTrue(short.valid)
+        assertEquals(45, short.testSeconds)
+        val long = stub.submitCheck(makeRun(seconds = 180, answers = 60))
+        assertTrue(long.valid)
+        assertEquals(180, long.testSeconds)
+        val longFew = stub.submitCheck(makeRun(seconds = 180, answers = 20))
+        assertEquals("too_few_responses", longFew.invalidReason)
+        assertEquals("not_3_minutes", stub.submitCheck(makeRun(seconds = 60, answers = 16)).invalidReason)
+    }
+
+    @Test
     fun tooFewAnswersIsNotValid() = runTest {
         val result = stubApi().submitCheck(makeRun(seconds = 45, answers = 7))
         assertFalse(result.valid)

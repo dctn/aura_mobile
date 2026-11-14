@@ -71,7 +71,9 @@ Insights, Today, Burnout, Work and Pins, each loading on its own. Pins open a me
 ## Work calendar
 Home → Work → Calendar shows today's zones from `GET /v1/planner/zones` (heavy work, light work, short and heavy
 recovery) behind the hours, with the events listed under the grid. With no score it says so; with no work hours it
-offers to set them. Work hours are edited from Calendar or Settings.
+offers to set them. Work hours are edited from Calendar or Settings. Day chips pick yesterday, today or up to 13 days
+ahead; each day gets its own hour grid and list. On today, events that already ended sit dimmed under "Earlier today"
+and the next 6 days follow. A block on the hour grid, an event row, or an Upcoming row on Home opens the event editor.
 
 **Tasks.** Home → Work → Task: Today / Week / Month with open counts, the open list (sorted by calendar block or due
 date, then priority) and a folding Done list. Tick to complete (`POST /v1/tasks/{id}/complete`; a repeating task's
@@ -79,13 +81,33 @@ next copy is added), tick again to reopen. "+" opens the editor: title, notes, l
 estimate, flag; editing adds Delete with a confirm. Saves are `PATCH /v1/tasks/{id}` with only the changed fields and
 `If-Match`, retried once on 412.
 
-**Event editor.** New event, or a tap on an event, opens title, start and end, kind (Focus, Meeting, Recovery),
-location and notes. Add is `POST /v1/calendar/events`; Save is `PATCH /v1/calendar/events/{id}` with only the changed
-fields and `If-Match`; Delete asks first. An Apple Calendar event only takes a new kind here.
+Tasks feed auto-allocation, but only when the person asks. The editor's Work kind is Focus or Meeting; **Auto-schedule**
+(`autoAllocate`, on for a new focus task, off and greyed for a meeting) lets Find a time place it, with How hard
+(Light 25, Medium 50, Hard 80, or Auto: `demand` null) and Work type (`workType`) for the Planner; without a length
+Aura plans 30 min. **Schedule** saves the task with Auto-schedule on and opens Find a time for just that task.
+**Plan my day** on the Tasks page opens Find a time with every open auto-scheduled task ticked. Each open row shows
+"Scheduled today, 16:00" (its block, or today's or tomorrow's stored plan), "Didn't fit: <reason>", or "Auto-schedule ·
+waiting for Plan my day". Completing or deleting a task removes its future planner blocks (the Planner leaves them):
+`GET /v1/calendar/events?source=planner` for the next 14 days, then `DELETE` each one still ahead that carries the
+task's `taskId` or has Planner's id for it (`plan-<date>-<task>`, `-p<n>` pieces, and the `-rest` break, which Planner
+writes with no `taskId`). With Auto-schedule off, the editor says Aura leaves the task where it is.
 
-**Find a time.** Day chips pick today or one of the next six days. The page first shows a preview of the plan
-(`POST /v1/planner/allocate` as a dry run, which writes nothing); **Add to calendar** runs it for real. Tasks that
-didn't fit are listed with the Planner's reason. For today the Planner may want a Quick check first (409
+**Event editor.** New event, or a tap on an event, opens title, start and end, kind (Focus, Meeting, Recovery),
+work type (deep focus, detail-heavy, ideas, routine, learning), high stakes, location and notes. Add is
+`POST /v1/calendar/events`; Save is `PATCH /v1/calendar/events/{id}` with only the changed fields and `If-Match`,
+retried once with the latest version on 412; Delete asks first. Quick moves (next free slot, tomorrow, next workday)
+are `POST /v1/calendar/events/{id}/move`; the editor stays open and says where it went. A block Aura placed for a task
+shows the task (tap to edit it); changing, moving or deleting it turns off auto-placing for that task so Aura won't
+move it back. An Apple Calendar event only takes a new kind, work type and high stakes here; a repeating series and
+its occurrences can't be moved. Over the day's work limit, the error names the minutes.
+
+**Find a time.** Day chips pick today or one of the next six days. "Tasks to place" lists the open tasks marked
+Auto-schedule, each with a tick (one task from its Schedule, else all ticked). The page first shows a preview of the
+plan for the ticked tasks (`POST /v1/planner/allocate` as a dry run, which writes nothing; `taskIds` only when some are
+unticked); **Add to calendar** runs it for real with the same tasks, says "Added N blocks" and closes. Tasks that
+didn't fit are listed in plain words (No free time left that day, Too demanding for your energy that day, Over the
+day's work limit, Planned for a later day, Longer than any free gap, Needs a length). With no task marked, the page
+says how to mark one and links to Tasks. For today the Planner may want a Quick check first (409
 `quick_check_required`): **Do the Quick check** or **Plan anyway**.
 
 ## Recovery and runs
@@ -125,9 +147,9 @@ memory part (type back a row of digits, one longer after each right answer; Skip
 are `REACTION_TEST_SECONDS` and `MEMORY_TEST_SECONDS` in `core/.../QuickCheckEngine.kt`. The screen stays on, and
 leaving the app mid-reaction starts the test again. It goes to `POST /v1/checks`.
 
-The dev backend still wants a 170-200 s run with 30+ answers and refuses anything under 60 s with
-400 `validation_failed`. The app then says the server doesn't take this check yet. The stub accepts 40-60 s and
-8+ answers. `docs/backend-quick-check-45s-prompt.md` asks the backend to accept both lengths.
+Dev accepts it since 14 Nov 2026: `durationSeconds` 30-600, a 40-59 s run with 8+ answers counts as the 45-second
+check and a 170-200 s run with 30+ as the 3-minute one, and the answer carries `testSeconds` (45, 180 or none). The
+stub uses the same windows. A 400 now only means the run itself was off; the app asks for a fresh check.
 
 ## Beta day score
 Beta has no band, so the phone supplies what the day score needs.
@@ -184,4 +206,8 @@ artifact for 14 days.
 - A public privacy-policy URL for Health Connect and the Play listing.
 - Play Console setup.
 - A release signing key (kept out of the repo).
-- The backend changes in `docs/backend-health-connect-prompt.md` and `docs/backend-quick-check-45s-prompt.md`.
+- Both backend prompts in `docs/` are done (Health Connect routes and the 45-second Quick check, live on dev
+  14 Nov 2026).
+- Planner gaps the app covers itself: completing a task doesn't remove its blocks on the server, a block moved by hand
+  isn't pinned there, and a break has no `taskId`. Turning Auto-schedule off keeps blocks already placed; clean-up
+  looks 14 days ahead.

@@ -307,11 +307,103 @@ class StubPlanTest {
     }
 
     @Test
-    fun allTasksAreForFindATime() = runTest {
+    fun threeSeededTasksAreForFindATime() = runTest {
         val tasks = stubApi().tasks()
-        assertEquals(listOf("t1", "t2", "t3"), tasks.map { it.id })
-        assertEquals(listOf("Reply to Ana", "Book the dentist", "Write the review"), tasks.map { it.title })
-        assertTrue(tasks.all { it.autoAllocate })
+        assertEquals(listOf("t1", "t2", "t3", "t4"), tasks.map { it.id })
+        assertEquals(listOf("Reply to Ana", "Book the dentist", "Write the review", "Tidy the inbox"), tasks.map { it.title })
+        assertEquals(listOf(true, true, true, false), tasks.map { it.autoAllocate })
+    }
+
+    // MARK: Tasks (auto-allocation)
+
+    @Test
+    fun anUnflaggedTaskIsNeverPlaced() = runTest {
+        val stub = stubApi()
+        stub.createTask(TaskDraft(title = "Not for the planner", autoAllocate = false), id = "n1")
+        val all = stub.allocate(date = monday, dryRun = true, skipCheck = false, taskIds = null)
+        assertFalse(all.placed.any { it.taskId == "n1" || it.taskId == "t4" })
+        assertFalse(all.unplaced.any { it.taskId == "n1" || it.taskId == "t4" })
+        // Asking for it by id doesn't place it either: taskIds only narrows the marked tasks.
+        val asked = stub.allocate(date = monday, dryRun = true, skipCheck = false, taskIds = listOf("n1", "t4"))
+        assertEquals(emptyList(), asked.placed)
+        assertEquals(emptyList(), asked.unplaced)
+    }
+
+    @Test
+    fun aMeetingIsNeverPlaced() = runTest {
+        val stub = stubApi()
+        val made = stub.createTask(TaskDraft(title = "Standup", workMode = TaskWorkMode.meeting), id = "m1")
+        assertFalse(made.autoAllocate, "A meeting is saved without autoAllocate")
+        // Even one stored with the flag (from another device) isn't placed.
+        stub.updateTask("m1", made.version, TaskChanges(autoAllocate = true))
+        val plan = stub.allocate(date = monday, dryRun = true, skipCheck = false, taskIds = listOf("m1"))
+        assertEquals(emptyList(), plan.placed)
+    }
+
+    @Test
+    fun aCompletedTaskIsNotPlaced() = runTest {
+        val stub = stubApi()
+        stub.completeTask("t1")
+        val plan = stub.allocate(date = monday, dryRun = true, skipCheck = false, taskIds = null)
+        assertFalse(plan.placed.any { it.taskId == "t1" })
+    }
+
+    @Test
+    fun aNewTaskIsPlacedAfterTheRestAndScheduledOnARealRun() = runTest {
+        val stub = stubApi()
+        stub.createTask(TaskDraft(title = "Call the bank", estimateMinutes = 45), id = "n1")
+        val preview = stub.allocate(date = monday, dryRun = true, skipCheck = false, taskIds = listOf("n1"))
+        val block = preview.placed.single()
+        assertEquals("n1", block.taskId)
+        assertEquals("plan-$monday-n1", block.blockId)
+        assertEquals(stubTime(monday, 16), block.start)
+        assertEquals(stubTime(monday, 16, 45), block.end)
+        assertNull(stub.tasks().single { it.id == "n1" }.scheduledAt, "A dry run writes nothing")
+
+        stub.allocate(date = monday, dryRun = false, skipCheck = false, taskIds = listOf("n1"))
+        val task = stub.tasks().single { it.id == "n1" }
+        assertEquals(stubTime(monday, 16), task.scheduledAt)
+        assertEquals("plan-$monday-n1", task.blockId)
+        val events = stub.events(stubTime(monday, 0), stubTime(nextDay(monday), 0))
+        val event = events.single { it.id == "plan-$monday-n1" }
+        assertEquals("Call the bank", event.title)
+        assertEquals("planner", event.source)
+    }
+
+    @Test
+    fun aNarrowedRunKeepsTheDaysOtherBlocks() = runTest {
+        val stub = stubApi()
+        stub.createTask(TaskDraft(title = "Call the bank"), id = "n1")
+        stub.createTask(TaskDraft(title = "Pay the rent"), id = "n2")
+        stub.allocate(date = monday, dryRun = false, skipCheck = false, taskIds = listOf("n1"))
+        val second = stub.allocate(date = monday, dryRun = false, skipCheck = false, taskIds = listOf("n2"))
+        // The second run steps past the first one's block.
+        assertEquals(stubTime(monday, 16, 45), second.placed.single().start)
+        val ids = stub.plan(monday)?.placed?.map { it.taskId }
+        assertEquals(listOf("n1", "n2"), ids)
+    }
+
+    @Test
+    fun aTaskLongerThanAnyGapIsTooLong() = runTest {
+        val stub = stubApi()
+        stub.createTask(TaskDraft(title = "Huge", estimateMinutes = 300), id = "n1")
+        val plan = stub.allocate(date = monday, dryRun = true, skipCheck = false, taskIds = listOf("n1"))
+        assertEquals(listOf("tooLong"), plan.unplaced.map { it.reason })
+    }
+
+    @Test
+    fun removePlannerBlocksClearsOnlyThatTasksFutureBlocks() = runTest {
+        val stub = stubApi()
+        stub.allocate(date = monday, dryRun = false, skipCheck = false, taskIds = null)
+        val from = stubTime(monday, 0)
+        val to = stubTime(nextDay(monday), 0)
+        assertEquals(3, stub.removePlannerBlocks("t3"), "Both pieces and the break after them")
+        val left = stub.events(from, to).filter { it.id.startsWith("plan-") }.map { it.id }
+        assertEquals(listOf("plan-$monday-t1", "plan-$monday-t2"), left)
+        assertEquals(0, stub.removePlannerBlocks("t3"), "Already gone")
+        // A new real run puts them back.
+        stub.allocate(date = monday, dryRun = false, skipCheck = false, taskIds = null)
+        assertTrue(stub.events(from, to).any { it.id == "plan-$monday-t3-p1" })
     }
 
     @Test

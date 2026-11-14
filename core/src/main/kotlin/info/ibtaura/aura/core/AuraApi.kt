@@ -221,6 +221,30 @@ interface AuraApi {
     ): Checkin
     /** The profile's healthGoals.waterGoalMl (GET /v1/me), or null when it isn't set. */
     suspend fun waterGoalMl(): Int?
+
+    // MARK: Events (editor round 2)
+    /**
+     * POST /v1/calendar/events/{id}/move (no If-Match): either `to` (`EventMoveTargets`: nextFree, tomorrow,
+     * nextWorkday) or `start` with an optional `end` (without one the length is kept), never both. Returns the moved
+     * event. 409 no_free_slot, work_limit_reached, apple_event_read_only or conflict; 400 move_an_occurrence for a
+     * series id (move one day of it instead). On an occurrence it detaches that day.
+     */
+    suspend fun moveEvent(id: String, to: String? = null, start: Instant? = null, end: Instant? = null): CalendarEvent
+    /**
+     * Stops Find a time placing a task again (PATCH /v1/tasks/{id} `{"autoAllocate":false}` with If-Match, read first
+     * with GET /v1/tasks/{id}, one more go after a 412). A planner block moved or deleted by hand comes back on the
+     * next allocate unless its task is unpinned like this. A task that is gone counts as done.
+     */
+    suspend fun unpinTaskFromPlanner(taskId: String)
+    /** One task (GET /v1/tasks/{id}), or null on a 404. */
+    suspend fun task(id: String): TaskItem?
+    // MARK: Tasks (auto-allocation)
+    /**
+     * Takes a completed or deleted task's planner blocks off the calendar: the server leaves them there. Lists the
+     * next 14 days' events with `taskId` and `source=planner` and deletes each that starts now or later (a past
+     * block stays as a record). Returns how many were deleted. Reopening a task doesn't put them back.
+     */
+    suspend fun removePlannerBlocks(taskId: String): Int
 }
 
 sealed class AuthState {

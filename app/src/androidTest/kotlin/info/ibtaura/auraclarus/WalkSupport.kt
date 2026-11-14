@@ -6,6 +6,7 @@ import android.os.Build
 import android.os.ParcelFileDescriptor
 import android.os.SystemClock
 import android.util.Log
+import android.view.accessibility.AccessibilityManager
 import androidx.compose.ui.platform.ViewRootForTest
 import androidx.test.core.app.ActivityScenario
 import androidx.test.core.app.ApplicationProvider
@@ -77,8 +78,20 @@ object Walk {
     fun prepare() {
         if (prepared) return
         prepared = true
-        // Called in every AndroidComposeView's constructor (the activity's, and each dialog's and popup's).
-        ViewRootForTest.onViewCreatedCallback = { root -> root.forceAccessibilityForTesting(true) }
+        // Forcing Compose to report while this process's AccessibilityManager still says "off" crashes the app
+        // ("Accessibility off. Did you forget to check that?"): Compose then sends events the manager refuses. Getting
+        // UiAutomation connects it as an accessibility client; the manager hears about that a moment later, so wait.
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        instrumentation.uiAutomation
+        val manager = instrumentation.targetContext.getSystemService(AccessibilityManager::class.java)
+        val until = SystemClock.uptimeMillis() + 10_000
+        while (manager != null && !manager.isEnabled && SystemClock.uptimeMillis() < until) SystemClock.sleep(100)
+        if (manager?.isEnabled == true) {
+            // Called in every AndroidComposeView's constructor (the activity's, and each dialog's and popup's).
+            ViewRootForTest.onViewCreatedCallback = { root -> root.forceAccessibilityForTesting(manager.isEnabled) }
+        } else {
+            Log.w(TAG, "Accessibility never turned on; Compose roots are not forced to report")
+        }
         // Compose now sends events while things move; an idle wait is capped, not 10 s per query.
         Configurator.getInstance().waitForIdleTimeout = 3_000
     }

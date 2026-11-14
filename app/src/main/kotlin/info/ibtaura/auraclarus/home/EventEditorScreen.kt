@@ -1,3 +1,5 @@
+@file:OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+
 package info.ibtaura.auraclarus.home
 
 import androidx.activity.compose.BackHandler
@@ -6,6 +8,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
@@ -14,6 +17,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -28,6 +32,8 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TimePicker
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.material3.rememberTimePickerState
 import androidx.compose.runtime.Composable
@@ -48,16 +54,20 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.semantics.heading
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import info.ibtaura.aura.core.AuraError
 import info.ibtaura.aura.core.CalendarEvent
+import info.ibtaura.aura.core.DayKey
 import info.ibtaura.aura.core.EventDraft
+import info.ibtaura.aura.core.EventMoveTargets
+import info.ibtaura.aura.core.EventWorkTypes
+import info.ibtaura.aura.core.TaskItem
+import info.ibtaura.aura.core.WorkLimitDetails
 import info.ibtaura.auraclarus.design.AuraCard
 import info.ibtaura.auraclarus.design.AuraColors
 import info.ibtaura.auraclarus.design.AuraConfirmDialog
@@ -84,15 +94,18 @@ import java.time.format.FormatStyle
 private val kindNames = mapOf("focus" to "Focus", "meeting" to "Meeting", "recovery" to "Recovery")
 
 /**
- * Makes or changes one calendar event (iOS EventEditor), pushed from Calendar. The Figma has no frame for it, so it
- * follows the Work hours form. An Apple Calendar event only takes a new kind here; the Mac owns the rest.
+ * Makes or changes one calendar event (iOS EventEditor), pushed from Calendar's grid and lists and Home's Upcoming. The
+ * Figma has no frame for it, so it follows the Work hours form. Quick moves (next free slot, tomorrow, next workday),
+ * work type, high stakes and the linked task sit under the times. An Apple Calendar event only takes a new kind, work
+ * type and stakes here; the Mac owns the rest. Changing, moving or deleting a Find a time block unpins its task, so the
+ * next plan leaves it alone.
  */
 @Composable
 fun EventEditorScreen(app: AppState, nav: AuraNav, route: Route.EventEditor) {
     val id = route.eventId
     var event by remember(id) { mutableStateOf(id?.let { app.event(it) }) }
     if (id == null || event != null) {
-        EventEditorForm(app, event, close = { nav.pop() })
+        EventEditorForm(app, event, close = { nav.pop() }, newDay = route.day)
         return
     }
     // The app was restarted on this page, so the event isn't in memory any more: read it by its id.
@@ -151,35 +164,79 @@ private fun EventGone(onBack: () -> Unit) {
 }
 
 @Composable
-private fun EventEditorForm(app: AppState, event: CalendarEvent?, close: () -> Unit) {
-    var draft by remember { mutableStateOf(event?.let { EventDraft(it) } ?: EventDraft.new(Instant.now())) }
+private fun EventEditorForm(app: AppState, event: CalendarEvent?, close: () -> Unit, newDay: String? = null) {
+    // The event as last read or moved; a quick move replaces it, so a later Save sends the moved version.
+    var base by remember { mutableStateOf(event) }
+    var draft by remember { mutableStateOf(event?.let { EventDraft(it) } ?: EventDraft.new(newEventAfter(newDay))) }
     var saving by remember { mutableStateOf(false) }
     var errorText by remember { mutableStateOf<String?>(null) }
+    // A quick move's result ("Moved to ..."), shown until the next action.
+    var movedText by remember { mutableStateOf<String?>(null) }
+    // True once a planner block was moved here, so Aura stops placing its task.
+    var unpinned by remember { mutableStateOf(false) }
     var confirmingDelete by remember { mutableStateOf(false) }
+    var showingTask by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val focus = LocalFocusManager.current
 
-    val isNew = event == null
-    val appleOnly = event?.isFromApple == true
-    // An Apple event's other fields aren't checked: only its kind is sent.
+    val current = base
+    val isNew = current == null
+    val appleOnly = current?.isFromApple == true
+    val planner = current?.isPlannerBlock == true
+    val linkedTaskId = current?.taskId
+    // An Apple event's other fields aren't checked: only its kind, work type and stakes are sent.
     val problem = if (appleOnly) null else draft.problem
     val fieldsEnabled = !appleOnly && !saving
+    val timeChanged = current != null && (draft.start != current.start || draft.end != current.end)
 
-    // Why some of it can't change, or how far a change reaches.
+    // The task this block does, for the "Task:" row and the planner caption.
+    var linkedTask by remember { mutableStateOf<TaskItem?>(null) }
+    var taskGone by remember { mutableStateOf(false) }
+    LaunchedEffect(linkedTaskId) {
+        linkedTask = null
+        taskGone = false
+        val id = linkedTaskId ?: return@LaunchedEffect
+        try {
+            val found = app.api.task(id)
+            linkedTask = found
+            taskGone = found == null
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            app.note(e)
+        }
+    }
+
+    // Why some of it can't change, how far a change reaches, or who placed it.
     val note = when {
-        appleOnly -> "From Apple Calendar on your Mac. Change it there; here you can set its kind."
-        event?.isOccurrence == true -> "This repeats. Changes here apply to this day only."
-        event?.source == "planner" -> "Find a time placed this. You can still change it."
+        appleOnly -> "From Apple Calendar on your Mac. Change its time there; here you can set its kind, work type and stakes."
+        current?.isOccurrence == true -> "This repeats. Changes here apply to this day only."
+        planner && linkedTaskId == null -> "Placed by Aura as a break."
+        planner -> "Placed by Aura for ${linkedTask?.title ?: if (taskGone) "a deleted task" else "a task"}"
         else -> null
     }
-    val deleteTitle = if (event?.isOccurrence == true) "Delete this day" else "Delete event"
-    val deleteQuestion = if (event?.isOccurrence == true) "Delete this day of the event?" else "Delete this event?"
+    // A planner block changed by hand: its task is unpinned, so the next plan leaves it where it is.
+    val pinNote = if (planner && linkedTaskId != null && (timeChanged || unpinned)) "Aura won't move this block again." else null
+    val deleteTitle = if (current?.isOccurrence == true) "Delete this day" else "Delete event"
+    val deleteQuestion = if (current?.isOccurrence == true) "Delete this day of the event?" else "Delete this event?"
 
     BackHandler(enabled = saving) {}
 
-    fun run(write: suspend () -> Unit) {
+    // Stops Find a time placing the task again. A failure here doesn't undo the change already saved.
+    suspend fun unpin(taskId: String) {
+        try {
+            app.api.unpinTaskFromPlanner(taskId)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            app.note(e)
+        }
+    }
+
+    fun run(action: String, write: suspend () -> Unit) {
         saving = true
         errorText = null
+        movedText = null
         scope.launch {
             try {
                 write()
@@ -191,7 +248,39 @@ private fun EventEditorForm(app: AppState, event: CalendarEvent?, close: () -> U
                 throw e
             } catch (e: Throwable) {
                 saving = false
-                errorText = errorWords(e)
+                errorText = eventErrorWords(e, action)
+                app.note(e)
+            }
+        }
+    }
+
+    /** A quick move (POST .../move). The editor stays open on the moved event. */
+    fun move(target: String) {
+        val original = base ?: return
+        focus.clearFocus()
+        saving = true
+        errorText = null
+        movedText = null
+        scope.launch {
+            try {
+                val moved = app.api.moveEvent(original.id, to = target)
+                val taskId = original.taskId
+                if (original.isPlannerBlock && taskId != null) {
+                    unpin(taskId)
+                    unpinned = true
+                }
+                app.rememberEvents(listOf(moved))
+                base = moved
+                draft = draft.copy(start = moved.start, end = moved.end)
+                val local = moved.start.atZone(ZoneId.systemDefault())
+                movedText = "Moved to ${dateChipFormat.format(local)}, ${timeChipFormat.format(local)}."
+                saving = false
+                app.dataVersion += 1
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                saving = false
+                errorText = eventErrorWords(e, "move")
                 app.note(e)
             }
         }
@@ -203,13 +292,11 @@ private fun EventEditorForm(app: AppState, event: CalendarEvent?, close: () -> U
         draft = if (length > 0) draft.copy(start = new, end = new.plusSeconds(length)) else draft.copy(start = new)
     }
 
-    AuraPage(Modifier.testTag("event-editor")) {
-        Text(
-            if (isNew) "New event" else "Edit event",
-            style = AuraType.title,
-            color = Color.Black,
-            modifier = Modifier.padding(top = 8.dp).semantics { heading() },
-        )
+    AuraPage(
+        Modifier.testTag("event-editor"),
+        title = if (isNew) "New event" else "Edit event",
+        onBack = { if (!saving) close() },
+    ) {
         if (note != null) {
             Text(note, style = AuraType.callout, color = AuraColors.gray, modifier = Modifier.testTag("event-editor-note"))
         }
@@ -224,10 +311,31 @@ private fun EventEditorForm(app: AppState, event: CalendarEvent?, close: () -> U
             CardDivider()
             DateRow("Ends", draft.end, "event-end", fieldsEnabled) { draft = draft.copy(end = it) }
         }
+        movedText?.let {
+            Text(it, style = AuraType.callout, color = AuraColors.gray, modifier = Modifier.testTag("event-moved"))
+        }
+        pinNote?.let {
+            Text(it, style = AuraType.callout, color = AuraColors.gray, modifier = Modifier.testTag("event-pin-note"))
+        }
+
+        if (current != null && current.canMove) {
+            AuraCard(padding = 20.dp, spacing = 12.dp) {
+                Text("Quick moves", style = AuraType.bodyMedium, color = Color.Black)
+                EventQuickMoves(enabled = !saving, onMove = { move(it) })
+            }
+        }
 
         AuraCard(padding = 20.dp, spacing = 14.dp) {
             Text("Kind", style = AuraType.bodyMedium, color = Color.Black)
             KindPicker(draft.kind, enabled = !saving) { draft = draft.copy(kind = it) }
+            Text("Work type", style = AuraType.bodyMedium, color = Color.Black)
+            WorkTypeChips(draft.workType, enabled = !saving) { draft = draft.copy(workType = it) }
+            CardDivider()
+            HighStakesRow(draft.highStakes, enabled = !saving) { draft = draft.copy(highStakes = it) }
+        }
+
+        if (linkedTaskId != null) {
+            LinkedTaskRow(linkedTask, taskGone, enabled = !saving) { showingTask = true }
         }
 
         AuraCard(Modifier.alpha(if (fieldsEnabled) 1f else 0.6f), padding = 20.dp, spacing = 0.dp) {
@@ -254,8 +362,18 @@ private fun EventEditorForm(app: AppState, event: CalendarEvent?, close: () -> U
                 if (saving) "Saving..." else if (isNew) "Add" else "Save",
                 {
                     focus.clearFocus()
-                    val current = draft
-                    run { if (event != null) app.api.updateEvent(event, current) else app.api.createEvent(current) }
+                    val edited = draft
+                    val original = base
+                    run("save") {
+                        if (original == null) {
+                            app.api.createEvent(edited)
+                        } else {
+                            app.api.updateEvent(original, edited)
+                            val taskId = original.taskId
+                            val moved = edited.start != original.start || edited.end != original.end
+                            if (original.isPlannerBlock && taskId != null && moved) unpin(taskId)
+                        }
+                    }
                 },
                 Modifier.weight(1f).testTag("event-save"),
                 fills = true,
@@ -277,18 +395,163 @@ private fun EventEditorForm(app: AppState, event: CalendarEvent?, close: () -> U
         }
     }
 
-    if (confirmingDelete && event != null) {
+    if (confirmingDelete && current != null) {
         AuraConfirmDialog(
             title = deleteQuestion,
-            message = null,
+            message = if (planner && linkedTaskId != null) "Aura won't move this block again." else null,
             confirmTitle = deleteTitle,
             onConfirm = {
                 confirmingDelete = false
-                run { app.api.deleteEvent(event.id) }
+                run("delete") {
+                    app.api.deleteEvent(current.id)
+                    val taskId = current.taskId
+                    if (current.isPlannerBlock && taskId != null) unpin(taskId)
+                }
             },
             onDismiss = { confirmingDelete = false },
             confirmTag = "event-delete-confirm",
         )
+    }
+
+    val task = linkedTask
+    if (showingTask && task != null) {
+        // The task editor from the Tasks page, as a sheet over this page.
+        TaskEditorSheet(
+            app = app,
+            task = task,
+            horizon = task.horizon,
+            onClose = { showingTask = false },
+            onDone = { edit ->
+                when (edit) {
+                    is TaskEdit.Saved -> linkedTask = edit.task
+                    is TaskEdit.Deleted -> {
+                        linkedTask = null
+                        taskGone = true
+                    }
+                }
+                app.dataVersion += 1
+            },
+        )
+    }
+}
+
+/** "Next free slot", "Tomorrow" and "Next workday": Calendar's move targets, wrapping onto a second line on a narrow phone. */
+@Composable
+private fun EventQuickMoves(enabled: Boolean, onMove: (String) -> Unit) {
+    val moves = listOf(
+        EventMoveTargets.NEXT_FREE to "Next free slot",
+        EventMoveTargets.TOMORROW to "Tomorrow",
+        EventMoveTargets.NEXT_WORKDAY to "Next workday",
+    )
+    FlowRow(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        moves.forEach { (target, title) ->
+            Box(
+                Modifier
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(hex(0x767680, 0.12f))
+                    .clickable(enabled = enabled, role = Role.Button) { onMove(target) }
+                    .testTag("event-move-$target")
+                    .padding(horizontal = 14.dp, vertical = 8.dp),
+            ) {
+                Text(title, style = AuraType.system(15, FontWeight.Medium), color = AuraColors.blue, maxLines = 1)
+            }
+        }
+    }
+}
+
+private val workTypeNames = mapOf(
+    "deepFocus" to "Deep focus",
+    "detailHeavy" to "Detail-heavy",
+    "ideas" to "Ideas",
+    "routine" to "Routine",
+    "learning" to "Learning",
+)
+
+/** The work types and None, the picked one blue. Each chip is tagged "event-worktype-<type>" ("-none" for None). */
+@Composable
+private fun WorkTypeChips(selected: String?, enabled: Boolean, onSelect: (String?) -> Unit) {
+    val choices: List<String?> = EventWorkTypes.all + listOf<String?>(null)
+    FlowRow(
+        Modifier.fillMaxWidth().selectableGroup(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        choices.forEach { type ->
+            val isSelected = type == selected
+            Box(
+                Modifier
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(if (isSelected) AuraColors.startBlue else hex(0x767680, 0.12f))
+                    .selectable(selected = isSelected, enabled = enabled, role = Role.RadioButton) { onSelect(type) }
+                    .testTag("event-worktype-${type ?: "none"}")
+                    .padding(horizontal = 14.dp, vertical = 8.dp),
+            ) {
+                Text(
+                    type?.let { workTypeNames[it] ?: it } ?: "None",
+                    style = AuraType.system(15, FontWeight.Medium),
+                    color = if (isSelected) Color.White else Color.Black,
+                    maxLines = 1,
+                )
+            }
+        }
+    }
+}
+
+/** "High stakes" with a switch: the whole row toggles it. */
+@Composable
+private fun HighStakesRow(checked: Boolean, enabled: Boolean, onChange: (Boolean) -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .heightIn(min = 50.dp)
+            .toggleable(value = checked, enabled = enabled, role = Role.Switch, onValueChange = onChange)
+            .testTag("event-high-stakes"),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text("High stakes", style = AuraType.bodyMedium, color = Color.Black, modifier = Modifier.weight(1f))
+        Switch(
+            checked = checked,
+            onCheckedChange = null,
+            enabled = enabled,
+            colors = SwitchDefaults.colors(checkedTrackColor = AuraColors.green, checkedThumbColor = Color.White),
+        )
+    }
+}
+
+/** "Task: <title>" with a chevron; tapping opens the task editor. Grey and still while it loads or when it's gone. */
+@Composable
+private fun LinkedTaskRow(task: TaskItem?, gone: Boolean, enabled: Boolean, onOpen: () -> Unit) {
+    val title = when {
+        task != null -> "Task: ${task.title}"
+        gone -> "Task: deleted"
+        else -> "Task: ..."
+    }
+    AuraCard(padding = 0.dp, spacing = 0.dp) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .heightIn(min = 54.dp)
+                .clickable(enabled = enabled && task != null, role = Role.Button, onClickLabel = "Opens the task", onClick = onOpen)
+                .testTag("event-task")
+                .padding(horizontal = 20.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                title,
+                style = AuraType.bodyMedium,
+                color = if (task != null) Color.Black else AuraColors.gray,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+            if (task != null) {
+                Icon(auraIcon("chevron.right"), contentDescription = null, tint = AuraColors.footnote, modifier = Modifier.size(16.dp))
+            }
+        }
     }
 }
 
@@ -442,14 +705,39 @@ private fun KindPicker(selected: String, enabled: Boolean, onSelect: (String) ->
     }
 }
 
-private fun errorWords(error: Throwable): String = when (error) {
-    AuraError.Offline -> "You're offline. Try again when you're connected."
-    is AuraError.Server -> when {
-        error.code == "work_limit_reached" -> "That would pass today's work limit. Pick a shorter time or another day."
-        error.code == "apple_event_read_only" -> "This event belongs to Apple Calendar. Change it on your Mac."
-        error.status == 412 -> "This event changed somewhere else. Close it and open it again."
-        error.status == 404 -> "This event is gone. It may have been deleted somewhere else."
+/** The words for a failed save, move or delete (`action`), from Calendar's error codes. */
+private fun eventErrorWords(error: Throwable, action: String): String {
+    WorkLimitDetails.of(error)?.let { limit ->
+        val day = if (limit.date == null || limit.date == DayKey.string(Instant.now())) "today's" else "that day's"
+        return "That would put you over $day work limit (${limit.wouldBeMinutes} of ${limit.maxWorkMinutes} min)."
+    }
+    val fallback = when (action) {
+        "move" -> "Couldn't move it. Try again."
+        "delete" -> "Couldn't delete it. Try again."
         else -> "Couldn't save. Try again."
     }
-    else -> "Couldn't save. Try again."
+    return when (error) {
+        AuraError.Offline -> "You're offline. Try again when you're connected."
+        is AuraError.Server -> when {
+            error.code == "work_limit_reached" -> "That would put you over the day's work limit. Pick a shorter time or another day."
+            error.code == "apple_event_read_only" -> "This event belongs to Apple Calendar. Change it on your Mac."
+            error.code == "no_free_slot" -> "There's no free slot in your work hours in the next 3 weeks."
+            error.code == "move_an_occurrence" -> "This is the whole repeating event. Open one day of it to move that day."
+            error.code == "event_version_missing" -> "Couldn't read this event's version. Close it and open it again."
+            error.code == "conflict" -> "That time clashes with something else on your calendar."
+            error.status == 412 -> "This event changed somewhere else. Close it and open it again to see the latest."
+            error.status == 404 -> "This event is gone. It may have been deleted somewhere else."
+            else -> fallback
+        }
+        else -> fallback
+    }
+}
+
+/** Where a new event starts: the next half hour today, or 09:00 on the day the Calendar was showing. */
+private fun newEventAfter(day: String?): Instant {
+    val zone = java.time.ZoneId.systemDefault()
+    val date = day?.let { runCatching { java.time.LocalDate.parse(it) }.getOrNull() }
+    if (date == null || date == java.time.LocalDate.now(zone)) return Instant.now()
+    // EventDraft.new rounds up to the next half hour, so 08:59:59 gives 09:00.
+    return date.atTime(9, 0).atZone(zone).toInstant().minusSeconds(1)
 }

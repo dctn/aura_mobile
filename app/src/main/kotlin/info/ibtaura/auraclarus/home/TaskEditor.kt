@@ -2,10 +2,11 @@ package info.ibtaura.auraclarus.home
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
@@ -59,10 +60,13 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.dp
 import info.ibtaura.aura.core.DayKey
+import info.ibtaura.aura.core.TaskDemand
 import info.ibtaura.aura.core.TaskDraft
 import info.ibtaura.aura.core.TaskHorizon
 import info.ibtaura.aura.core.TaskItem
 import info.ibtaura.aura.core.TaskPriority
+import info.ibtaura.aura.core.TaskWorkMode
+import info.ibtaura.aura.core.TaskWorkType
 import info.ibtaura.auraclarus.design.AuraCard
 import info.ibtaura.auraclarus.design.AuraColors
 import info.ibtaura.auraclarus.design.AuraConfirmDialog
@@ -92,6 +96,11 @@ internal sealed class TaskEdit {
  * Makes or changes one task, in a sheet over the Tasks page: title, notes, priority, list, due date with an optional
  * time, estimate and flag. Editing adds Delete. The Figma has no frame for it, so it follows the event editor.
  * `task` null makes a new one on `horizon`.
+ *
+ * Auto-allocation: Work kind (Focus or Meeting), "Auto-schedule" (on for a new focus task; a meeting is never placed),
+ * and when it's on, How hard and Work type for the Planner. "Schedule" saves the task with Auto-schedule on, closes
+ * the sheet and calls `onSchedule` with it, which opens Find a time for just that task. Deleting a task also removes
+ * its future planner blocks.
  */
 @Composable
 internal fun TaskEditorSheet(
@@ -100,6 +109,7 @@ internal fun TaskEditorSheet(
     horizon: TaskHorizon,
     onClose: () -> Unit,
     onDone: (TaskEdit) -> Unit,
+    onSchedule: (TaskItem) -> Unit = {},
 ) {
     var draft by remember(task?.id) { mutableStateOf(task?.let { TaskDraft(it) } ?: TaskDraft(horizon = horizon)) }
     // Chosen once, so a create retried after a lost answer gives back the same task.
@@ -113,7 +123,7 @@ internal fun TaskEditorSheet(
     val isNew = task == null
     val problem = draft.problem
 
-    fun run(action: String, write: suspend () -> TaskEdit?) {
+    fun run(action: String, after: (TaskEdit?) -> Unit = {}, write: suspend () -> TaskEdit?) {
         saving = true
         errorText = null
         scope.launch {
@@ -122,6 +132,7 @@ internal fun TaskEditorSheet(
                 saving = false
                 result?.let(onDone)
                 onClose()
+                after(result)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Throwable) {
@@ -189,6 +200,8 @@ internal fun TaskEditorSheet(
                 EstimateChips(draft.estimateMinutes, enabled = !saving) { draft = draft.copy(estimateMinutes = it) }
             }
 
+            PlanningCard(draft, enabled = !saving) { draft = it }
+
             AuraCard(padding = 20.dp, spacing = 0.dp) {
                 SwitchRow("Flag", draft.flagged, "task-flag", enabled = !saving) { draft = draft.copy(flagged = it) }
             }
@@ -226,6 +239,31 @@ internal fun TaskEditorSheet(
                 )
             }
 
+            if (draft.workMode == TaskWorkMode.focus && task?.done != true) {
+                PillButton(
+                    "Schedule",
+                    {
+                        triedSave = true
+                        focus.clearFocus()
+                        if (problem != null) return@PillButton
+                        val current = draft.copy(autoAllocate = true)
+                        draft = current
+                        run("save", after = { edit -> (edit as? TaskEdit.Saved)?.let { onSchedule(it.task) } }) {
+                            val saved = if (task == null) {
+                                app.api.createTask(current, newId)
+                            } else {
+                                app.api.updateTask(task.id, task.version, current.changes(task)) ?: task
+                            }
+                            TaskEdit.Saved(saved)
+                        }
+                    },
+                    Modifier.testTag("task-schedule"),
+                    style = PillStyle.Secondary,
+                    fills = true,
+                    enabled = !saving && problem == null,
+                )
+            }
+
             if (task != null) {
                 Box(
                     Modifier
@@ -251,12 +289,85 @@ internal fun TaskEditorSheet(
                 confirmingDelete = false
                 run("delete") {
                     app.api.deleteTask(task.id)
+                    // Planner leaves a deleted task's blocks on the calendar.
+                    clearPlannerBlocks(app, task.id)
                     TaskEdit.Deleted(task.id)
                 }
             },
             onDismiss = { confirmingDelete = false },
             confirmTag = "task-delete-confirm",
         )
+    }
+}
+
+/**
+ * Work kind, Auto-schedule and, when it's on, How hard and Work type. A meeting turns Auto-schedule off and greys it:
+ * Find a time only places focus work.
+ */
+@Composable
+private fun PlanningCard(draft: TaskDraft, enabled: Boolean, onChange: (TaskDraft) -> Unit) {
+    AuraCard(Modifier.testTag("task-planning"), padding = 20.dp, spacing = 12.dp) {
+        Text("Work kind", style = AuraType.bodyMedium, color = Color.Black)
+        TaskSegments(
+            options = TaskWorkMode.entries,
+            selected = draft.workMode,
+            label = { TaskPlanning.workModeNames[it] ?: it.raw },
+            tag = { "task-workmode-${it.raw}" },
+            enabled = enabled,
+            onSelect = { onChange(draft.copy(workMode = it)) },
+        )
+        SwitchRow("Auto-schedule", draft.placesItself, "task-auto", enabled = enabled && draft.workMode == TaskWorkMode.focus) {
+            onChange(draft.copy(autoAllocate = it))
+        }
+        TaskPlanning.captions(draft).forEach {
+            Text(it, style = AuraType.callout, color = AuraColors.gray)
+        }
+        if (draft.placesItself) {
+            Text("How hard", style = AuraType.bodyMedium, color = Color.Black, modifier = Modifier.padding(top = 4.dp))
+            val demand = TaskDemand.from(draft.demand)
+            TaskSegments(
+                options = TaskDemand.entries,
+                selected = demand,
+                label = { TaskPlanning.demandNames[it] ?: it.name },
+                tag = { "task-demand-${it.name}" },
+                enabled = enabled,
+                // Tapping the shown choice keeps a stored value that sits between the three.
+                onSelect = { if (it != demand) onChange(draft.copy(demand = it.value)) },
+            )
+            Text("Work type", style = AuraType.bodyMedium, color = Color.Black, modifier = Modifier.padding(top = 4.dp))
+            WorkTypeChips(draft.workType, enabled) { onChange(draft.copy(workType = it)) }
+        }
+    }
+}
+
+/** Any, then the five kinds of work; wraps onto a second line on a narrow phone. */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun WorkTypeChips(selected: TaskWorkType?, enabled: Boolean, onSelect: (TaskWorkType?) -> Unit) {
+    val choices: List<TaskWorkType?> = listOf<TaskWorkType?>(null) + TaskWorkType.entries
+    FlowRow(
+        Modifier.fillMaxWidth().selectableGroup(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        choices.forEach { type ->
+            val isSelected = type == selected
+            Box(
+                Modifier
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(if (isSelected) AuraColors.startBlue else hex(0x767680, 0.12f))
+                    .selectable(selected = isSelected, enabled = enabled, role = Role.RadioButton) { onSelect(type) }
+                    .testTag("task-worktype-${type?.raw ?: "any"}")
+                    .padding(horizontal = 14.dp, vertical = 8.dp),
+            ) {
+                Text(
+                    type?.let { TaskPlanning.workTypeNames[it] } ?: "Any",
+                    style = AuraType.system(15, FontWeight.Medium),
+                    color = if (isSelected) Color.White else Color.Black,
+                    maxLines = 1,
+                )
+            }
+        }
     }
 }
 
@@ -459,13 +570,15 @@ private fun DueRows(draft: TaskDraft, enabled: Boolean, onChange: (TaskDraft) ->
     }
 }
 
-/** None, then the presets (and the task's own value), side by side; scrolls sideways on a narrow phone. */
+/** None, then the presets (and the task's own value); wraps onto a second line on a narrow phone. */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun EstimateChips(selected: Int?, enabled: Boolean, onSelect: (Int?) -> Unit) {
     val choices: List<Int?> = listOf<Int?>(null) + TaskText.estimateChoices(selected)
-    Row(
-        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).selectableGroup(),
+    FlowRow(
+        Modifier.fillMaxWidth().selectableGroup(),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         choices.forEach { minutes ->
             val isSelected = minutes == selected

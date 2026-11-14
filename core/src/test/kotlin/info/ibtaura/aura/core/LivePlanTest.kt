@@ -185,6 +185,25 @@ class LivePlanTest {
         assertEquals(listOf("a", "b"), (call.body["taskIds"] as JsonArray).map { (it as JsonPrimitive).content })
     }
 
+    // MARK: Tasks (auto-allocation)
+
+    /** Find a time sends the ticked tasks with the preview and again, unchanged, with Add to calendar. */
+    @Test
+    fun previewAndConfirmSendTheSameSelection() = runBlocking<Unit> {
+        val rig = NetRig()
+        rig.server.on("/v1/me", netJson(200, meWithoutSchedule))
+        rig.server.on(allocatePath, netJson(200, fullPlan))
+        val selection = listOf("task-report", "task-slides")
+        rig.api.allocate("2026-11-09", dryRun = true, skipCheck = true, taskIds = selection)
+        rig.api.allocate("2026-11-09", dryRun = false, skipCheck = true, taskIds = selection)
+        val calls = rig.server.calls(allocatePath)
+        assertEquals(listOf(true, false), calls.map { it.bool("dryRun") })
+        for (call in calls) {
+            assertEquals(selection, (call.body["taskIds"] as JsonArray).map { (it as JsonPrimitive).content })
+            assertEquals(true, call.bool("skipCheck"))
+        }
+    }
+
     /** Planning in the Planner's default hours when the person set others would put blocks in the wrong place. */
     @Test
     fun aFailedProfileReadStopsTheAllocate() = runBlocking<Unit> {

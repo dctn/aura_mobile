@@ -158,6 +158,14 @@ class LiveQuickCheckTest {
     }
 
     @Test
+    fun theScoredLengthDecodes() = runBlocking<Unit> {
+        val rig = NetRig()
+        rig.server.on(checksPath, netJson(201, "{\"check\":{\"id\":\"check-4\",\"valid\":true,\"testSeconds\":45},\"created\":true}"))
+        val result = rig.api.submitCheck(makeRun())
+        assertEquals(45, result.testSeconds)
+    }
+
+    @Test
     fun missingMeasuresReadAsZero() = runBlocking<Unit> {
         val rig = NetRig()
         rig.server.on(checksPath, netJson(201, "{\"check\":{\"id\":\"check-3\",\"valid\":true},\"created\":true}"))

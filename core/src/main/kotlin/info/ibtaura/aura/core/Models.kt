@@ -98,12 +98,31 @@ data class CalendarEvent(
     val seriesId: String? = null,
     /** The version to send as If-Match when changing it. Null when the answer had none. */
     val version: Int? = null,
+    /** The task this block does (a Find a time block, or one linked by hand), else null. */
+    val taskId: String? = null,
+    /** deepFocus, detailHeavy, ideas, routine or learning; null when none is set. Kept as sent. */
+    val workType: String? = null,
+    /** "auto" when Calendar picked the kind, "user" when the person did. Null from an older Calendar. */
+    val kindSource: String? = null,
+    val allDay: Boolean = false,
+    val highStakes: Boolean = false,
+    /** True when it has a repeat rule of its own (the series itself, not one day of it). */
+    val repeats: Boolean = false,
 ) {
-    /** Apple Calendar owns it: only its kind may change here, and it can't be deleted here (409 apple_event_read_only). */
+    /** Apple Calendar owns it: only its kind, work type, task and high stakes may change here (409 apple_event_read_only). */
     val isFromApple: Boolean get() = source == "apple"
 
-    /** One day of a repeating event: a change or delete applies to that day only. */
-    val isOccurrence: Boolean get() = seriesId != null
+    /** One day of a repeating event (`<seriesId>@yyyy-MM-dd`): a change or delete applies to that day only. */
+    val isOccurrence: Boolean get() = seriesId != null && id != seriesId
+
+    /** Placed by Find a time (the Planner): ids `plan-<date>-<taskId>`. */
+    val isPlannerBlock: Boolean get() = source == "planner"
+
+    /** The repeating series itself: Calendar won't move it (400 move_an_occurrence), only one day of it. */
+    val isSeries: Boolean get() = !id.contains('@') && (id == seriesId || repeats)
+
+    /** The quick moves (POST .../move) work on it: not an Apple event, not a whole series. */
+    val canMove: Boolean get() = !isFromApple && !isSeries
 }
 
 /** The event editor's fields. The same limits as the Calendar contract (calendar.ts). */
@@ -111,16 +130,20 @@ data class EventDraft(
     val title: String,
     val start: Instant,
     val end: Instant,
-    /** "focus", "meeting" or "recovery". */
+    /** "focus", "meeting" or "recovery"; an event's other kind is kept as it was until the person picks one. */
     val kind: String = "focus",
     val location: String = "",
     val notes: String = "",
+    /** One of `EventWorkTypes.all`, or null for none. */
+    val workType: String? = null,
+    val highStakes: Boolean = false,
 ) {
-    /** The fields of an event as it is now. */
+    /** The fields of an event as it is now. A kind this app doesn't know stays as sent, so saving doesn't rewrite it. */
     constructor(event: CalendarEvent) : this(
         title = event.title, start = event.start, end = event.end,
-        kind = if (kinds.contains(event.kind)) event.kind else "focus",
+        kind = event.kind,
         location = event.location ?: "", notes = event.notes ?: "",
+        workType = event.workType, highStakes = event.highStakes,
     )
 
     private val trimmedTitle: String get() = title.trim()
@@ -144,25 +167,26 @@ data class EventDraft(
         put("kind", kind)
         text(location)?.let { put("location", it) }
         text(notes)?.let { put("notes", it) }
+        workType?.let { put("workType", it) }
+        if (highStakes) put("highStakes", true)
     }
 
     /**
      * The body of PATCH /v1/calendar/events/{id}: only what differs from `event`, so an unchanged kind stays the
-     * automatic one and an Apple event sends only its kind. Cleared location and notes are sent as null. Empty when
-     * nothing changed.
+     * automatic one and an Apple event sends only its kind, work type and high stakes. Cleared location, notes and
+     * work type are sent as null. Empty when nothing changed.
      */
     internal fun changes(from: CalendarEvent): JsonObject {
         val event = from
         val before = EventDraft(event)
         return buildJsonObject {
-            if (event.isFromApple) {
-                if (kind != event.kind) put("kind", kind)
-                return@buildJsonObject
-            }
+            if (kind != event.kind) put("kind", kind)
+            if (workType != event.workType) put("workType", workType?.let { JsonPrimitive(it) } ?: JsonNull)
+            if (highStakes != event.highStakes) put("highStakes", highStakes)
+            if (event.isFromApple) return@buildJsonObject
             if (trimmedTitle != event.title) put("title", trimmedTitle)
             if (start != event.start) put("start", wireDateString(start))
             if (end != event.end) put("end", wireDateString(end))
-            if (kind != event.kind) put("kind", kind)
             if (text(location) != text(before.location)) {
                 put("location", text(location)?.let { JsonPrimitive(it) } ?: JsonNull)
             }
@@ -225,6 +249,16 @@ data class TaskItem(
     val scheduledAt: Instant? = null,
     /** Capacity points it's expected to cost; null until Capacity scores it. */
     val costPoints: Double? = null,
+    // MARK: Tasks (auto-allocation)
+    /** focus or meeting. Find a time only places focus tasks. */
+    val workMode: TaskWorkMode = TaskWorkMode.focus,
+    val workType: TaskWorkType? = null,
+    /** 0-100, the person's (`demandSource` manual) or worked out by Aura (auto); null when unknown. */
+    val demand: Int? = null,
+    /** "manual" or "auto", or null. */
+    val demandSource: String? = null,
+    /** Its calendar block's id (mirrored by Task, may lag a moment behind Find a time). */
+    val blockId: String? = null,
 )
 
 // MARK: Find a time: POST /v1/planner/allocate, GET /v1/planner/plan/{date}
@@ -440,6 +474,8 @@ data class QuickCheckResult(
     val qualifiesForNormal: Boolean,
     /** Today's scores after this check. */
     val scores: ScoresToday,
+    /** The length the server scored it at: 45 or 180 s; null when it fits neither (or an older server). */
+    val testSeconds: Int? = null,
 )
 
 // MARK: Day zones
@@ -798,7 +834,11 @@ sealed class AuraError(message: String) : Exception(message) {
     /** Health data consent is missing: the app shows the consent step, then retries. */
     data object ConsentRequired : AuraError("Aura needs your consent to read health data.")
 
-    data class Server(val code: String, override val message: String, val status: Int) : AuraError(message)
+    data class Server(val code: String, override val message: String, val status: Int) : AuraError(message) {
+        /** The error's `details` object when the server sent one (e.g. work_limit_reached's minutes). Not compared. */
+        var details: JsonObject? = null
+            internal set
+    }
 
     /** The backend's error code for `Server`, else null. */
     val serverCode: String? get() = (this as? Server)?.code
@@ -834,3 +874,59 @@ private val wireDateFormat: DateTimeFormatter = DateTimeFormatter.ofPattern("yyy
 /** Swift `WireDate.string`: whole seconds with the phone's own offset. */
 private fun wireDateString(instant: Instant): String =
     OffsetDateTime.ofInstant(instant.truncatedTo(ChronoUnit.SECONDS), ZoneId.systemDefault()).format(wireDateFormat)
+
+// MARK: Events (editor round 2)
+
+/** The work types an event can carry (Calendar's `workType`), in the editor's order. */
+object EventWorkTypes {
+    val all: List<String> = listOf("deepFocus", "detailHeavy", "ideas", "routine", "learning")
+}
+
+/** Where `POST /v1/calendar/events/{id}/move` can send an event without a time of its own. */
+object EventMoveTargets {
+    /** The next free slot in the work window. 409 no_free_slot when there isn't one. */
+    const val NEXT_FREE = "nextFree"
+
+    /** Tomorrow at the same time of day. */
+    const val TOMORROW = "tomorrow"
+
+    /** The next work day at the same time of day. */
+    const val NEXT_WORKDAY = "nextWorkday"
+}
+
+/** 409 work_limit_reached's details: the day's limit, what's planned and the block that didn't fit, in minutes. */
+data class WorkLimitDetails(
+    val date: String?,
+    val maxWorkMinutes: Int,
+    val plannedWorkMinutes: Int,
+    val blockMinutes: Int,
+) {
+    /** What the day would hold with the block. */
+    val wouldBeMinutes: Int get() = plannedWorkMinutes + blockMinutes
+
+    companion object {
+        /** The details of a work_limit_reached error, or null for any other error or one without readable minutes. */
+        fun of(error: Throwable): WorkLimitDetails? {
+            val server = error as? AuraError.Server ?: return null
+            if (server.code != "work_limit_reached") return null
+            val details = server.details ?: return null
+            fun int(key: String): Int? = (details[key] as? JsonPrimitive)?.takeIf { !it.isString }?.content
+                ?.toDoubleOrNull()?.toInt()
+            val max = int("maxWorkMinutes") ?: return null
+            val planned = int("plannedWorkMinutes") ?: return null
+            val date = (details["date"] as? JsonPrimitive)?.takeIf { it.isString }?.content
+            return WorkLimitDetails(date, max, planned, int("blockMinutes") ?: 0)
+        }
+    }
+}
+
+/** The body of POST /v1/calendar/events/{id}/move: a target (`EventMoveTargets`) or a start (and end), never both. */
+internal fun eventMoveBody(to: String?, start: Instant?, end: Instant?): JsonObject {
+    require((to == null) != (start == null)) { "Send either a target or a start." }
+    require(end == null || start != null) { "An end needs a start." }
+    return buildJsonObject {
+        if (to != null) put("to", to)
+        start?.let { put("start", wireDateString(it)) }
+        end?.let { put("end", wireDateString(it)) }
+    }
+}

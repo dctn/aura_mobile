@@ -260,6 +260,159 @@ class LiveTasksTest {
         assertEquals(TaskHorizon.today, tasks[1].horizon)
         assertEquals(TaskStatus.pending, tasks[1].status)
     }
+
+    // MARK: Tasks (auto-allocation)
+
+    @Test
+    fun aNewTaskIsAutoScheduledByDefault() = runBlocking<Unit> {
+        val rig = NetRig()
+        rig.server.on("/v1/tasks", netJson(201, taskJson("x", 1, ",\"autoAllocate\":true,\"workMode\":\"focus\"")))
+        val made = rig.api.createTask(TaskDraft(title = "Draft the update"))
+        val call = rig.server.calls("/v1/tasks").single()
+        assertEquals(true, call.bool("autoAllocate"))
+        assertEquals("focus", call.string("workMode"))
+        assertFalse(call.body.containsKey("demand"), "No manual demand: Aura works it out")
+        assertFalse(call.body.containsKey("workType"))
+        assertTrue(made.autoAllocate)
+        assertEquals(TaskWorkMode.focus, made.workMode)
+    }
+
+    @Test
+    fun createSendsTheChosenPlanningFields() = runBlocking<Unit> {
+        val rig = NetRig()
+        rig.server.on("/v1/tasks", netJson(201, taskJson("x", 1)))
+        rig.api.createTask(TaskDraft(title = "Deep work", workType = TaskWorkType.deepFocus, demand = 80))
+        val call = rig.server.calls("/v1/tasks").single()
+        assertEquals(true, call.bool("autoAllocate"))
+        assertEquals("deepFocus", call.string("workType"))
+        assertEquals(80, call.int("demand"))
+    }
+
+    @Test
+    fun aMeetingIsNeverAutoScheduled() = runBlocking<Unit> {
+        val rig = NetRig()
+        rig.server.on("/v1/tasks", netJson(201, taskJson("x", 1)))
+        rig.api.createTask(TaskDraft(title = "Standup", workMode = TaskWorkMode.meeting, autoAllocate = true))
+        val call = rig.server.calls("/v1/tasks").single()
+        assertEquals("meeting", call.string("workMode"))
+        assertEquals(false, call.bool("autoAllocate"))
+    }
+
+    @Test
+    fun patchSendsAutoAllocateAndDemand() = runBlocking<Unit> {
+        val rig = NetRig()
+        rig.server.on(TASK_PATH, netJson(200, taskJson(version = 5, extra = ",\"autoAllocate\":true,\"demand\":25," +
+            "\"demandSource\":\"manual\"")))
+        // An automatic demand isn't the person's: the draft shows Auto and leaves it alone unless they pick one.
+        val task = TaskItem("t1", "Plan", version = 4, demand = 40, demandSource = "auto")
+        assertNull(TaskDraft(task).demand)
+        val changes = TaskDraft(task).copy(autoAllocate = true, demand = 25).changes(task)
+        val saved = rig.api.updateTask("t1", 4, changes)
+        val call = rig.server.calls(TASK_PATH).single()
+        assertEquals("PATCH", call.method)
+        assertEquals(listOf("autoAllocate", "demand"), call.body.keys.sorted())
+        assertEquals(true, call.bool("autoAllocate"))
+        assertEquals(25, call.int("demand"))
+        assertEquals(true, saved?.autoAllocate)
+        assertEquals(25, saved?.demand)
+        assertEquals("manual", saved?.demandSource)
+    }
+
+    @Test
+    fun patchHandsDemandBackAndSwitchesToMeeting() = runBlocking<Unit> {
+        val rig = NetRig()
+        rig.server.on(TASK_PATH, netJson(200, taskJson(version = 3)))
+        val task = TaskItem("t1", "Plan", version = 2, autoAllocate = true, demand = 80, demandSource = "manual",
+            workType = TaskWorkType.ideas)
+        val changes = TaskDraft(task).copy(demand = null, workMode = TaskWorkMode.meeting, workType = null).changes(task)
+        rig.api.updateTask("t1", 2, changes)
+        val call = rig.server.calls(TASK_PATH).single()
+        assertEquals(listOf("autoAllocate", "demand", "workMode", "workType"), call.body.keys.sorted())
+        assertTrue(call.isNull("demand"))
+        assertTrue(call.isNull("workType"))
+        assertEquals("meeting", call.string("workMode"))
+        assertEquals(false, call.bool("autoAllocate"))
+    }
+
+    @Test
+    fun theListReadsThePlanningFields() = runBlocking<Unit> {
+        val rig = NetRig()
+        val page = """
+            {"tasks":[{"id":"t1","title":"Report","autoAllocate":true,"workMode":"meeting","workType":"learning",
+             "demand":62.4,"demandSource":"auto","blockId":"plan-2030-03-18-t1","scheduledAt":"2030-03-18T10:30:00Z"},
+             {"id":"t2","title":"Odd","workMode":"walking","workType":"dreaming"}],"cursor":null}
+        """.trimIndent()
+        rig.server.on("/v1/tasks", netJson(200, page))
+        val tasks = rig.api.tasks()
+        assertEquals(TaskWorkMode.meeting, tasks[0].workMode)
+        assertEquals(TaskWorkType.learning, tasks[0].workType)
+        assertEquals(62, tasks[0].demand)
+        assertEquals("auto", tasks[0].demandSource)
+        assertEquals("plan-2030-03-18-t1", tasks[0].blockId)
+        assertEquals(TaskWorkMode.focus, tasks[1].workMode)
+        assertNull(tasks[1].workType)
+    }
+
+    /**
+     * Lists planner blocks over the next 14 days, follows the cursor, and deletes only this task's blocks that start
+     * now or later, including its break, which Planner writes with no taskId.
+     */
+    @Test
+    fun removePlannerBlocksDeletesOnlyFutureBlocksOfTheTask() = runBlocking<Unit> {
+        val rig = NetRig()
+        val now = NetRig.now
+        fun at(minutes: Long) = WireDate.string(now.plusSeconds(minutes * 60))
+        fun event(id: String, start: String, source: String = "planner", taskId: String? = "t1"): String =
+            "{\"id\":\"$id\",\"title\":\"x\",\"start\":\"$start\",\"end\":\"$start\",\"source\":\"$source\"" +
+                (taskId?.let { ",\"taskId\":\"$it\"" } ?: "") + "}"
+        val first = "{\"events\":[" + listOf(
+            event("plan-2030-01-01-t1", at(-60)),
+            event("plan-2030-01-02-t1-p1", at(60)),
+            event("mine", at(90), source = "app"),
+            event("plan-2030-01-02-t9", at(120), taskId = "t9"),
+        ).joinToString(",") + "],\"cursor\":\"next\"}"
+        val second = "{\"events\":[" + listOf(
+            event("plan-2030-01-03-t1-p2", at(24 * 60), taskId = null),
+            event("plan-2030-01-03-t1-rest", at(25 * 60), taskId = null),
+            event("plan-2030-01-03-t9-rest", at(25 * 60), taskId = null),
+            event("plan-2030-01-03-t1x-rest", at(25 * 60), taskId = null),
+        ).joinToString(",") + "],\"cursor\":null}"
+        rig.server.respond("/v1/calendar/events") { call ->
+            netJson(200, if (call.query["cursor"] == "next") second else first)
+        }
+        rig.server.on("/v1/calendar/events/plan-2030-01-02-t1-p1", netJson(204, ""))
+        rig.server.on("/v1/calendar/events/plan-2030-01-03-t1-rest", netJson(204, ""))
+        rig.server.on("/v1/calendar/events/plan-2030-01-03-t1-p2", netJson(404, "{\"error\":{\"code\":\"not_found\",\"message\":\"Gone.\"}}"))
+
+        val removed = rig.api.removePlannerBlocks("t1")
+
+        val lists = rig.server.calls("/v1/calendar/events")
+        assertEquals(2, lists.size)
+        val query = lists.first().query
+        assertEquals(null, query["taskId"], "Breaks carry no taskId, so the list isn't narrowed by it")
+        assertEquals("planner", query["source"])
+        assertEquals(DayKey.string(now), query["from"])
+        assertEquals(DayKey.string(now.plusSeconds(14 * 24 * 60 * 60)), query["to"])
+        assertEquals("calendar.stub.test", lists.first().host)
+        val deletes = rig.server.allCalls.filter { it.method == "DELETE" }.map { it.key }
+        assertEquals(
+            listOf(
+                "/v1/calendar/events/plan-2030-01-02-t1-p1",
+                "/v1/calendar/events/plan-2030-01-03-t1-p2",
+                "/v1/calendar/events/plan-2030-01-03-t1-rest",
+            ),
+            deletes,
+        )
+        assertEquals(3, removed)
+    }
+
+    @Test
+    fun removePlannerBlocksWithNothingThereDeletesNothing() = runBlocking<Unit> {
+        val rig = NetRig()
+        rig.server.on("/v1/calendar/events", netJson(200, "{\"events\":[],\"cursor\":null}"))
+        assertEquals(0, rig.api.removePlannerBlocks("t1"))
+        assertTrue(rig.server.allCalls.none { it.method == "DELETE" })
+    }
 }
 
 class TaskDraftTest {
@@ -341,13 +494,13 @@ class StubTasksTest {
     fun createEditCompleteReopenDelete() = runTest {
         val api = stubApi()
         val seeded = api.tasks()
-        assertEquals(listOf("t1", "t2", "t3"), seeded.map { it.id })
+        assertEquals(listOf("t1", "t2", "t3", "t4"), seeded.map { it.id })
 
         val made = api.createTask(TaskDraft(title = "Buy milk", priority = TaskPriority.low), id = "n1")
         assertEquals(1, made.version)
         // The same id answers with the task already there.
         assertEquals(made, api.createTask(TaskDraft(title = "Something else"), id = "n1"))
-        assertEquals(4, api.tasks().size)
+        assertEquals(5, api.tasks().size)
 
         val edited = assertNotNull(api.updateTask("n1", 1, TaskChanges(title = "Buy oat milk", flagged = true)))
         assertEquals("Buy oat milk", edited.title)

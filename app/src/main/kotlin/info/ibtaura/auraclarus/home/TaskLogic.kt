@@ -2,9 +2,15 @@ package info.ibtaura.auraclarus.home
 
 import info.ibtaura.aura.core.AuraError
 import info.ibtaura.aura.core.DayKey
+import info.ibtaura.aura.core.DayPlan
+import info.ibtaura.aura.core.PLANNER_DEFAULT_MINUTES
+import info.ibtaura.aura.core.TaskDemand
+import info.ibtaura.aura.core.TaskDraft
 import info.ibtaura.aura.core.TaskHorizon
 import info.ibtaura.aura.core.TaskItem
 import info.ibtaura.aura.core.TaskPriority
+import info.ibtaura.aura.core.TaskWorkMode
+import info.ibtaura.aura.core.TaskWorkType
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -60,8 +66,8 @@ internal object TaskText {
     data class DueLine(val text: String, val overdue: Boolean)
 
     /**
-     * Done: when. Open: its calendar block, else its due date (overdue once the time, or the whole day, has
-     * passed), else the day it's planned for. Null when it has none of them.
+     * Done: when. Open: its due date (overdue once the time, or the whole day, has passed), else the day it's
+     * planned for. Null when it has neither. Its calendar block is `scheduleLine`'s.
      */
     fun dueLine(task: TaskItem, now: Instant, zone: ZoneId = DayKey.zone, locale: Locale = Locale.getDefault()): DueLine? {
         val today = now.atZone(zone).toLocalDate()
@@ -70,7 +76,6 @@ internal object TaskText {
             val at = task.completedAt ?: return DueLine("Done", false)
             return DueLine("Done ${dayOf(at).lowercaseIfRelative()}", false)
         }
-        task.scheduledAt?.let { return DueLine("Scheduled ${dayOf(it).lowercaseIfRelative()}, ${time(it, zone, locale)}", false) }
         task.dueAt?.let { due ->
             return if (task.hasTime) {
                 DueLine("Due ${dayOf(due).lowercaseIfRelative()}, ${time(due, zone, locale)}", due < now)
@@ -138,3 +143,110 @@ internal data class TaskSections(val open: List<TaskItem>, val done: List<TaskIt
 /** `list` with `task` in place of the one with its id, or added when it isn't there. */
 internal fun List<TaskItem>.replacing(task: TaskItem): List<TaskItem> =
     if (any { it.id == task.id }) map { if (it.id == task.id) task else it } else this + task
+
+// MARK: Tasks (auto-allocation)
+
+/** Where a task stands with Find a time, for the line under its row. */
+internal data class ScheduleLine(val text: String, val kind: Kind) {
+    enum class Kind { scheduled, didntFit, waiting }
+}
+
+/** The words and choices for planning tasks, kept free of Compose so app unit tests can check them. */
+internal object TaskPlanning {
+    val workModeNames: Map<TaskWorkMode, String> = mapOf(TaskWorkMode.focus to "Focus", TaskWorkMode.meeting to "Meeting")
+
+    val demandNames: Map<TaskDemand, String> = mapOf(
+        TaskDemand.light to "Light", TaskDemand.medium to "Medium", TaskDemand.hard to "Hard", TaskDemand.auto to "Auto",
+    )
+
+    val workTypeNames: Map<TaskWorkType, String> = mapOf(
+        TaskWorkType.deepFocus to "Deep focus", TaskWorkType.detailHeavy to "Detail", TaskWorkType.ideas to "Ideas",
+        TaskWorkType.routine to "Routine", TaskWorkType.learning to "Learning",
+    )
+
+    const val autoCaption = "Aura finds a time for it when you plan your day."
+    const val defaultLengthCaption = "Aura plans $PLANNER_DEFAULT_MINUTES min if you don't set a length."
+    const val meetingCaption = "Meetings aren't placed automatically."
+    const val offCaption = "Off: Aura leaves this task where you put it. Turn it on to plan it with your day."
+    const val waiting = "Auto-schedule · waiting for Plan my day"
+
+    /** The editor's captions under the Auto-schedule switch. */
+    fun captions(draft: TaskDraft): List<String> = when {
+        draft.workMode == TaskWorkMode.meeting -> listOf(meetingCaption)
+        !draft.autoAllocate -> listOf(offCaption)
+        draft.estimateMinutes == null -> listOf(autoCaption, defaultLengthCaption)
+        else -> listOf(autoCaption)
+    }
+
+    /** The Planner's reason for leaving a task out, in plain words. A code this app doesn't know uses `detail`. */
+    fun unplacedWords(reason: String, detail: String = ""): String = when (reason) {
+        "noFreeTime" -> "No free time left that day"
+        "overCapacity" -> "Too demanding for your energy that day"
+        "workLimit" -> "Over the day's work limit"
+        "dueLater" -> "Planned for a later day"
+        "tooLong" -> "Longer than any free gap"
+        "missingEstimate" -> "Needs a length"
+        else -> detail.trim().removeSuffix(".").ifEmpty { "Didn't fit" }
+    }
+
+    /** True for a task Find a time may place: open, marked Auto-schedule, and focus work. */
+    fun isCandidate(task: TaskItem): Boolean = !task.done && task.autoAllocate && task.workMode == TaskWorkMode.focus
+
+    /** The tasks Find a time lists: Today's first, then Week's and Month's, each by title. */
+    fun candidates(tasks: List<TaskItem>): List<TaskItem> = tasks.filter { isCandidate(it) }
+        .distinctBy { it.id }
+        .sortedWith(compareBy<TaskItem> { it.horizon.ordinal }.thenBy { it.title.lowercase(Locale.ROOT) })
+
+    /**
+     * The tasks ticked when Find a time opens: those asked for (`asked`, from a task's Schedule) that are still
+     * candidates, else every candidate. An empty `asked` (Plan my day with nothing marked) means every candidate.
+     */
+    fun initialSelection(candidates: List<TaskItem>, asked: List<String>?): Set<String> {
+        val ids = candidates.map { it.id }
+        val wanted = asked?.filter { it in ids }.orEmpty()
+        return if (wanted.isNotEmpty()) wanted.toSet() else ids.toSet()
+    }
+
+    /**
+     * The `taskIds` sent with both the preview and Add to calendar: the ticked ids in the list's order, or null when
+     * every task is ticked, so the Planner places all of them (and any added on another device since).
+     */
+    fun requestIds(candidates: List<TaskItem>, selected: Set<String>): List<String>? {
+        val ids = candidates.map { it.id }.filter { it in selected }
+        return if (ids.size == candidates.size) null else ids
+    }
+
+    /** The ids Plan my day opens Find a time with: every open auto-scheduled task. */
+    fun planMyDayIds(tasks: List<TaskItem>): List<String> = candidates(tasks).map { it.id }
+
+    /**
+     * Done: nothing. Else its calendar block (`scheduledAt`, which Task mirrors a moment after Find a time), else
+     * the stored plans (today's, tomorrow's): where it was placed, or why it didn't fit. Else, when it's marked
+     * Auto-schedule, that it waits for Plan my day. Null when none of these.
+     */
+    fun scheduleLine(
+        task: TaskItem,
+        plans: List<DayPlan>,
+        now: Instant,
+        zone: ZoneId = DayKey.zone,
+        locale: Locale = Locale.getDefault(),
+    ): ScheduleLine? {
+        if (task.done) return null
+        fun scheduled(at: Instant): ScheduleLine {
+            val today = now.atZone(zone).toLocalDate()
+            val day = TaskText.day(at.atZone(zone).toLocalDate(), today, locale)
+            val words = if (day == "Today" || day == "Tomorrow" || day == "Yesterday") day.lowercase(Locale.ROOT) else day
+            return ScheduleLine("Scheduled $words, ${TaskText.time(at, zone, locale)}", ScheduleLine.Kind.scheduled)
+        }
+        task.scheduledAt?.let { return scheduled(it) }
+        val ordered = plans.sortedBy { it.date }
+        ordered.flatMap { it.placed }.filter { it.taskId == task.id }.minByOrNull { it.start }?.let { return scheduled(it.start) }
+        if (isCandidate(task)) {
+            ordered.firstNotNullOfOrNull { plan -> plan.unplaced.firstOrNull { it.taskId == task.id } }?.let {
+                return ScheduleLine("Didn't fit: ${unplacedWords(it.reason, it.detail)}", ScheduleLine.Kind.didntFit)
+            }
+            return ScheduleLine(waiting, ScheduleLine.Kind.waiting)
+        }
+        return null
+    }
+}

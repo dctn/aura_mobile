@@ -86,7 +86,8 @@ class StubApi(
         val building = nap.plusSeconds(15 * 60)
         val fixed = listOf(
             CalendarEvent(id = "e1", title = "10 Min nap", start = nap, end = building, kind = "recovery"),
-            CalendarEvent(id = "e2", title = "Xcode Building", start = building, end = building.plusSeconds(3600), kind = "focus"),
+            CalendarEvent(id = "e2", title = "Xcode Building", start = building, end = building.plusSeconds(3600), kind = "focus",
+                workType = "deepFocus"),
         )
         return mutex.withLock {
             val blocks = savedPlans.values.flatMap { it.placed }.filter { it.start >= from && it.start < to }
@@ -94,7 +95,9 @@ class StubApi(
             val planned = blocks.map { block ->
                 CalendarEvent(
                     id = block.blockId ?: UUID.randomUUID().toString().uppercase(Locale.ROOT),
-                    title = block.title(taskTitle(block.taskId)), start = block.start, end = block.end, kind = block.kind,
+                    title = block.title(taskStore[block.taskId]?.title ?: taskTitle(block.taskId)), start = block.start,
+                    end = block.end, kind = block.kind, source = "planner", taskId = block.taskId,
+                    workType = block.workType, version = 1,
                 )
             }
             applyEdits(fixed + planned, editedEvents.toMap(), deletedEvents.toSet(), from, to)
@@ -242,6 +245,8 @@ class StubApi(
             id = id, title = draft.title.trim(), at = dueAt?.takeIf { draft.hasTime }, version = 1,
             priority = draft.priority, dueAt = dueAt, hasTime = draft.hasTime, notes = draft.notes.trim().ifEmpty { null },
             horizon = draft.horizon, flagged = draft.flagged, estimateMinutes = draft.estimateMinutes,
+            autoAllocate = draft.placesItself, workMode = draft.workMode, workType = draft.workType,
+            demand = draft.demand, demandSource = draft.demand?.let { "manual" },
         )
         return mutex.withLock { taskStore.getOrPut(id) { made } }
     }
@@ -292,11 +297,14 @@ class StubApi(
         mutex.withLock { editedEvents[event.id] = event }
     }
 
-    /** Applies what the draft changed; an Apple event only takes a new kind, as the Calendar service allows. */
+    /**
+     * Applies what the draft changed; an Apple event only takes a new kind, work type and high stakes, as the Calendar
+     * service allows.
+     */
     override suspend fun updateEvent(event: CalendarEvent, to: EventDraft) {
         val draft = to
         if (draft.changes(event).isEmpty()) return
-        var changed = event.copy(kind = draft.kind)
+        var changed = event.copy(kind = draft.kind, workType = draft.workType, highStakes = draft.highStakes)
         if (!event.isFromApple) {
             draft.problem?.let { throw AuraError.Server(code = "validation_failed", message = it, status = 400) }
             changed = changed.copy(
@@ -371,12 +379,51 @@ class StubApi(
                 )
             }
             val version = (savedPlans[key]?.version ?: 0) + 1
+            // A run narrowed to some tasks leaves the day's other planned blocks where they are.
+            val kept = if (taskIds == null) emptyList() else savedPlans[key]?.placed.orEmpty().filter { block ->
+                taskIds.none { id -> block.taskId == id || block.blockId == "plan-$key-$id-rest" }
+            }
             val plan = StubPlan.build(
                 key = key, day = day, schedule = held, skipCheck = skipCheck, taskIds = taskIds, version = version,
                 zone = zone, generatedAt = now, quickCheckAt = checkAt, laterDay = laterDay,
+                tasks = taskStore.values.toList(), busy = kept.map { it.start to it.end },
             )
-            if (!dryRun) savedPlans[key] = plan
+            if (!dryRun) {
+                savedPlans[key] = if (kept.isEmpty()) plan else plan.copy(placed = (kept + plan.placed).sortedBy { it.start })
+                writePlanned(plan)
+            }
             plan
+        }
+    }
+
+    // MARK: Tasks (auto-allocation)
+
+    /**
+     * What the Planner's real run does after writing its blocks: each placed task's first block becomes its
+     * `scheduledAt` and `blockId`, and a block cleared before is back. Under the lock.
+     */
+    private fun writePlanned(plan: DayPlan) {
+        plan.placed.forEach { block -> block.blockId?.let { deletedEvents.remove(it) } }
+        for ((taskId, blocks) in plan.placed.filter { it.taskId != null }.groupBy { it.taskId!! }) {
+            val task = taskStore[taskId] ?: continue
+            val first = blocks.minByOrNull { it.start } ?: continue
+            taskStore[taskId] = task.copy(scheduledAt = first.start, at = first.start, blockId = first.blockId,
+                version = (task.version ?: 1) + 1)
+        }
+    }
+
+    /** Deletes the task's planner blocks that start now or later, its break (no taskId, `-rest` id) included. */
+    override suspend fun removePlannerBlocks(taskId: String): Int {
+        val now = now()
+        return mutex.withLock {
+            val ids = savedPlans.values.flatMap { it.placed }
+                .filter { (it.taskId == taskId || it.blockId?.endsWith("-$taskId-rest") == true) && it.start >= now }
+                .mapNotNull { it.blockId }
+                .filter { it !in deletedEvents }
+                .toSet()
+            deletedEvents.addAll(ids)
+            ids.forEach { editedEvents.remove(it) }
+            ids.size
         }
     }
 
@@ -409,6 +456,7 @@ class StubApi(
             lapses = measured.lapses, falseStarts = measured.falseStarts,
             performance = measured.performance, qualifiesForNormal = valid,
             scores = scores(countedChecks),
+            testSeconds = StubCheck.testSeconds(run.durationSeconds),
         )
         savedChecks[run.id] = result
         result
@@ -672,6 +720,74 @@ class StubApi(
 
     override suspend fun waterGoalMl(): Int? = logbook.waterGoal
 
+    // MARK: Events (editor round 2)
+
+    /**
+     * As Calendar's move: an Apple event is 409 apple_event_read_only, a series id 400 move_an_occurrence. `nextFree`
+     * is the first free 15-minute step from 10 minutes after now, inside 09:00-18:00, over 21 days (409 no_free_slot);
+     * `tomorrow` and `nextWorkday` keep the time of day. The version goes up by one.
+     */
+    override suspend fun moveEvent(id: String, to: String?, start: Instant?, end: Instant?): CalendarEvent {
+        eventMoveBody(to, start, end)
+        val event = event(id) ?: throw AuraError.Server("event_not_found", "No such event.", 404)
+        if (event.isFromApple) {
+            throw AuraError.Server("apple_event_read_only", "Apple Calendar owns this event.", 409)
+        }
+        if (event.isSeries) {
+            throw AuraError.Server("move_an_occurrence", "Move one day of a repeating event.", 400)
+        }
+        val length = event.end.epochSecond - event.start.epochSecond
+        val zone = zone
+        val newStart: Instant = when {
+            start != null -> start
+            to == EventMoveTargets.TOMORROW -> event.start.atZone(zone).plusDays(1).toInstant()
+            to == EventMoveTargets.NEXT_WORKDAY -> {
+                val workDays = mutex.withLock { held?.workDays }?.takeIf { it.isNotEmpty() } ?: listOf(1, 2, 3, 4, 5)
+                var day = event.start.atZone(zone).plusDays(1)
+                while (day.dayOfWeek.value !in workDays) day = day.plusDays(1)
+                day.toInstant()
+            }
+            to == EventMoveTargets.NEXT_FREE -> nextFreeStart(event, length)
+            else -> throw AuraError.Server("validation_failed", "Unknown move target.", 400)
+        }
+        val newEnd = end ?: newStart.plusSeconds(length)
+        if (newEnd <= newStart) throw AuraError.Server("validation_failed", "It has to end after it starts.", 400)
+        val moved = event.copy(start = newStart, end = newEnd, version = (event.version ?: 1) + 1)
+        mutex.withLock { editedEvents[moved.id] = moved }
+        return moved
+    }
+
+    /** Turns off the stub task's `autoAllocate`; a task that isn't there is left alone. */
+    override suspend fun unpinTaskFromPlanner(taskId: String) {
+        try {
+            writeTask(taskId, null) { it.copy(autoAllocate = false) }
+        } catch (error: AuraError.Server) {
+            if (error.status != 404) throw error
+        }
+    }
+
+    override suspend fun task(id: String): TaskItem? = mutex.withLock { taskStore[id] }
+
+    /** The first free start for `event`'s length, as `moveEvent`'s nextFree. Other events count as busy. */
+    private suspend fun nextFreeStart(event: CalendarEvent, length: Long): Instant {
+        val zone = zone
+        val earliest = now().plusSeconds(10 * 60L)
+        val firstDay = earliest.atZone(zone).toLocalDate()
+        val busy = events(firstDay.atStartOfDay(zone).toInstant(), firstDay.plusDays(22).atStartOfDay(zone).toInstant())
+            .filter { it.id != event.id }
+        for (offset in 0L until 21L) {
+            val day = firstDay.plusDays(offset)
+            var slot = day.atTime(9, 0).atZone(zone).toInstant()
+            val close = day.atTime(18, 0).atZone(zone).toInstant()
+            while (!slot.plusSeconds(length).isAfter(close)) {
+                val slotEnd = slot.plusSeconds(length)
+                if (!slot.isBefore(earliest) && busy.none { it.start < slotEnd && it.end > slot }) return slot
+                slot = slot.plusSeconds(15 * 60L)
+            }
+        }
+        throw AuraError.Server("no_free_slot", "No free time in the next 21 days.", 409)
+    }
+
     // MARK: What tests read
 
     /** The last morning check-in sent. */
@@ -703,14 +819,15 @@ class StubApi(
         internal const val seededId = "s-deep"
 
         /**
-         * The stub's tasks, all marked for Find a time. "Book the dentist" comes back unplaced today, as due later, and
-         * placed at 15:00 on a later day.
+         * The stub's tasks. The first three are marked for Find a time: "Book the dentist" comes back unplaced today,
+         * as due later, and placed at 15:00 on a later day. "Tidy the inbox" isn't marked, so it is never placed.
          */
         internal val stubTasks = listOf(
             TaskItem(id = "t1", title = "Reply to Ana", autoAllocate = true, version = 1, priority = TaskPriority.high),
             TaskItem(id = "t2", title = "Book the dentist", autoAllocate = true, version = 1, horizon = TaskHorizon.week),
             TaskItem(id = "t3", title = "Write the review", autoAllocate = true, version = 1, flagged = true,
                 estimateMinutes = 90),
+            TaskItem(id = "t4", title = "Tidy the inbox", autoAllocate = false, version = 1, horizon = TaskHorizon.week),
         )
 
         /** Capacity's band for a score, as the stub stands in for it. */
@@ -740,7 +857,9 @@ class StubApi(
             from: Instant,
             to: Instant,
         ): List<CalendarEvent> {
-            val result = base.filter { it.id !in deleted }.map { edited[it.id] ?: it }.toMutableList()
+            // A changed event that was moved out of [from, to) drops out of it.
+            val result = base.filter { it.id !in deleted }.map { edited[it.id] ?: it }
+                .filter { it.id !in edited || (it.start < to && it.end > from) }.toMutableList()
             val known = base.map { it.id }.toSet()
             result += edited.values.filter { it.id !in known && it.id !in deleted && it.start < to && it.end > from }
             return result.sortedBy { it.start }
@@ -839,13 +958,24 @@ internal data class StubMorningCheckin(
  * Health Data's PVT-B scoring (services/health-data/src/service/attention.ts), for the stub only. The real app shows
  * what the backend sends.
  *
- * The length rules follow the app's `REACTION_TEST_SECONDS` (45 s), not the backend's current 170-200 s / 30 answers,
- * so the stub's checks keep counting; the backend is to change to match.
+ * Two lengths, as the backend since 14 Nov 2026: the 45-second run (40-59 s, 8+ answers; the app's
+ * `REACTION_TEST_SECONDS`) and the 3-minute PVT-B (170-200 s, 30+ answers). Anything else is `not_3_minutes`.
  */
 internal object StubCheck {
-    /** `REACTION_TEST_SECONDS` with a little slack for the device's timing, as the backend's 170-200 s around 180 s. */
+    /** `REACTION_TEST_SECONDS` with a little slack for the device's timing: the backend's 45-second window. */
     const val minSeconds = 40
-    const val maxSeconds = 60
+    const val maxSeconds = 59
+    /** The 3-minute PVT-B window and its answers, unchanged on the backend. */
+    const val longMinSeconds = 170
+    const val longMaxSeconds = 200
+    const val longMinResponses = 30
+
+    /** 45 or 180 for a run inside one of the two windows, else null. */
+    fun testSeconds(durationSeconds: Int): Int? = when (durationSeconds) {
+        in minSeconds..maxSeconds -> 45
+        in longMinSeconds..longMaxSeconds -> 180
+        else -> null
+    }
     const val lapseMs = 355.0
     const val falseStartMs = 100.0
     /**
@@ -866,7 +996,7 @@ internal object StubCheck {
 
     /**
      * Reactions under 100 ms count as false starts, not reactions. With `shortChecksCount` any run with a reaction is
-     * valid; otherwise it needs 40-60 s, 8+ answers and false starts at most 20% of answers plus taps.
+     * valid; otherwise it needs 40-59 s with 8+ answers (or 170-200 s with 30+) and false starts at most 20% of answers plus taps.
      */
     fun measure(run: QuickCheckRun, shortChecksCount: Boolean): Measures {
         val reactions = run.reactionTimesMs.filter { it >= falseStartMs }
@@ -891,8 +1021,8 @@ internal object StubCheck {
 
     /** The server's code, checked in the server's order; the screen turns it into words. */
     private fun invalidReason(run: QuickCheckRun, answers: Int, falseStarts: Int): String? {
-        if (run.durationSeconds < minSeconds || run.durationSeconds > maxSeconds) return "not_3_minutes"
-        if (answers < minResponses) return "too_few_responses"
+        val length = testSeconds(run.durationSeconds) ?: return "not_3_minutes"
+        if (answers < (if (length == 180) longMinResponses else minResponses)) return "too_few_responses"
         if (falseStarts.toDouble() > maxFalseStartShare * (answers + run.falseStarts)) return "too_many_false_starts"
         return null
     }
@@ -911,13 +1041,21 @@ internal object StubCheck {
 
 /**
  * Find a time's answer for the stub: fixed blocks for the stub tasks. With work hours, a band and a work day they
- * follow the recovery rhythm inside the stub zones; otherwise the plain plan. The real app shows what the Planner sends.
+ * follow the recovery rhythm inside the stub zones; otherwise the plain plan. As the Planner, only open focus tasks
+ * marked autoAllocate are placed (narrowed by taskIds); a task made here goes from 16:00 on, after any `busy` block.
+ * The real app shows what the Planner sends.
  */
 internal object StubPlan {
     private const val early =
         "09:00: early in your working day. Your sharpest hours aren't known yet, so hard work goes first."
 
     private data class Owned(val owner: String, val block: PlanBlock)
+
+    /** The seeded tasks the fixed blocks belong to; any other task is placed after them. */
+    private val fixedOwners = setOf("t1", "t2", "t3")
+
+    /** The longest free gap a stub day has (minutes): a longer task is `tooLong`. */
+    private const val longestGap = 120L
 
     /**
      * `quickCheckAt` is the day's first valid Quick check taken on the stub. Without one the basis names 08:40, or
@@ -936,8 +1074,16 @@ internal object StubPlan {
         generatedAt: Instant,
         quickCheckAt: Instant? = null,
         laterDay: Boolean = false,
+        tasks: List<TaskItem> = StubApi.stubTasks,
+        busy: List<Pair<Instant, Instant>> = emptyList(),
     ): DayPlan {
         fun time(hour: Int, minute: Int): Instant = StubZones.at(hour * 60 + minute, day, zone)
+        // As the Planner: only open focus tasks marked autoAllocate, narrowed by taskIds.
+        val wanted: Set<String>? = taskIds?.toSet()
+        val candidates = tasks.filter {
+            it.autoAllocate && !it.done && it.workMode == TaskWorkMode.focus && (wanted?.contains(it.id) ?: true)
+        }
+        val ids = candidates.map { it.id }.toSet()
         val zoneDay = StubZones.day(key, schedule, StubApi.zoneScore, zone)
         val rhythm = zoneDay.status == ZoneStatus.ready && zoneDay.heavyMinutes > 0
         // Each block with the task it belongs to, so a rest goes when its task is left out.
@@ -971,11 +1117,43 @@ internal object StubPlan {
         val dentist = Owned("t2", PlanBlock(taskId = "t2", blockId = "plan-$key-t2", start = time(15, 0), end = time(15, 30),
             demand = 20.0, workType = "routine", reason = "Due soon: 15:00 is a light hour for a short call."))
         val all = if (laterDay) blocks + dentist else blocks
-        val wanted: Set<String>? = taskIds?.toSet()
-        val placed = all.filter { wanted?.contains(it.owner) ?: true }.map { it.block }
+        val fixed = all.filter { it.owner in ids }.map { it.block }
         val tomorrow = DayKey.string(day.plusDays(1))
         val dueLater = if (laterDay) emptyList() else listOf(UnplacedTask("t2", "dueLater", "Planned for $tomorrow."))
-        val unplaced = dueLater.filter { wanted?.contains(it.taskId) ?: true }
+        val unplacedFixed = dueLater.filter { it.taskId in ids }
+        // Any other task (one made here) goes from 16:00 on, one after another with 15 min between, until the day ends.
+        val dayEnd = StubZones.at(schedule?.let { WorkSchedule.minutes(it.workdayEnd) } ?: (18 * 60), day, zone)
+        val taken = (fixed.map { it.start to it.end } + busy).toMutableList()
+        var cursor = time(16, 0)
+        val extraPlaced = mutableListOf<PlanBlock>()
+        val extraUnplaced = mutableListOf<UnplacedTask>()
+        for (task in candidates.filter { it.id !in fixedOwners }) {
+            val minutes = (task.estimateMinutes ?: PLANNER_DEFAULT_MINUTES).toLong()
+            if (minutes > longestGap) {
+                extraUnplaced += UnplacedTask(task.id, "tooLong", "Longer than any free gap in your day.")
+                continue
+            }
+            var start = cursor
+            while (true) {
+                val end = start.plusSeconds(minutes * 60)
+                val clash = taken.filter { it.first < end && it.second > start }.maxByOrNull { it.second }
+                if (clash == null) break
+                start = clash.second.plusSeconds(15 * 60)
+            }
+            val end = start.plusSeconds(minutes * 60)
+            if (end > dayEnd) {
+                extraUnplaced += UnplacedTask(task.id, "noFreeTime", "No free time left that day.")
+                continue
+            }
+            val label = String.format(Locale.ROOT, "%02d:%02d", start.atZone(zone).hour, start.atZone(zone).minute)
+            extraPlaced += PlanBlock(taskId = task.id, blockId = "plan-$key-${task.id}", start = start, end = end,
+                demand = (task.demand ?: 50).toDouble(), workType = task.workType?.raw ?: "routine",
+                reason = "$label: free time after the rest of your plan.")
+            taken += start to end
+            cursor = end.plusSeconds(15 * 60)
+        }
+        val placed = (fixed + extraPlaced).sortedBy { it.start }
+        val unplaced = unplacedFixed + extraUnplaced
         // A later day is planned without the Quick check, so it records no check time.
         val checkAt: Instant? = if (laterDay) null else quickCheckAt ?: if (skipCheck) null else time(8, 40)
         val basis = PlanBasis(

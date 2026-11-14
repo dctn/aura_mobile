@@ -47,6 +47,8 @@ import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import info.ibtaura.aura.core.DayKey
+import info.ibtaura.aura.core.DayPlan
 import info.ibtaura.aura.core.TaskHorizon
 import info.ibtaura.aura.core.TaskItem
 import info.ibtaura.aura.core.TaskPriority
@@ -58,11 +60,15 @@ import info.ibtaura.auraclarus.design.AuraPage
 import info.ibtaura.auraclarus.design.AuraType
 import info.ibtaura.auraclarus.design.CardDivider
 import info.ibtaura.auraclarus.design.GlassCircleButton
+import info.ibtaura.auraclarus.design.PillButton
+import info.ibtaura.auraclarus.design.PillStyle
 import info.ibtaura.auraclarus.design.auraIcon
 import info.ibtaura.auraclarus.shell.AppState
 import info.ibtaura.auraclarus.shell.AuraNav
+import info.ibtaura.auraclarus.shell.Route
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
+import java.time.Duration
 import java.time.Instant
 
 /** Which task the editor sheet has open: a new one, or the one tapped. */
@@ -75,6 +81,10 @@ private sealed class EditorTarget {
  * Home > Work > Task: the Today, Week and Month lists (Task's `horizon`). Tick a task off or back on (shown at once,
  * put back with a message if the save fails), tap one to edit or delete it, "+" to add one, pull down to reload.
  * Completed tasks wait under Done.
+ *
+ * Auto-allocation: each open task shows where Find a time put it (its block, else today's or tomorrow's stored plan),
+ * why it didn't fit, or that it waits for Plan my day. "Plan my day" opens Find a time with every open auto-scheduled
+ * task ticked; nothing is planned until the person asks. Completing a task clears its future planner blocks.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -90,6 +100,8 @@ fun TasksScreen(app: AppState, nav: AuraNav) {
     var message by remember { mutableStateOf<String?>(null) }
     // Tasks with a tick on its way, so a second tap waits for the first.
     var busy by remember { mutableStateOf(emptySet<String>()) }
+    // Today's and tomorrow's stored plans, for the schedule line under each row.
+    var plans by remember { mutableStateOf(emptyList<DayPlan>()) }
     val scope = rememberCoroutineScope()
 
     LaunchedEffect(app.dataVersion, retry) {
@@ -105,6 +117,8 @@ fun TasksScreen(app: AppState, nav: AuraNav) {
         } finally {
             refreshing = false
         }
+        // The plans only add words under the rows, so a failure here is noted and left out.
+        plans = storedPlans(app)
     }
 
     fun toggle(task: TaskItem) {
@@ -125,6 +139,7 @@ fun TasksScreen(app: AppState, nav: AuraNav) {
                     // A repeating task's next copy joins the list.
                     done.next?.let { list = list?.replacing(it) }
                     tasks = list
+                    clearPlannerBlocks(app, task.id)
                 }
             } catch (e: CancellationException) {
                 throw e
@@ -160,6 +175,16 @@ fun TasksScreen(app: AppState, nav: AuraNav) {
         ) {
             val loaded = tasks
             val counts = loaded?.let { TaskSections.openCounts(it) }.orEmpty()
+            if (loaded != null) {
+                val ids = TaskPlanning.planMyDayIds(loaded)
+                PillButton(
+                    "Plan my day",
+                    { nav.push(Route.FindATime(DayKey.string(Instant.now()), ids)) },
+                    Modifier.testTag("tasks-plan-day"),
+                    style = PillStyle.Secondary,
+                    fills = true,
+                )
+            }
             TaskSegments(
                 options = TaskHorizon.entries,
                 selected = horizon,
@@ -192,7 +217,8 @@ fun TasksScreen(app: AppState, nav: AuraNav) {
                             sections.open.forEachIndexed { i, task ->
                                 if (i > 0) CardDivider(Modifier.padding(start = 44.dp))
                                 TaskRow(task, now, busy = task.id in busy, onCheck = { toggle(task) },
-                                    onOpen = { editing = EditorTarget.Existing(task) })
+                                    onOpen = { editing = EditorTarget.Existing(task) },
+                                    schedule = TaskPlanning.scheduleLine(task, plans, now))
                             }
                         }
                     }
@@ -231,7 +257,39 @@ fun TasksScreen(app: AppState, nav: AuraNav) {
                 }
                 message = null
             },
+            onSchedule = { scheduled ->
+                nav.push(Route.FindATime(DayKey.string(Instant.now()), listOf(scheduled.id)))
+            },
         )
+    }
+}
+
+/** Today's and tomorrow's stored plans; a day without one, or that fails to load, is left out. */
+private suspend fun storedPlans(app: AppState): List<DayPlan> {
+    val now = Instant.now()
+    return listOf(now, now.plus(Duration.ofDays(1))).mapNotNull { at ->
+        try {
+            app.api.plan(DayKey.string(at))
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            app.note(e)
+            null
+        }
+    }
+}
+
+/**
+ * After a task is completed or deleted: removes its future planner blocks (Planner leaves them on the calendar) and
+ * makes the calendar load again. A failure is noted; the task itself is already saved.
+ */
+internal suspend fun clearPlannerBlocks(app: AppState, taskId: String) {
+    try {
+        if (app.api.removePlannerBlocks(taskId) > 0) app.dataVersion += 1
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Throwable) {
+        app.note(e)
     }
 }
 
@@ -285,7 +343,14 @@ private fun DoneHeader(count: Int, open: Boolean, onToggle: () -> Unit) {
  * and priority. The tick and the rest are separate targets.
  */
 @Composable
-private fun TaskRow(task: TaskItem, now: Instant, busy: Boolean, onCheck: () -> Unit, onOpen: () -> Unit) {
+private fun TaskRow(
+    task: TaskItem,
+    now: Instant,
+    busy: Boolean,
+    onCheck: () -> Unit,
+    onOpen: () -> Unit,
+    schedule: ScheduleLine? = null,
+) {
     val due = TaskText.dueLine(task, now)
     val details = listOfNotNull(due?.text, task.estimateMinutes?.let { TaskText.minutes(it) })
     Row(
@@ -323,6 +388,15 @@ private fun TaskRow(task: TaskItem, now: Instant, busy: Boolean, onCheck: () -> 
                             Text(TaskText.minutes(it), style = AuraType.caption, color = AuraColors.gray, maxLines = 1)
                         }
                     }
+                }
+                schedule?.let {
+                    val color = when (it.kind) {
+                        ScheduleLine.Kind.scheduled -> AuraColors.blue
+                        ScheduleLine.Kind.didntFit -> AuraColors.orange
+                        ScheduleLine.Kind.waiting -> AuraColors.gray
+                    }
+                    Text(it.text, style = AuraType.caption, color = color, maxLines = 2, overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.testTag("task-schedule-${task.id}"))
                 }
             }
             if (task.flagged) {

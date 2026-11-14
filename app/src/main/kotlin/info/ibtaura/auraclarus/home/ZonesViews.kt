@@ -2,6 +2,7 @@ package info.ibtaura.auraclarus.home
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -24,6 +25,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -46,6 +48,7 @@ import info.ibtaura.auraclarus.design.PillButton
 import info.ibtaura.auraclarus.design.ZoneText
 import info.ibtaura.auraclarus.design.hex
 import java.time.Instant
+import java.time.LocalDate
 import java.time.ZoneId
 import kotlin.math.ceil
 import kotlin.math.floor
@@ -166,11 +169,22 @@ private val lineColor = hex(0xE3E3E3)
 /** An event placed in its lane. Events that overlap sit side by side. */
 private data class GridBlock(val event: CalendarEvent, val start: Double, val end: Double, var lane: Int, var lanes: Int)
 
-/** Today's hours: the zone shades behind, the events on top and a red line at the current time. */
+/**
+ * One day's hours (today unless `day` says otherwise): the zone shades behind, the events on top and, on today, a red
+ * line at the current time. Each event block is a button that calls `onEventClick`, tagged "zone-block-<id>" and read
+ * as "<title>, <start> to <end>".
+ */
 @Composable
-internal fun ZoneDayGrid(zones: List<Zone>, events: List<CalendarEvent>, schedule: WorkSchedule?, now: Instant) {
+internal fun ZoneDayGrid(
+    zones: List<Zone>,
+    events: List<CalendarEvent>,
+    schedule: WorkSchedule?,
+    now: Instant,
+    day: LocalDate = now.atZone(ZoneId.systemDefault()).toLocalDate(),
+    onEventClick: ((CalendarEvent) -> Unit)? = null,
+) {
     val zoneId = ZoneId.systemDefault()
-    val dayStart = now.atZone(zoneId).toLocalDate().atStartOfDay(zoneId).toInstant()
+    val dayStart = day.atStartOfDay(zoneId).toInstant()
 
     // Minutes after today's midnight, kept inside the day.
     fun minutes(date: Instant): Double = ((date.toEpochMilli() - dayStart.toEpochMilli()) / 60_000.0).coerceIn(0.0, 24.0 * 60)
@@ -231,10 +245,10 @@ internal fun ZoneDayGrid(zones: List<Zone>, events: List<CalendarEvent>, schedul
         group.forEach { blocks[it].lanes = laneEnds.size }
     }
 
+    // The grid reads its zones; each event block is read (and tapped) on its own after it.
     val spoken = buildList {
-        add("Today's hours")
+        add(if (day == now.atZone(zoneId).toLocalDate()) "Today's hours" else "The day's hours")
         zones.forEach { add("${ZoneStyle.of(it.kind).name}, ${ZoneText.clock(it.start)} to ${ZoneText.clock(it.end)}") }
-        events.sortedBy { it.start }.forEach { add("${it.title}, ${ZoneText.clock(it.start)} to ${ZoneText.clock(it.end)}") }
     }.joinToString(". ")
 
     val height = hourHeight * (to - from).toFloat() + gridPad * 2
@@ -242,7 +256,7 @@ internal fun ZoneDayGrid(zones: List<Zone>, events: List<CalendarEvent>, schedul
         Modifier
             .fillMaxWidth()
             .height(height)
-            .clearAndSetSemantics { contentDescription = spoken }
+            .semantics { contentDescription = spoken }
             .testTag("calendar-day-grid"),
     ) {
         val width = maxWidth
@@ -258,7 +272,8 @@ internal fun ZoneDayGrid(zones: List<Zone>, events: List<CalendarEvent>, schedul
                     .offset(x = gutter, y = top)
                     .width(area)
                     .height(max(0.dp, bottom - top))
-                    .background(style.color),
+                    .background(style.color)
+                    .clearAndSetSemantics {},
             ) {
                 if (zone.end.epochSecond - zone.start.epochSecond >= LABEL_SECONDS) {
                     Text(
@@ -281,7 +296,7 @@ internal fun ZoneDayGrid(zones: List<Zone>, events: List<CalendarEvent>, schedul
                     style = AuraType.system(11).copy(fontFeatureSettings = "tnum"),
                     color = AuraColors.gray,
                     maxLines = 1,
-                    modifier = Modifier.offset(x = 0.dp, y = top - 8.dp).width(gutter - 6.dp),
+                    modifier = Modifier.offset(x = 0.dp, y = top - 8.dp).width(gutter - 6.dp).clearAndSetSemantics {},
                 )
             }
             Box(Modifier.offset(x = gutter, y = top).width(area).height(0.5.dp).background(lineColor))
@@ -300,12 +315,13 @@ internal fun ZoneDayGrid(zones: List<Zone>, events: List<CalendarEvent>, schedul
                     .offset(x = gutter + 4.dp + laneWidth * block.lane.toFloat(), y = top)
                     .width(max(0.dp, laneWidth - 3.dp))
                     .height(blockHeight),
+                onClick = onEventClick?.let { open -> { open(block.event) } },
             )
         }
 
-        // Now.
+        // Now, on today only.
         val nowMinute = (now.toEpochMilli() - dayStart.toEpochMilli()) / 60_000.0
-        if (nowMinute >= from * 60 && nowMinute <= to * 60) {
+        if (nowMinute >= from * 60 && nowMinute <= to * 60 && nowMinute < 24 * 60) {
             val top = y(nowMinute)
             Box(Modifier.offset(x = gutter, y = top - 0.75.dp).width(area).height(1.5.dp).background(AuraColors.red))
             Box(Modifier.offset(x = gutter - 4.dp, y = top - 4.dp).size(8.dp).background(AuraColors.red, CircleShape))
@@ -313,16 +329,29 @@ internal fun ZoneDayGrid(zones: List<Zone>, events: List<CalendarEvent>, schedul
     }
 }
 
-/** An event on the hour grid: its colour bar, then the title and time, or the title alone when it's short. */
+/**
+ * An event on the hour grid: its colour bar, then the title and time, or the title alone when it's short. With
+ * `onClick` it is a button that opens the event.
+ */
 @Composable
-private fun ZoneEventBlock(event: CalendarEvent, height: Dp, modifier: Modifier) {
+private fun ZoneEventBlock(event: CalendarEvent, height: Dp, modifier: Modifier, onClick: (() -> Unit)? = null) {
     val color = homeEventColor(event.kind)
+    val spoken = homeEventSpoken(event)
     Row(
         modifier
             .clip(RoundedCornerShape(8.dp))
             // A white base under the tint, so a shade's label behind the block doesn't show through the text.
             .background(AuraColors.card)
-            .background(color.copy(alpha = 0.2f)),
+            .background(color.copy(alpha = 0.2f))
+            .testTag("zone-block-${event.id}")
+            .then(
+                if (onClick != null) {
+                    Modifier.clickable(role = Role.Button, onClickLabel = "Opens the event to change it", onClick = onClick)
+                } else {
+                    Modifier
+                },
+            )
+            .clearAndSetSemantics { contentDescription = spoken },
     ) {
         Box(Modifier.width(4.dp).fillMaxHeight().background(color))
         Column(

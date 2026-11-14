@@ -30,9 +30,13 @@ sealed interface Route {
     /** Blocks to review (inline on iOS Home; a page here when a screen wants one). */
     @Serializable data object ReviewInbox : Route
     /** New event when `eventId` is null; else the event `app.event(eventId)` (remember it with `app.rememberEvents`). */
-    @Serializable data class EventEditor(val eventId: String? = null) : Route
-    /** Find a time for `date` (a DayKey). On confirm: `app.dataVersion += 1`, then `nav.pop()`. */
-    @Serializable data class FindATime(val date: String) : Route
+    @Serializable data class EventEditor(val eventId: String? = null, val day: String? = null) : Route
+    /**
+     * Find a time for `date` (a DayKey). `taskIds`: the tasks to tick first; null (from Calendar) ticks every
+     * auto-scheduled task, and non-null means it came from Tasks (Plan my day, or one task's Schedule).
+     * On confirm: `app.dataVersion += 1`, then `nav.pop()`.
+     */
+    @Serializable data class FindATime(val date: String, val taskIds: List<String>? = null) : Route
 
     // Settings
     @Serializable data object Settings : Route

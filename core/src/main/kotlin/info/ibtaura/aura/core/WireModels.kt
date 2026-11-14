@@ -160,13 +160,22 @@ internal data class WireEvent(
     val source: String? = null,
     val seriesId: String? = null,
     val version: Int? = null,
+    val taskId: String? = null,
+    val workType: String? = null,
+    val kindSource: String? = null,
+    val allDay: Boolean? = null,
+    val highStakes: Boolean? = null,
+    /** The repeat rule; only whether there is one is read. */
+    val recurrence: JsonElement? = null,
 ) {
     val model: CalendarEvent?
         get() {
             val startDate = WireDate.parse(start) ?: return null
             val endDate = WireDate.parse(end) ?: return null
             return CalendarEvent(id = id, title = title ?: "", start = startDate, end = endDate, kind = kind ?: "focus",
-                notes = notes, location = location, source = source ?: "app", seriesId = seriesId, version = version)
+                notes = notes, location = location, source = source ?: "app", seriesId = seriesId, version = version,
+                taskId = taskId, workType = workType, kindSource = kindSource, allDay = allDay == true,
+                highStakes = highStakes == true, repeats = (recurrence as? JsonPrimitive)?.takeIf { it.isString }?.content.let { it != null && it != "none" })
         }
 }
 
@@ -203,6 +212,12 @@ internal data class WireTask(
     val estimateMinutes: Int? = null,
     val plannedFor: String? = null,
     val costPoints: Double? = null,
+    // MARK: Tasks (auto-allocation)
+    val workMode: String? = null,
+    val workType: String? = null,
+    val demand: Double? = null,
+    val demandSource: String? = null,
+    val blockId: String? = null,
 ) {
     val model: TaskItem
         get() {
@@ -221,6 +236,8 @@ internal data class WireTask(
                 notes = notes, horizon = TaskHorizon.from(horizon), flagged = flagged == true,
                 estimateMinutes = estimateMinutes, plannedFor = plannedFor, completedAt = completed,
                 scheduledAt = scheduled, costPoints = costPoints,
+                workMode = TaskWorkMode.from(workMode), workType = TaskWorkType.from(workType),
+                demand = demand?.let { kotlin.math.round(it).toInt() }, demandSource = demandSource, blockId = blockId,
             )
         }
 }
@@ -781,6 +798,8 @@ internal data class WireCheckResponse(
         /** Lossy `Attention`. */
         val attention: JsonElement? = null,
         val qualifiesForNormal: Boolean? = null,
+        /** 45 | 180 | null; optional in the contract. */
+        val testSeconds: Int? = null,
     )
 
     /**
@@ -797,7 +816,8 @@ internal data class WireCheckResponse(
                 lapses = WireWhole.from(attention?.lapses) ?: 0,
                 falseStarts = WireWhole.from(attention?.falseStarts) ?: 0,
                 performance = attention?.performance ?: 0.0,
-                qualifiesForNormal = check.qualifiesForNormal ?: false, scores = today.model)
+                qualifiesForNormal = check.qualifiesForNormal ?: false, scores = today.model,
+                testSeconds = check.testSeconds)
         }
 }
 
@@ -930,4 +950,24 @@ internal data class WireHealthBatchResponse(val results: List<JsonElement>? = nu
 
     val pairs: List<Pair<String, Boolean>>
         get() = results.lossyItems(Result.serializer()).map { it.date to (it.written ?: false) }
+}
+
+// MARK: Tasks (auto-allocation): GET /v1/calendar/events?taskId&source=planner, read by `removePlannerBlocks`
+
+/** Only what clearing a task's planner blocks needs: an event's id, start, source and task. */
+@Serializable
+internal data class WirePlannerBlock(
+    val id: String,
+    val start: String? = null,
+    val source: String? = null,
+    val taskId: String? = null,
+)
+
+/** Lossy items, so one event this app can't read doesn't stop the clean-up. */
+@Serializable
+internal data class WirePlannerBlockPage(
+    val events: List<JsonElement>? = null,
+    override val cursor: String? = null,
+) : CursorPage<WirePlannerBlock> {
+    override val pageItems: List<WirePlannerBlock> get() = events.lossyItems(WirePlannerBlock.serializer())
 }

@@ -44,6 +44,43 @@ enum class TaskHorizon(val raw: String) {
     }
 }
 
+// MARK: Tasks (auto-allocation)
+
+/** Task's `workMode`. Only focus tasks are placed by Find a time; a meeting is never placed automatically. */
+enum class TaskWorkMode(val raw: String) {
+    focus("focus"), meeting("meeting");
+
+    companion object {
+        /** A missing or unknown value reads as focus, the Task service's default. */
+        fun from(raw: String?): TaskWorkMode = entries.firstOrNull { it.raw == raw } ?: focus
+    }
+}
+
+/** Task's `workType`, which the Planner uses to pick an hour. Null leaves it to the Planner. */
+enum class TaskWorkType(val raw: String) {
+    deepFocus("deepFocus"), detailHeavy("detailHeavy"), ideas("ideas"), routine("routine"), learning("learning");
+
+    companion object {
+        fun from(raw: String?): TaskWorkType? = entries.firstOrNull { it.raw == raw }
+    }
+}
+
+/** The editor's "How hard": a manual `demand` (0-100), or null to let Aura work it out. */
+enum class TaskDemand(val value: Int?) {
+    light(25), medium(50), hard(80), auto(null);
+
+    companion object {
+        /** The choice for a stored demand: the nearest of the three, or Auto when there is none. */
+        fun from(demand: Int?): TaskDemand {
+            demand ?: return auto
+            return listOf(light, medium, hard).minByOrNull { kotlin.math.abs((it.value ?: 0) - demand) } ?: auto
+        }
+    }
+}
+
+/** How long the Planner plans a task that has no estimate. */
+const val PLANNER_DEFAULT_MINUTES = 30
+
 /** One field of a PATCH: wrapped so that a null `value` (clear it) differs from no change at all (no `Change`). */
 data class Change<out T>(val value: T)
 
@@ -65,6 +102,12 @@ data class TaskChanges(
     val flagged: Boolean? = null,
     val status: TaskStatus? = null,
     val plannedFor: Change<String?>? = null,
+    /** Find a time may place it. */
+    val autoAllocate: Boolean? = null,
+    val workMode: TaskWorkMode? = null,
+    val workType: Change<TaskWorkType?>? = null,
+    /** A manual demand (0-100); a `Change` holding null hands it back to the automatic one. */
+    val demand: Change<Int?>? = null,
 ) {
     val isEmpty: Boolean get() = this == TaskChanges()
 
@@ -83,6 +126,10 @@ data class TaskChanges(
         flagged?.let { put("flagged", it) }
         status?.let { put("status", it.raw) }
         plannedFor?.let { put("plannedFor", it.value?.let { v -> JsonPrimitive(v) } ?: JsonNull) }
+        autoAllocate?.let { put("autoAllocate", it) }
+        workMode?.let { put("workMode", it.raw) }
+        workType?.let { put("workType", it.value?.let { v -> JsonPrimitive(v.raw) } ?: JsonNull) }
+        demand?.let { put("demand", it.value?.let { v -> JsonPrimitive(v) } ?: JsonNull) }
     }
 
     /** `task` as the server will store it after this change (the stub, and the page while the save is on its way). */
@@ -97,6 +144,10 @@ data class TaskChanges(
         horizon?.let { next = next.copy(horizon = it) }
         flagged?.let { next = next.copy(flagged = it) }
         plannedFor?.let { next = next.copy(plannedFor = it.value) }
+        autoAllocate?.let { next = next.copy(autoAllocate = it) }
+        workMode?.let { next = next.copy(workMode = it) }
+        workType?.let { next = next.copy(workType = it.value) }
+        demand?.let { next = next.copy(demand = it.value) }
         status?.let { next = next.withStatus(it, now) }
         return next.copy(at = next.scheduledAt ?: next.dueAt?.takeIf { next.hasTime })
     }
@@ -128,6 +179,13 @@ data class TaskDraft(
     val estimateMinutes: Int? = null,
     val horizon: TaskHorizon = TaskHorizon.today,
     val flagged: Boolean = false,
+    /** "Auto-schedule": Find a time may place it. On for a new task; a meeting is never placed (see `placesItself`). */
+    val autoAllocate: Boolean = true,
+    val workMode: TaskWorkMode = TaskWorkMode.focus,
+    /** Null leaves the kind of work to the Planner. */
+    val workType: TaskWorkType? = null,
+    /** A manual demand (0-100), or null for the automatic one. */
+    val demand: Int? = null,
 ) {
     /** The fields of a task as it is now. */
     constructor(task: TaskItem, zone: ZoneId = DayKey.zone) : this(
@@ -139,7 +197,15 @@ data class TaskDraft(
         estimateMinutes = task.estimateMinutes,
         horizon = task.horizon,
         flagged = task.flagged,
+        autoAllocate = task.autoAllocate,
+        workMode = task.workMode,
+        workType = task.workType,
+        // Only a demand the person set is theirs to edit; an automatic one stays automatic.
+        demand = task.demand.takeIf { task.demandSource != "auto" },
     )
+
+    /** What is sent as `autoAllocate`: the switch, and never for a meeting, which the Planner doesn't place. */
+    val placesItself: Boolean get() = autoAllocate && workMode == TaskWorkMode.focus
 
     private val trimmedTitle: String get() = title.trim()
 
@@ -162,6 +228,8 @@ data class TaskDraft(
             if (estimate != null && (estimate < minEstimate || estimate > maxEstimate)) {
                 return "The estimate has to be 1 to 1440 minutes."
             }
+            val load = demand
+            if (load != null && (load < 0 || load > 100)) return "How hard has to be 0 to 100."
             return null
         }
 
@@ -177,6 +245,11 @@ data class TaskDraft(
         estimateMinutes?.let { put("estimateMinutes", it) }
         put("horizon", horizon.raw)
         put("flagged", flagged)
+        // The Task service defaults autoAllocate to false, so it always goes.
+        put("autoAllocate", placesItself)
+        put("workMode", workMode.raw)
+        workType?.let { put("workType", it.raw) }
+        demand?.let { put("demand", it) }
     }
 
     /** Only what differs from `task`. Clearing notes, the due date or the estimate sends null. */
@@ -193,6 +266,11 @@ data class TaskDraft(
             estimateMinutes = if (estimateMinutes != from.estimateMinutes) Change(estimateMinutes) else null,
             horizon = horizon.takeIf { it != from.horizon },
             flagged = flagged.takeIf { it != from.flagged },
+            autoAllocate = placesItself.takeIf { it != from.autoAllocate },
+            workMode = workMode.takeIf { it != from.workMode },
+            workType = if (workType != from.workType) Change(workType) else null,
+            // Against the draft of the task as read, so an untouched automatic demand is never cleared.
+            demand = if (demand != before.demand) Change(demand) else null,
         )
     }
 

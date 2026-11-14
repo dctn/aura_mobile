@@ -712,7 +712,7 @@ private fun QuickCheckSending(failed: Boolean, refused: Boolean, onRetry: () -> 
             )
             Text(
                 if (refused) {
-                    "The server doesn't take this check yet, so it wasn't saved. Shorter checks will count once the backend is updated."
+                    "The server didn't accept this check, so it wasn't saved. Take it again from the start."
                 } else {
                     "Your results are still here. Try again when you're online."
                 },
