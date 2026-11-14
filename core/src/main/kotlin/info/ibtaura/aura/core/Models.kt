@@ -195,14 +195,36 @@ data class EventDraft(
     }
 }
 
+/** One task (Task's taskView). The types it uses and the editor's draft are in TaskModels.kt. */
 data class TaskItem(
     val id: String,
     val title: String,
-    /** Its time when it has one (a block or a timed due date). */
+    /** Its time when it has one: its calendar block's, else a due date with a time. */
     val at: Instant? = null,
+    /** Completed (status completed, or a completedAt). */
     val done: Boolean = false,
     /** The person asked Find a time to place it (Task's `autoAllocate`). */
     val autoAllocate: Boolean = false,
+    /** The version to send as If-Match when changing it. Null when the answer had none. */
+    val version: Int? = null,
+    val status: TaskStatus = if (done) TaskStatus.completed else TaskStatus.pending,
+    val priority: TaskPriority = TaskPriority.none,
+    /** When it's due. Without `hasTime` only its day counts (the day's midnight in the zone it was set in). */
+    val dueAt: Instant? = null,
+    val hasTime: Boolean = false,
+    val notes: String? = null,
+    /** The page's list it sits on: Today, Week or Month. */
+    val horizon: TaskHorizon = TaskHorizon.today,
+    val flagged: Boolean = false,
+    /** 1 to 1440 minutes, or null. */
+    val estimateMinutes: Int? = null,
+    /** The day (a `DayKey`) it's meant for, without a time: tomorrow's list from the wind-down. */
+    val plannedFor: String? = null,
+    val completedAt: Instant? = null,
+    /** Its calendar block's start (mirrored by Task, never set by the app). */
+    val scheduledAt: Instant? = null,
+    /** Capacity points it's expected to cost; null until Capacity scores it. */
+    val costPoints: Double? = null,
 )
 
 // MARK: Find a time: POST /v1/planner/allocate, GET /v1/planner/plan/{date}
@@ -370,6 +392,12 @@ data class SessionTrace(
     /** pending until the day is computed; noData without band data. */
     val status: String,
     val stressDrop: Double? = null,
+    // MARK: Session history (the trace itself, for the session page's chart; types in SessionHistory.kt)
+    /** Heart rate per minute through the session; a minute without a reading has a null bpm. */
+    val heartRate: List<HeartRatePoint> = emptyList(),
+    /** Stress per hour of the session's day that the session touches. */
+    val stress: List<StressPoint> = emptyList(),
+    val avgHr: Double? = null,
 )
 
 // MARK: Quick check: POST /v1/checks

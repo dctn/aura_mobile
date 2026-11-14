@@ -5,6 +5,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
@@ -64,10 +65,13 @@ import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.testTagsAsResourceId
 import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.max
@@ -199,16 +203,17 @@ fun ListRowCard(
             .clip(CircleShape)
             .background(AuraColors.card)
             .then(if (onClick != null) Modifier.clickable(role = Role.Button, onClick = onClick) else Modifier)
-            .padding(horizontal = 26.dp),
+            .padding(horizontal = 26.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         if (symbol != null) {
             Icon(auraIcon(symbol), contentDescription = null, tint = symbolColor, modifier = Modifier.size(26.dp))
         }
-        Text(title, style = AuraType.row, color = Color.Black, maxLines = 1, overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f, fill = false))
-        Spacer(Modifier.weight(1f))
+        // The title takes all the free width, so the value and chevron always sit at the trailing edge; a long title
+        // wraps to a second line instead of pushing them in.
+        Text(title, style = AuraType.row, color = Color.Black, maxLines = 2, overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f))
         if (value != null) {
             Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(1.dp)) {
                 Text(value, style = AuraType.row, color = Color.Black, maxLines = 1)
@@ -305,9 +310,37 @@ fun ModeTile(mode: Mode, modifier: Modifier = Modifier) {
     }
     Row(modifier, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
         IconTile(mode.shelf.symbol, mode.shelf.color)
-        Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
-            Text(mode.word, style = AuraType.calloutMedium, color = mode.shelf.color, maxLines = 1)
-            Text(length, style = AuraType.calloutMedium, color = Color.Black, maxLines = 1)
+        // The two lines take the rest of the tile. They shrink (to 75%) to stay one line each, like iOS
+        // `minimumScaleFactor`, and wrap to two lines only when even that is too wide: never cut.
+        BoxWithConstraints(Modifier.weight(1f)) {
+            val measurer = rememberTextMeasurer()
+            val width = constraints.maxWidth
+            val base = AuraType.calloutMedium
+            val fitted: TextStyle? = remember(mode.word, length, width, measurer) {
+                if (width == Constraints.Infinity) return@remember base
+                var scale = 1f
+                while (scale >= 0.75f - 0.001f) {
+                    val candidate = base.copy(fontSize = base.fontSize * scale)
+                    val fits = listOf(mode.word, length).none { line ->
+                        measurer.measure(
+                            line,
+                            candidate,
+                            softWrap = false,
+                            maxLines = 1,
+                            constraints = Constraints(maxWidth = width),
+                        ).hasVisualOverflow
+                    }
+                    if (fits) return@remember candidate
+                    scale -= 0.05f
+                }
+                null
+            }
+            val style = fitted ?: base.copy(fontSize = base.fontSize * 0.75f)
+            val lines = if (fitted != null) 1 else 2
+            Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                Text(mode.word, style = style, color = mode.shelf.color, maxLines = lines, overflow = TextOverflow.Ellipsis)
+                Text(length, style = style, color = Color.Black, maxLines = lines, overflow = TextOverflow.Ellipsis)
+            }
         }
     }
 }
@@ -468,14 +501,15 @@ fun SearchGroupRow(
             .fillMaxWidth()
             .heightIn(min = 60.dp)
             .then(if (onClick != null) Modifier.clickable(role = Role.Button, onClick = onClick) else Modifier)
-            .padding(start = if (symbol == null) 20.dp else 26.dp, end = 20.dp),
+            .padding(start = if (symbol == null) 20.dp else 26.dp, end = 20.dp, top = 8.dp, bottom = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         if (symbol != null) {
             Icon(auraIcon(symbol), contentDescription = null, tint = symbolColor, modifier = Modifier.size(26.dp))
         }
-        Text(title, style = AuraType.row, color = Color.Black, maxLines = 1, overflow = TextOverflow.Ellipsis,
+        // A long title wraps to a second line rather than being cut.
+        Text(title, style = AuraType.row, color = Color.Black, maxLines = 2, overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f))
         if (showsChevron) Chevron()
     }
@@ -506,7 +540,14 @@ fun MetricRetryState(onRetry: () -> Unit, modifier: Modifier = Modifier) {
 
 /** The Work hours row on Calendar and Settings: clock, title, the hours below it, chevron. Tag it with `modifier`. */
 @Composable
-fun WorkHoursRow(title: String, value: String?, onClick: () -> Unit, modifier: Modifier = Modifier) {
+fun WorkHoursRow(
+    title: String,
+    value: String?,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    symbol: String = "clock.fill",
+    symbolColor: Color = AuraColors.blue,
+) {
     Row(
         modifier
             .fillMaxWidth()
@@ -518,7 +559,7 @@ fun WorkHoursRow(title: String, value: String?, onClick: () -> Unit, modifier: M
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(14.dp),
     ) {
-        Icon(auraIcon("clock.fill"), contentDescription = null, tint = AuraColors.blue, modifier = Modifier.size(26.dp))
+        Icon(auraIcon(symbol), contentDescription = null, tint = symbolColor, modifier = Modifier.size(26.dp))
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(title, style = AuraType.bodyMedium, color = Color.Black, maxLines = 1)
             if (value != null) {

@@ -19,7 +19,6 @@ import androidx.compose.ui.unit.dp
 import info.ibtaura.aura.core.CatalogueParameter
 import info.ibtaura.aura.core.CatalogueSection
 import info.ibtaura.aura.core.FieldAvailability
-import info.ibtaura.aura.core.MetricAvailableRow
 import info.ibtaura.aura.core.MetricCategoryRows
 import info.ibtaura.aura.core.MetricMaths
 import info.ibtaura.auraclarus.design.AuraCard
@@ -43,7 +42,10 @@ import java.time.Instant
 /** Section titles and footnotes start 20 dp inside the cards' edge (iOS `metricTitleInset`). */
 internal val TitleInset = Modifier.padding(horizontal = 20.dp)
 
-/** Frame Search _ Movement (iOS SearchCategoryView): rows with data, the About text, then the rows with none. */
+/**
+ * Frame Search _ Movement (iOS SearchCategoryView): the metric rows first, each with the category icon ("Available
+ * Data", then "No Data Available" for the rest), then the About card.
+ */
 @Composable
 fun SearchCategoryScreen(app: AppState, nav: AuraNav, route: Route.SearchCategory) {
     var query by rememberSaveable { mutableStateOf("") }
@@ -101,22 +103,23 @@ private fun SearchCategoryLists(
     if (rows.available.isEmpty() && rows.empty.isEmpty()) {
         MetricEmptyState(if (isFiltering) "No results" else "No data yet")
     }
+    // The metric rows come first, each with the category's icon (iOS frame Search _ Movement): the ones with data
+    // under "Available Data", the rest under "No Data Available". The About card follows them.
     if (rows.available.isNotEmpty()) {
         SectionTitle("Available Data", TitleInset)
         SearchGroupCard {
             rows.available.forEachIndexed { index, row ->
                 if (index > 0) SearchRowDivider()
-                SearchAvailableRow(section, row, go)
+                SearchMetricRow(section, row.parameter, go)
             }
         }
     }
-    if (!isFiltering) SearchCategoryAbout(section)
     if (rows.empty.isNotEmpty()) {
-        SectionTitle("No Data Available", TitleInset)
+        SectionTitle("No Data Available", TitleInset.then(Modifier.testTag("category-no-data")))
         SearchGroupCard {
             rows.empty.forEachIndexed { index, parameter ->
-                if (index > 0) SearchRowDivider(leading = 20.dp)
-                SearchNoDataRow(section.title, parameter, go)
+                if (index > 0) SearchRowDivider()
+                SearchMetricRow(section, parameter, go)
             }
         }
         Footnote(
@@ -124,6 +127,7 @@ private fun SearchCategoryLists(
             TitleInset,
         )
     }
+    if (!isFiltering) SearchCategoryAbout(section)
 }
 
 /** Only the Movement frame has About text, so other categories show none. */
@@ -145,10 +149,10 @@ private fun SearchCategoryAbout(section: CatalogueSection) {
 private fun metricRoute(parameter: CatalogueParameter, field: String, backTitle: String) =
     Route.Metric(parameter.name, field, parameter.unit, parameter.format, backTitle)
 
+/** One metric row with the category's icon; it opens the metric page when the metric has a series. */
 @Composable
-private fun SearchAvailableRow(section: CatalogueSection, row: MetricAvailableRow, go: (Route) -> Unit) {
+private fun SearchMetricRow(section: CatalogueSection, parameter: CatalogueParameter, go: (Route) -> Unit) {
     val style = SearchCategoryStyle.of(section.id)
-    val parameter = row.parameter
     val field = parameter.field
     if (parameter.hasSeries && field != null) {
         SearchListRow(
@@ -160,19 +164,5 @@ private fun SearchAvailableRow(section: CatalogueSection, row: MetricAvailableRo
         )
     } else {
         SearchListRow(parameter.name, symbol = style.symbol, symbolColor = style.color, showsChevron = false)
-    }
-}
-
-@Composable
-private fun SearchNoDataRow(sectionTitle: String, parameter: CatalogueParameter, go: (Route) -> Unit) {
-    val field = parameter.field
-    if (parameter.hasSeries && field != null) {
-        SearchListRow(
-            parameter.name,
-            Modifier.testTag("metric-$field"),
-            onClick = { go(metricRoute(parameter, field, sectionTitle)) },
-        )
-    } else {
-        SearchListRow(parameter.name, showsChevron = false)
     }
 }

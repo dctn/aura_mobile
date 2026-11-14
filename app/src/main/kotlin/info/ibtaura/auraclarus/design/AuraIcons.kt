@@ -44,7 +44,6 @@ import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.LocalFireDepartment
 import androidx.compose.material.icons.filled.LocalHospital
 import androidx.compose.material.icons.filled.Mic
-import androidx.compose.material.icons.filled.MonitorHeart
 import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.material.icons.filled.NorthEast
 import androidx.compose.material.icons.filled.Notifications
@@ -54,7 +53,6 @@ import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Phone
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Pool
-import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.RemoveCircle
 import androidx.compose.material.icons.filled.Restaurant
@@ -77,7 +75,6 @@ import androidx.compose.material.icons.outlined.Circle
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material.icons.outlined.WarningAmber
-import androidx.compose.material.icons.outlined.Psychology
 import androidx.compose.ui.graphics.vector.ImageVector
 
 /**
@@ -94,9 +91,9 @@ private val symbols: Map<String, ImageVector> = mapOf(
 
     // Shelves and categories
     "timer" to Icons.Filled.Timer,
-    "arrow.clockwise.heart.fill" to Icons.Filled.MonitorHeart,
-    "brain" to Icons.Filled.Psychology,
-    "brain.head.profile" to Icons.Outlined.Psychology,
+    "arrow.clockwise.heart.fill" to AuraCustomIcons.HeartArrowClockwiseFill,
+    "brain" to AuraCustomIcons.Brain,
+    "brain.head.profile" to AuraCustomIcons.BrainHeadProfile,
     "bed.double.fill" to Icons.Filled.Bed,
     "figure.walk" to Icons.AutoMirrored.Filled.DirectionsWalk,
     "figure.walk.motion" to Icons.Filled.Hiking,

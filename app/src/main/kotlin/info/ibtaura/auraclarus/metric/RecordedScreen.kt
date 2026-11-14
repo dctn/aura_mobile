@@ -29,6 +29,8 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import info.ibtaura.aura.core.MetricMaths
+import info.ibtaura.auraclarus.goals.UnitFormat
+import info.ibtaura.auraclarus.goals.rememberUnitSystem
 import info.ibtaura.aura.core.MetricPoint
 import info.ibtaura.auraclarus.design.AuraColors
 import info.ibtaura.auraclarus.design.AuraLazyPage
@@ -58,6 +60,7 @@ fun RecordedScreen(app: AppState, nav: AuraNav, route: Route.Recorded) {
     var format by remember { mutableStateOf("") }
     var failed by remember { mutableStateOf(false) }
     var retry by remember { mutableIntStateOf(0) }
+    val units = rememberUnitSystem(app)
 
     LaunchedEffect(app.dataVersion, retry) {
         failed = false
@@ -76,9 +79,7 @@ fun RecordedScreen(app: AppState, nav: AuraNav, route: Route.Recorded) {
     }
 
     fun text(point: MetricPoint): String {
-        val number = MetricMaths.display(point.value ?: 0.0, format, route.unit)
-        val unit = MetricMaths.shownUnit(format, route.unit)
-        return if (unit.isEmpty()) number else "$number $unit"
+        return UnitFormat.text(point.value ?: 0.0, format, route.unit, units, route.field)
     }
 
     val loaded = rows

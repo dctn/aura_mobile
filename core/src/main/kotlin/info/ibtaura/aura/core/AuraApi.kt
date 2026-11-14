@@ -1,5 +1,6 @@
 package info.ibtaura.aura.core
 
+import kotlinx.serialization.json.JsonElement
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -60,6 +61,25 @@ interface AuraApi {
     /** A task meant for a day (a `DayKey`), with no time of its own. */
     suspend fun addTask(title: String, plannedFor: String)
 
+    // Tasks page
+    /**
+     * A new task from the editor (POST /v1/tasks). `id` is the caller's (a lowercase UUID): keep it for retries, as
+     * the same id answers with the task already made.
+     */
+    suspend fun createTask(draft: TaskDraft, id: String = TaskDraft.newId()): TaskItem
+    /**
+     * PATCH /v1/tasks/{id} with If-Match "v<version>", sending only `changes`. Without a version the task is read
+     * first for one. A 412 (changed elsewhere) reads the task again and tries once more. Null, and nothing sent,
+     * when nothing changes.
+     */
+    suspend fun updateTask(id: String, version: Int?, changes: TaskChanges): TaskItem?
+    /** POST /v1/tasks/{id}/complete. Safe to repeat. `next` is the new copy of a repeating task. */
+    suspend fun completeTask(id: String): TaskCompletion
+    /** Back to pending (PATCH status "pending"), which clears completedAt. The same If-Match rules as `updateTask`. */
+    suspend fun reopenTask(id: String, version: Int?): TaskItem
+    /** DELETE /v1/tasks/{id}. A task that is already gone counts as deleted. */
+    suspend fun deleteTask(id: String)
+
     // Consent
     suspend fun grantHealthConsent()
 
@@ -114,6 +134,93 @@ interface AuraApi {
 
     /** The morning check-in. Both times ("HH:mm") or neither; alertness 1...9. */
     suspend fun morningCheckin(alertness: Int?, fellAsleepAt: String?, wokeAt: String?, at: Instant)
+
+    // MARK: Goals
+    /** GET /v1/me: healthGoals (null when Identity doesn't send it yet), every setting, and the profile version. */
+    suspend fun goalsProfile(): GoalsProfile
+    /**
+     * PUT /v1/me/profile `{healthGoals: changes}` with If-Match "v<version>"; merged per field, a null value clears one.
+     * Keys are `HealthGoals.STEPS` etc. A 412 reads the version again and sends once more. Identity refusing the field
+     * throws `AuraError.Server` code `health_goals_refused`.
+     */
+    suspend fun putHealthGoals(changes: Map<String, JsonElement?>, version: Int): GoalsProfile
+    /** Today's steps, active calories and stand hours with Health Data's goal percentages, water ml and focus minutes. */
+    suspend fun goalProgressToday(): GoalProgress
+    /** GET /v1/habits, every page, by sortOrder. */
+    suspend fun habits(includeArchived: Boolean): List<Habit>
+    /** POST /v1/habits with a new client id. */
+    suspend fun createHabit(draft: HabitDraft): Habit
+    /** PATCH /v1/habits/{id} with If-Match: only what changed. Nothing changed sends nothing and returns `habit`. */
+    suspend fun updateHabit(habit: Habit, to: HabitDraft): Habit
+    suspend fun deleteHabit(id: String)
+    /** A check-off for `date` (a DayKey). 409 habit_paused, 400 date_in_future / date_too_old. */
+    suspend fun logHabit(habitId: String, date: String, count: Int, minutes: Int): HabitLogResult
+    suspend fun deleteHabitLog(habitId: String, logId: String)
+    /** Check-offs from `from` to `to` (DayKeys, at most 400 days apart). */
+    suspend fun habitLogs(from: String, to: String): List<HabitLog>
+    suspend fun habitStats(id: String): HabitStats
+
+    // MARK: Settings (goals)
+    /** GET /v1/me's `settings` object, key by key. */
+    suspend fun meSettings(): Map<String, JsonElement>
+    /** PUT /v1/me/settings with `changes` as the body: merged key by key, a null value removes that key. */
+    suspend fun putMeSettings(changes: Map<String, JsonElement?>)
+
+    // MARK: Session history (Search > Sessions; models in SessionHistory.kt)
+    /**
+     * One page of GET /v1/sessions from `from` to `to` (DayKeys, at most 62 days), oldest first as the route lists
+     * them. `kind` filters each page on the server, so a page can be empty and still have a cursor. `limit` 1-500
+     * (the route's default is 100). Pass the answer's cursor back for the next page.
+     */
+    suspend fun sessionPage(
+        from: String,
+        to: String,
+        kind: String? = null,
+        cursor: String? = null,
+        limit: Int? = null,
+    ): SessionPage
+    /** The whole session (GET /v1/sessions/{id}). 404 `session_not_found` when it isn't there. */
+    suspend fun session(id: String): SessionDetail
+    /** XP, level, plant and badges (GET /v1/rewards). */
+    suspend fun rewards(): Rewards
+    /** The sessions from `from` to `to` (DayKeys) as CSV text (GET /v1/sessions/export?format=csv). 413 when over 5 MB. */
+    suspend fun exportSessionsCsv(from: String, to: String): String
+
+    // MARK: Event by id (the event editor after a restart)
+    /**
+     * One calendar event (GET /v1/calendar/events/{id}); an occurrence id `id@yyyy-MM-dd` works too. Null on a 404,
+     * which is how Calendar says it was deleted.
+     */
+    suspend fun event(id: String): CalendarEvent?
+
+    // MARK: Logbook
+    /** GET /v1/logs: manual logs dated `from` to `to` (DayKeys, both included), all types or one. Oldest first. */
+    suspend fun logs(from: String, to: String, type: LogType? = null): List<LogEntry>
+    /**
+     * POST /v1/logs. `date` is a DayKey; `data` values are numbers, text (cut at 500 characters), booleans or null.
+     * Resending the same `id` answers with the stored log: logs can't be edited or deleted.
+     */
+    suspend fun addLog(
+        type: LogType,
+        date: String,
+        takenAt: Instant?,
+        data: Map<String, JsonElement>,
+        id: String = LogIds.new(),
+    ): LogEntry
+    /** GET /v1/checkins: check-ins filed `from` to `to` (DayKeys), all kinds or one. Oldest first. */
+    suspend fun checkins(from: String, to: String, kind: CheckinKind? = null): List<Checkin>
+    /**
+     * POST /v1/checkins with the kind's answers (e.g. `mood`, `connection`, `stress`, `effort`, `exhaustion`,
+     * `insomnia` as a 7-item array). 400 `invalid_request` without one of `kind.needs`. Resending the same `id` is safe.
+     */
+    suspend fun addCheckin(
+        kind: CheckinKind,
+        takenAt: Instant,
+        answers: Map<String, JsonElement>,
+        id: String = LogIds.new(),
+    ): Checkin
+    /** The profile's healthGoals.waterGoalMl (GET /v1/me), or null when it isn't set. */
+    suspend fun waterGoalMl(): Int?
 }
 
 sealed class AuthState {

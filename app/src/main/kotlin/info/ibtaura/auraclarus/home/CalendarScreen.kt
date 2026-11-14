@@ -125,6 +125,7 @@ fun CalendarScreen(app: AppState, nav: AuraNav) {
     }
 
     val readyDay = zoneDay?.takeIf { it.status == ZoneStatus.ready }
+    val zonesLoading = zoneDay == null && !zonesFailed
     val zone = ZoneId.systemDefault()
     val todayDate = now.atZone(zone).toLocalDate()
     val days: List<Pair<LocalDate, List<CalendarEvent>>> = (events ?: emptyList())
@@ -141,7 +142,8 @@ fun CalendarScreen(app: AppState, nav: AuraNav) {
     fun eventsState() {
         when {
             failed -> HomeRetryLine("Couldn't load your calendar.", retry = { retry += 1 })
-            events == null -> Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+            // Until today's zones arrive, an empty week may still get a zone grid: keep the spinner, not "Nothing".
+            events == null || (zonesLoading && days.isEmpty()) -> Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator(color = AuraColors.gray, strokeWidth = 3.dp, modifier = Modifier.size(28.dp))
             }
             days.isEmpty() && readyDay == null ->

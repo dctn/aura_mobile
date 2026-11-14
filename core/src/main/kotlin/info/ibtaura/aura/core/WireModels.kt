@@ -195,16 +195,42 @@ internal data class WireTask(
     val completedAt: String? = null,
     /** Find a time places it. A Task service from before the flag sends none, which reads as no. */
     val autoAllocate: Boolean? = null,
+    val version: Int? = null,
+    val priority: String? = null,
+    val notes: String? = null,
+    val horizon: String? = null,
+    val flagged: Boolean? = null,
+    val estimateMinutes: Int? = null,
+    val plannedFor: String? = null,
+    val costPoints: Double? = null,
 ) {
     val model: TaskItem
         get() {
+            val dueInstant = WireDate.parse(dueAt)
+            val timed = hasTime == true
             // A due date without a time only names the day, so it isn't the task's time.
-            val due = if (hasTime == true) WireDate.parse(dueAt) else null
+            val due = if (timed) dueInstant else null
+            val completed = WireDate.parse(completedAt)
             val done = status == "completed" || completedAt != null
-            return TaskItem(id = id, title = title ?: "", at = WireDate.parse(scheduledAt) ?: due, done = done,
-                autoAllocate = autoAllocate == true)
+            val scheduled = WireDate.parse(scheduledAt)
+            return TaskItem(
+                id = id, title = title ?: "", at = scheduled ?: due, done = done,
+                autoAllocate = autoAllocate == true, version = version,
+                status = if (done) TaskStatus.completed else TaskStatus.from(status),
+                priority = TaskPriority.from(priority), dueAt = dueInstant, hasTime = timed && dueInstant != null,
+                notes = notes, horizon = TaskHorizon.from(horizon), flagged = flagged == true,
+                estimateMinutes = estimateMinutes, plannedFor = plannedFor, completedAt = completed,
+                scheduledAt = scheduled, costPoints = costPoints,
+            )
         }
 }
+
+/** POST /v1/tasks, PATCH /v1/tasks/{id}, GET /v1/tasks/{id}, POST .../complete: `{task, created?, next?}`. */
+@Serializable
+internal data class WireTaskAnswer(
+    val task: WireTask,
+    val next: WireTask? = null,
+)
 
 @Serializable
 internal data class WireTaskPage(
@@ -338,7 +364,14 @@ internal data class WireStartedSession(
 }
 
 @Serializable
-internal data class WireTrace(val status: String? = null, val stressDrop: Double? = null)
+internal data class WireTrace(
+    val status: String? = null,
+    val stressDrop: Double? = null,
+    // MARK: Session history (read by `WireTrace.model` in SessionHistoryWire.kt). Lossy items.
+    val hr: List<JsonElement>? = null,
+    val stress: List<JsonElement>? = null,
+    val avgHr: Double? = null,
+)
 
 // MARK: Beta day score: Session's sessionView, reviews; Capacity's ledger and recovery options; sleep nights
 

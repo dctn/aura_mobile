@@ -11,23 +11,29 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DatePicker
 import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TimePicker
 import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.material3.rememberTimePickerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -47,6 +53,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import info.ibtaura.aura.core.AuraError
 import info.ibtaura.aura.core.CalendarEvent
@@ -57,10 +64,10 @@ import info.ibtaura.auraclarus.design.AuraConfirmDialog
 import info.ibtaura.auraclarus.design.AuraPage
 import info.ibtaura.auraclarus.design.AuraType
 import info.ibtaura.auraclarus.design.CardDivider
-import info.ibtaura.auraclarus.design.NotDesignedYet
 import info.ibtaura.auraclarus.design.PillButton
 import info.ibtaura.auraclarus.design.PillStyle
 import info.ibtaura.auraclarus.design.hex
+import info.ibtaura.auraclarus.design.auraIcon
 import info.ibtaura.auraclarus.shell.AppState
 import info.ibtaura.auraclarus.shell.AuraNav
 import info.ibtaura.auraclarus.shell.Route
@@ -82,13 +89,65 @@ private val kindNames = mapOf("focus" to "Focus", "meeting" to "Meeting", "recov
  */
 @Composable
 fun EventEditorScreen(app: AppState, nav: AuraNav, route: Route.EventEditor) {
-    val event = remember(route.eventId) { route.eventId?.let { app.event(it) } }
-    if (route.eventId != null && event == null) {
-        // The app was restarted on this page and the event isn't in memory any more.
-        NotDesignedYet("Edit event", onBack = { nav.pop() })
+    val id = route.eventId
+    var event by remember(id) { mutableStateOf(id?.let { app.event(it) }) }
+    if (id == null || event != null) {
+        EventEditorForm(app, event, close = { nav.pop() })
         return
     }
-    EventEditorForm(app, event, close = { nav.pop() })
+    // The app was restarted on this page, so the event isn't in memory any more: read it by its id.
+    var gone by remember(id) { mutableStateOf(false) }
+    var failed by remember(id) { mutableStateOf(false) }
+    var retry by remember(id) { mutableIntStateOf(0) }
+    LaunchedEffect(id, retry) {
+        failed = false
+        try {
+            val found = app.api.event(id)
+            if (found == null) {
+                gone = true
+            } else {
+                app.rememberEvents(listOf(found))
+                event = found
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            app.note(e)
+            failed = true
+        }
+    }
+    AuraPage(title = "Edit event", onBack = { nav.pop() }) {
+        when {
+            gone -> EventGone { nav.pop() }
+            failed -> AuraCard(padding = 20.dp) {
+                HomeRetryLine("Couldn't load this event.", { retry += 1 }, Modifier.testTag("event-editor-retry"))
+            }
+            else -> Box(Modifier.fillMaxWidth().padding(top = 48.dp), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator(
+                    color = AuraColors.gray,
+                    strokeWidth = 2.dp,
+                    modifier = Modifier.size(24.dp).testTag("event-editor-loading"),
+                )
+            }
+        }
+    }
+}
+
+/** The event was deleted (here or on another device) while this page was away. */
+@Composable
+private fun EventGone(onBack: () -> Unit) {
+    Column(
+        Modifier.fillMaxWidth().padding(top = 48.dp, start = 12.dp, end = 12.dp).testTag("event-gone"),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+        Box(Modifier.size(64.dp).clip(CircleShape).background(AuraColors.card), contentAlignment = Alignment.Center) {
+            Icon(auraIcon("calendar"), contentDescription = null, tint = AuraColors.gray, modifier = Modifier.size(30.dp))
+        }
+        Text("This event was deleted.", style = AuraType.bodyMedium, color = Color.Black, textAlign = TextAlign.Center)
+        Text("It's no longer on your calendar.", style = AuraType.callout, color = AuraColors.gray, textAlign = TextAlign.Center)
+        PillButton("Back", onBack, Modifier.testTag("event-gone-back"), style = PillStyle.Secondary)
+    }
 }
 
 @Composable

@@ -47,11 +47,16 @@ jobs:
           profile: pixel_7
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          # The runner runs each line on its own (no pipefail across lines), so Gradle's own exit code is saved,
+          # never a pipe's: a walk that fails must fail the job.
           script: |
             adb shell rm -rf /sdcard/Download/aura-shots || true
-            ./gradlew --console=plain --no-daemon :app:connectedDebugAndroidTest 2>&1 | tee app-test.log; echo $? > walk-exit
+            ./gradlew --console=plain --no-daemon :app:connectedDebugAndroidTest > app-test.log 2>&1; echo $? > walk-exit
+            tail -n 200 app-test.log
             mkdir -p screenshots
             adb pull /sdcard/Download/aura-shots screenshots/ || true
+            ls -R screenshots || true
+            echo "connectedDebugAndroidTest exit code $(cat walk-exit)"
             exit $(cat walk-exit)
       - name: Keep the screenshots, reports, logs and APK
         if: always()

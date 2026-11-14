@@ -68,3 +68,9 @@ private fun sharedReader(application: Application): HealthConnectReader =
 
 private fun sharedAsker(application: Application): HealthPermissionAsker =
     asker ?: HealthPermissionAsker(application).also { asker = it }
+
+/** The shared Health Connect reader for Settings' permission count; null in UI tests or with no application. */
+internal fun healthReader(context: Context): HealthConnectReader? {
+    val application = context.applicationContext as? Application ?: return null
+    return sharedReader(application)
+}

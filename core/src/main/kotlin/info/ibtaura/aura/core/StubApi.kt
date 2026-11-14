@@ -2,6 +2,7 @@ package info.ibtaura.aura.core
 
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.serialization.json.JsonElement
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -63,6 +64,8 @@ class StubApi(
     private val editedEvents = LinkedHashMap<String, CalendarEvent>()
     /** Ids deleted in the editor. */
     private val deletedEvents = HashSet<String>()
+    /** Every task by id, in the order made: the seeded ones, then those added here. */
+    private val taskStore = LinkedHashMap<String, TaskItem>().apply { stubTasks.forEach { put(it.id, it) } }
 
     private val zone: ZoneId get() = DayKey.zone
 
@@ -98,7 +101,8 @@ class StubApi(
         }
     }
 
-    override suspend fun tasks(): List<TaskItem> = stubTasks
+    /** The stub's tasks as made, changed and deleted here, seeded with `stubTasks`; completed ones too, as Task lists them. */
+    override suspend fun tasks(): List<TaskItem> = mutex.withLock { taskStore.values.toList() }
 
     override suspend fun alerts(from: String, to: String): List<AlertItem> =
         listOf(AlertItem(id = "a1", featureId = "DX-04", title = "Take a 10 minutes nap", date = day(0), actionRef = "nap-10"))
@@ -220,9 +224,61 @@ class StubApi(
         }
     }
 
-    override suspend fun sessionTrace(id: String): SessionTrace = SessionTrace(status = "noData")
+    /** No band data, except on the seeded history (Session history), which has a trace to chart. */
+    override suspend fun sessionTrace(id: String): SessionTrace = historyTrace(id) ?: SessionTrace(status = "noData")
     override suspend fun addEvent(title: String, start: Instant, end: Instant, kind: String) {}
-    override suspend fun addTask(title: String, plannedFor: String) {}
+    override suspend fun addTask(title: String, plannedFor: String) {
+        val id = TaskDraft.newId()
+        mutex.withLock { taskStore[id] = TaskItem(id = id, title = title.trim(), version = 1, plannedFor = plannedFor) }
+    }
+
+    // MARK: Tasks page
+
+    /** As Task does: the same id gives back the task already made; a draft that can't be saved is a 400. */
+    override suspend fun createTask(draft: TaskDraft, id: String): TaskItem {
+        draft.problem?.let { throw AuraError.Server(code = "validation_failed", message = it, status = 400) }
+        val dueAt = draft.dueAt()
+        val made = TaskItem(
+            id = id, title = draft.title.trim(), at = dueAt?.takeIf { draft.hasTime }, version = 1,
+            priority = draft.priority, dueAt = dueAt, hasTime = draft.hasTime, notes = draft.notes.trim().ifEmpty { null },
+            horizon = draft.horizon, flagged = draft.flagged, estimateMinutes = draft.estimateMinutes,
+        )
+        return mutex.withLock { taskStore.getOrPut(id) { made } }
+    }
+
+    /** 404 for a task that isn't there; 412 for a version older than the stored one, as Task's If-Match check. */
+    override suspend fun updateTask(id: String, version: Int?, changes: TaskChanges): TaskItem? {
+        if (changes.isEmpty) return null
+        changes.title?.let { if (it.isBlank()) throw AuraError.Server("validation_failed", "Give it a title.", 400) }
+        return writeTask(id, version) { changes.appliedTo(it, now()) }
+    }
+
+    override suspend fun completeTask(id: String): TaskCompletion {
+        val done = writeTask(id, null) { it.withStatus(TaskStatus.completed, now()) }
+        return TaskCompletion(task = done)
+    }
+
+    override suspend fun reopenTask(id: String, version: Int?): TaskItem =
+        writeTask(id, version) { it.withStatus(TaskStatus.pending, now()) }
+
+    override suspend fun deleteTask(id: String) {
+        mutex.withLock { taskStore.remove(id) }
+    }
+
+    /** Applies `change` and bumps the version when something changed. A null `version` skips the check. */
+    private suspend fun writeTask(id: String, version: Int?, change: (TaskItem) -> TaskItem): TaskItem =
+        mutex.withLock {
+            val stored = taskStore[id] ?: throw AuraError.Server("not_found", "No such task.", 404)
+            val storedVersion = stored.version ?: 1
+            if (version != null && version != storedVersion) {
+                throw AuraError.Server("version_mismatch", "The task changed since it was read.", 412)
+            }
+            val changed = change(stored)
+            if (changed == stored) return@withLock stored
+            val written = changed.copy(version = storedVersion + 1)
+            taskStore[id] = written
+            written
+        }
 
     // MARK: Event editor
 
@@ -380,6 +436,8 @@ class StubApi(
      * kind is refused as Session refuses it (409 `not_focus_session`).
      */
     override suspend fun setDifficulty(sessionId: String, difficulty: Difficulty): SessionRecord {
+        // Session history: a seeded history session is rated on its own day (see MARK: Session history).
+        if (StubSessionHistory.isSeed(sessionId)) return rateHistory(sessionId, difficulty)
         val now = now()
         return mutex.withLock {
             if (sessionId == seededId) {
@@ -484,6 +542,136 @@ class StubApi(
         mutex.withLock { morning = StubMorningCheckin(alertness, fellAsleepAt, wokeAt, at) }
     }
 
+    // MARK: Goals
+
+    private val goals = StubGoals(now)
+
+    override suspend fun goalsProfile(): GoalsProfile = goals.profile()
+
+    override suspend fun putHealthGoals(changes: Map<String, JsonElement?>, version: Int): GoalsProfile =
+        goals.putHealthGoals(changes, version)
+
+    /** Focus minutes are today's focus sessions here, as on the live API. */
+    override suspend fun goalProgressToday(): GoalProgress {
+        val today = day(0)
+        val focus = sessions(today, today).filter { it.kind == "focus" }.sumOf { it.minutes }
+        return goals.progress(focus)
+    }
+
+    override suspend fun habits(includeArchived: Boolean): List<Habit> = goals.habits(includeArchived)
+    override suspend fun createHabit(draft: HabitDraft): Habit = goals.createHabit(draft)
+    override suspend fun updateHabit(habit: Habit, to: HabitDraft): Habit = goals.updateHabit(habit, to)
+    override suspend fun deleteHabit(id: String) = goals.deleteHabit(id)
+    override suspend fun logHabit(habitId: String, date: String, count: Int, minutes: Int): HabitLogResult =
+        goals.logHabit(habitId, date, count, minutes)
+    override suspend fun deleteHabitLog(habitId: String, logId: String) = goals.deleteHabitLog(habitId, logId)
+    override suspend fun habitLogs(from: String, to: String): List<HabitLog> = goals.habitLogs(from, to)
+    override suspend fun habitStats(id: String): HabitStats = goals.habitStats(id)
+
+    // MARK: Settings (goals)
+
+    override suspend fun meSettings(): Map<String, JsonElement> = goals.settings()
+
+    override suspend fun putMeSettings(changes: Map<String, JsonElement?>) = goals.putSettings(changes)
+
+    // MARK: Session history
+
+    /** Ratings given to the seeded history (StubSessionHistory), by id. */
+    private val historyRatings = HashMap<String, Difficulty>()
+
+    /** The month's seeds, then yesterday's and today's live sessions, oldest first. */
+    private suspend fun historyAll(from: String, to: String): List<SessionDetail> {
+        val now = now()
+        val today = now.atZone(zone).toLocalDate()
+        val ratings = mutex.withLock { historyRatings.toMap() }
+        val seeds = StubSessionHistory.seeds(today, zone, ratings).filter { s ->
+            val key = s.date ?: return@filter false
+            key >= from && key <= to
+        }
+        val live = sessions(from, to).map { SessionHistory.detailOf(it) }
+        return (seeds + live).sortedBy { it.record.startedAt ?: Instant.MIN }
+    }
+
+    /** Pages as the route does: oldest first, `limit` a page (100 by default), the cursor an offset. */
+    override suspend fun sessionPage(from: String, to: String, kind: String?, cursor: String?, limit: Int?): SessionPage {
+        val all = historyAll(from, to)
+        val start = cursor?.toIntOrNull()?.coerceAtLeast(0) ?: 0
+        val size = (limit ?: 100).coerceIn(1, 500)
+        val end = minOf(all.size, start + size)
+        // As the route, `kind` filters each page after it is cut, so a page can come back short.
+        val page = if (start >= all.size) emptyList() else all.subList(start, end).filter { kind == null || it.record.kind == kind }
+        return SessionPage(sessions = page, cursor = if (end < all.size) end.toString() else null)
+    }
+
+    override suspend fun session(id: String): SessionDetail {
+        val now = now()
+        val today = now.atZone(zone).toLocalDate()
+        if (StubSessionHistory.isSeed(id)) {
+            val ratings = mutex.withLock { historyRatings.toMap() }
+            StubSessionHistory.find(id, today, zone, ratings)?.let { return it }
+        } else {
+            val live = sessions(DayKey.string(today.minusDays(1)), DayKey.string(today)).firstOrNull { it.id == id }
+            if (live != null) return SessionHistory.detailOf(live)
+        }
+        throw AuraError.Server(code = "session_not_found", message = "That session isn't there.", status = 404)
+    }
+
+    override suspend fun rewards(): Rewards {
+        val today = now().atZone(zone).toLocalDate()
+        return StubSessionHistory.rewards(historyAll(DayKey.string(today.minusDays(StubSessionHistory.days.toLong())), DayKey.string(today)))
+    }
+
+    override suspend fun exportSessionsCsv(from: String, to: String): String =
+        StubSessionHistory.csv(historyAll(from, to), zone)
+
+    /** The fixed and edited events around now; a deleted or unknown id is a 404 (null). */
+    override suspend fun event(id: String): CalendarEvent? {
+        mutex.withLock {
+            if (id in deletedEvents) return null
+            editedEvents[id]?.let { return it }
+        }
+        val now = now()
+        return events(now.minusSeconds(2 * 86_400L), now.plusSeconds(2 * 86_400L)).firstOrNull { it.id == id }
+    }
+
+    /** A seed's rating, kept with the seeds so it stays on its own day. Only focus seeds take one. */
+    private suspend fun rateHistory(sessionId: String, difficulty: Difficulty): SessionRecord {
+        val today = now().atZone(zone).toLocalDate()
+        return mutex.withLock {
+            val seed = StubSessionHistory.find(sessionId, today, zone, historyRatings)
+                ?: throw AuraError.Server(code = "session_not_found", message = "That session isn't there.", status = 404)
+            if (!seed.record.isFocus) {
+                throw AuraError.Server(code = "not_focus_session", message = "Only a focus session can be rated.", status = 409)
+            }
+            historyRatings[sessionId] = difficulty
+            seed.record.copy(difficulty = difficulty, capacityCost = charge(difficulty).cost)
+        }
+    }
+
+    /** A seed's trace, built from its window. */
+    private fun historyTrace(id: String): SessionTrace? {
+        val today = now().atZone(zone).toLocalDate()
+        val seed = StubSessionHistory.find(id, today, zone, emptyMap()) ?: return null
+        return StubSessionHistory.trace(seed, zone)
+    }
+
+    // MARK: Logbook
+
+    private val logbook = StubLogbook(now)
+
+    override suspend fun logs(from: String, to: String, type: LogType?): List<LogEntry> = logbook.logs(from, to, type)
+
+    override suspend fun addLog(type: LogType, date: String, takenAt: Instant?, data: Map<String, JsonElement>, id: String): LogEntry =
+        logbook.addLog(id, type, date, takenAt, data)
+
+    override suspend fun checkins(from: String, to: String, kind: CheckinKind?): List<Checkin> =
+        logbook.checkins(from, to, kind)
+
+    override suspend fun addCheckin(kind: CheckinKind, takenAt: Instant, answers: Map<String, JsonElement>, id: String): Checkin =
+        logbook.addCheckin(id, kind, takenAt, answers)
+
+    override suspend fun waterGoalMl(): Int? = logbook.waterGoal
+
     // MARK: What tests read
 
     /** The last morning check-in sent. */
@@ -519,9 +707,10 @@ class StubApi(
          * placed at 15:00 on a later day.
          */
         internal val stubTasks = listOf(
-            TaskItem(id = "t1", title = "Reply to Ana", autoAllocate = true),
-            TaskItem(id = "t2", title = "Book the dentist", autoAllocate = true),
-            TaskItem(id = "t3", title = "Write the review", autoAllocate = true),
+            TaskItem(id = "t1", title = "Reply to Ana", autoAllocate = true, version = 1, priority = TaskPriority.high),
+            TaskItem(id = "t2", title = "Book the dentist", autoAllocate = true, version = 1, horizon = TaskHorizon.week),
+            TaskItem(id = "t3", title = "Write the review", autoAllocate = true, version = 1, flagged = true,
+                estimateMinutes = 90),
         )
 
         /** Capacity's band for a score, as the stub stands in for it. */

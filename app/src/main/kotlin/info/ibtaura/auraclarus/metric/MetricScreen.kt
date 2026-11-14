@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
+import androidx.activity.compose.BackHandler
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -60,6 +61,9 @@ import info.ibtaura.auraclarus.design.SearchRowDivider
 import info.ibtaura.auraclarus.design.SectionTitle
 import info.ibtaura.auraclarus.design.auraIcon
 import info.ibtaura.auraclarus.design.bottomPadding
+import info.ibtaura.auraclarus.goals.UnitFormat
+import info.ibtaura.auraclarus.goals.UnitsPage
+import info.ibtaura.auraclarus.goals.rememberUnitSystem
 import info.ibtaura.auraclarus.shell.AppState
 import info.ibtaura.auraclarus.shell.AuraNav
 import info.ibtaura.auraclarus.shell.PinnedMetric
@@ -87,7 +91,11 @@ fun MetricScreen(app: AppState, nav: AuraNav, route: Route.Metric) {
 
     val resolvedFormat = format ?: route.format
     val shownFormat = resolvedFormat ?: ""
-    val shownUnit = MetricMaths.shownUnit(shownFormat, route.unit)
+    val units = rememberUnitSystem(app)
+    val shownUnit = UnitFormat.shownUnit(shownFormat, route.unit, units, route.field)
+    fun shown(value: Double): String = UnitFormat.display(value, shownFormat, route.unit, units, route.field)
+    /** Units opens over this page (the shell has no Units route yet); back closes it. */
+    var unitsOpen by rememberSaveable { mutableStateOf(false) }
 
     LaunchedEffect(app.dataVersion, retry, range) {
         failed = false
@@ -115,8 +123,8 @@ fun MetricScreen(app: AppState, nav: AuraNav, route: Route.Metric) {
     val loaded = points
     val bigValue: String? = when {
         loaded != null && MetricMaths.latest(loaded)?.value != null ->
-            MetricMaths.display(MetricMaths.latest(loaded)!!.value!!, shownFormat, route.unit)
-        newest != null -> MetricMaths.latestText(newest!!, shownFormat, route.unit)
+            shown(MetricMaths.latest(loaded)!!.value!!)
+        newest != null -> newest!!.latestNumber?.let { shown(it) } ?: newest!!.latestText
         else -> null
     }
     val heroLine: HeroLine? = run {
@@ -125,11 +133,11 @@ fun MetricScreen(app: AppState, nav: AuraNav, route: Route.Metric) {
         val selectedValue = index?.let { loaded.getOrNull(it)?.value }
         if (index != null && selectedValue != null) {
             return@run HeroLine(MetricMaths.shortDay(loaded[index].date),
-                MetricMaths.display(selectedValue, shownFormat, route.unit), shownUnit)
+                shown(selectedValue), shownUnit)
         }
         val average = MetricMaths.average(loaded)
         if (MetricMaths.canAverage(shownFormat) && average != null) {
-            return@run HeroLine("Avg", MetricMaths.display(average, shownFormat, route.unit), shownUnit)
+            return@run HeroLine("Avg", shown(average), shownUnit)
         }
         val last = newest
         if (MetricMaths.latest(loaded) == null && last != null) {
@@ -138,6 +146,12 @@ fun MetricScreen(app: AppState, nav: AuraNav, route: Route.Metric) {
         null
     }
     val trend: Double? = if (loaded != null && MetricMaths.canAverage(shownFormat)) MetricMaths.weekTrend(loaded) else null
+
+    if (unitsOpen) {
+        BackHandler { unitsOpen = false }
+        UnitsPage(app, route.name, route.field, route.unit, resolvedFormat, onBack = { unitsOpen = false })
+        return
+    }
 
     Column(Modifier.fillMaxSize().background(AuraColors.background)) {
         // White right up behind the bar, as the iOS page.
@@ -161,7 +175,7 @@ fun MetricScreen(app: AppState, nav: AuraNav, route: Route.Metric) {
                 Box(Modifier.padding(start = 36.dp, end = 36.dp, top = 22.dp, bottom = 28.dp)) {
                     when {
                         loaded != null -> Box(contentAlignment = Alignment.Center) {
-                            MetricBarChart(route.name, loaded, selectedIndex, onSelect = { index ->
+                            MetricBarChart(route.name, loaded, selectedIndex, unit = shownUnit, onSelect = { index ->
                                 selectedIndex = if (selectedIndex == index) null else index
                             })
                             if (MetricMaths.latest(loaded) == null) MetricEmptyState()
@@ -189,7 +203,7 @@ fun MetricScreen(app: AppState, nav: AuraNav, route: Route.Metric) {
                 MetricLinksCard(
                     onAllData = { nav.push(Route.Recorded(route.name, route.field, route.unit, resolvedFormat)) },
                     onSources = { nav.push(Route.Sources(route.name)) },
-                    onUnits = { nav.push(Route.NotDesigned("Units")) },
+                    onUnits = { unitsOpen = true },
                 )
                 MetricAboutCard(route.name)
                 Footnote("Your ${route.name} data is stored in your Aura Clarus account in the cloud.", MetricTitleInset)

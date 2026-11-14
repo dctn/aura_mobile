@@ -162,7 +162,8 @@ private fun PinCard(pin: PinnedMetric, value: String?, unit: String?, modifier: 
         symbol = "arrow.clockwise.heart.fill",
         value = value,
         unit = unit,
-        showsChevron = false,
+        // No value yet: the chevron says the row still opens the metric.
+        showsChevron = value == null,
         onClick = onClick,
     )
 }

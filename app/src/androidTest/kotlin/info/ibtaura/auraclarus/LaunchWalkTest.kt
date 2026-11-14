@@ -1,6 +1,7 @@
 package info.ibtaura.auraclarus
 
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 
@@ -9,12 +10,13 @@ import org.junit.runner.RunWith
  */
 @RunWith(AndroidJUnit4::class)
 class LaunchWalkTest {
+    @get:Rule
+    val walk = WalkRule { Walk.launch() }
+
     @Test
     fun opens() {
-        Walk.launch().use {
-            Walk.find("signin-email", "Sign in email field", timeoutMs = 20_000)
-            Walk.findText("Sign in")
-            Shots.save("00-launch")
-        }
+        Walk.find("signin-email", "Sign in email field", timeoutMs = 20_000)
+        Walk.findText("Sign in")
+        Shots.save("00-launch")
     }
 }

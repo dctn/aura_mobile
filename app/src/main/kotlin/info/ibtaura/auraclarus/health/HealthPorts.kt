@@ -97,20 +97,17 @@ internal class HealthConnectDayPort(
         if (debuggable) Log.i(TAG, message)
     }
     private var syncing = false
-    private var summaryLogged = false
 
     override suspend fun isConnected(): Boolean {
-        if (debuggable && !summaryLogged) {
-            summaryLogged = true
-            debugLog("connected=${app.healthConnected} " + runCatching { reader.debugSummary(Instant.now()) }.getOrElse { "summary error ${it.javaClass.simpleName}" })
-        }
+        // No debug read here: it ran on every launch and, with many reinstalls, used up Health Connect's request quota
+        // so the real sync was always rate-limited. The sync logs its own counts (days read / with data / sent).
         if (!app.healthConnected || !reader.isAvailable) return false
         return try {
             reader.grantedPermissions().any { it in HealthConnectReader.ALL_DAY_PERMISSIONS }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Throwable) {
-            if (isRateLimit(e)) retryAfter(RATE_LIMIT_WAIT)
+            if (isRateLimit(e)) retryAfter(RATE_LIMIT_WAIT, WAIT_RATE_LIMIT)
             false
         }
     }
@@ -146,7 +143,7 @@ internal class HealthConnectDayPort(
             } catch (e: Throwable) {
                 val limited = isRateLimit(e)
                 debugLog("day read failed: ${e.javaClass.simpleName}: ${e.message?.take(200)}${if (limited) " (rate limited)" else ""}")
-                retryAfter(if (limited) RATE_LIMIT_WAIT else FAILURE_WAIT)
+                retryAfter(if (limited) RATE_LIMIT_WAIT else FAILURE_WAIT, if (limited) WAIT_RATE_LIMIT else WAIT_FAILURE)
                 return
             }
             val toSend = inputs.map { DailyTotalsBuilder.build(it) }.filter { it.hasData() }
@@ -157,10 +154,10 @@ internal class HealthConnectDayPort(
                 } catch (e: AuraError.Server) {
                     if (e.code == "not_available") {
                         debugLog("server has no Health Connect day route yet (not_available); next try in 6 h")
-                        retryAfter(NO_ROUTE_WAIT)
+                        retryAfter(NO_ROUTE_WAIT, WAIT_NO_ROUTE)
                         return
                     }
-                    retryAfter(FAILURE_WAIT)
+                    retryAfter(FAILURE_WAIT, WAIT_FAILURE)
                     throw e
                 }
             }
@@ -168,15 +165,46 @@ internal class HealthConnectDayPort(
             prefs.edit()
                 .putInt("$account-covered", maxOf(chunkEnd, 1))
                 .putLong("$account-retryAt", now.toEpochMilli() + FAILURE_WAIT * 1000)
+                .putString("$account-waitReason", WAIT_SYNCED)
+                .putLong("$account-lastSync", now.toEpochMilli())
+                .putInt("$account-lastSent", toSend.size)
                 .apply()
         } finally {
             syncing = false
         }
     }
 
-    private fun retryAfter(seconds: Long) {
+    private fun retryAfter(seconds: Long, reason: String) {
         val account = accountKey() ?: return
-        prefs.edit().putLong("$account-retryAt", System.currentTimeMillis() + seconds * 1000).apply()
+        prefs.edit()
+            .putLong("$account-retryAt", System.currentTimeMillis() + seconds * 1000)
+            .putString("$account-waitReason", reason)
+            .apply()
+    }
+
+    /** What Settings shows: when days last went to the server, and why and until when the next read waits. */
+    fun status(): HealthSyncStatus {
+        val account = accountKey() ?: return HealthSyncStatus()
+        val covered = if (prefs.getBoolean(account, false)) BACKFILL_DAYS.toInt() else prefs.getInt("$account-covered", 0)
+        return HealthSyncStatus(
+            lastSync = prefs.getLong("$account-lastSync", 0L).takeIf { it > 0 }?.let { Instant.ofEpochMilli(it) },
+            lastSent = prefs.getInt("$account-lastSent", 0),
+            nextTry = prefs.getLong("$account-retryAt", 0L).takeIf { it > System.currentTimeMillis() }?.let { Instant.ofEpochMilli(it) },
+            waitReason = prefs.getString("$account-waitReason", null),
+            coveredDays = covered,
+        )
+    }
+
+    /**
+     * Sync now from Settings: drops a wait after a sync or an ordinary failure. A Health Connect rate limit is kept,
+     * since reading again early only extends it.
+     */
+    suspend fun syncNow(): Boolean {
+        val account = accountKey() ?: return false
+        if (prefs.getString("$account-waitReason", null) == WAIT_RATE_LIMIT && status().nextTry != null) return false
+        prefs.edit().remove("$account-retryAt").apply()
+        syncRecentDays()
+        return true
     }
 
     /** One key per signed-in account, so the next account gets its own 30 days. Only a hash of the email is kept. */
@@ -193,8 +221,21 @@ internal class HealthConnectDayPort(
         private const val RATE_LIMIT_WAIT = 60 * 60L
         private const val NO_ROUTE_WAIT = 6 * 60 * 60L
         private const val TAG = "AuraHealth"
+        const val WAIT_SYNCED = "synced"
+        const val WAIT_FAILURE = "failure"
+        const val WAIT_RATE_LIMIT = "rateLimit"
+        const val WAIT_NO_ROUTE = "noRoute"
     }
 }
+
+/** Health Connect day sync state for Settings. Times are null when there's nothing to show. */
+internal data class HealthSyncStatus(
+    val lastSync: Instant? = null,
+    val lastSent: Int = 0,
+    val nextTry: Instant? = null,
+    val waitReason: String? = null,
+    val coveredDays: Int = 0,
+)
 
 /** Health Connect's per-app request quota ran out ("Rate limited request quota has been exceeded"). */
 internal fun isRateLimit(e: Throwable): Boolean =

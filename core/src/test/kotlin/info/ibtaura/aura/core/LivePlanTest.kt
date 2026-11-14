@@ -267,6 +267,6 @@ class LivePlanTest {
         rig.server.on("/v1/tasks", netJson(200, sample))
         val tasks = rig.api.tasks()
         assertEquals(listOf(true, false), tasks.map { it.autoAllocate })
-        assertEquals(TaskItem("task-report", "Quarterly report", autoAllocate = true), tasks[0])
+        assertEquals(TaskItem("task-report", "Quarterly report", autoAllocate = true, plannedFor = "2026-11-09", estimateMinutes = 90), tasks[0])
     }
 }

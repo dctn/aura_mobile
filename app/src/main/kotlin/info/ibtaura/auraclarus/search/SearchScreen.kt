@@ -134,18 +134,15 @@ private fun SearchCategoriesCard(sections: List<CatalogueSection>, go: (Route) -
 /** The other places Search reaches, under the categories. */
 private data class SearchPlace(val title: String, val symbol: String, val color: Color, val route: Route) {
     companion object {
-        private fun notDesigned(title: String, symbol: String, color: Color) =
-            SearchPlace(title, symbol, color, Route.NotDesigned(title))
-
         val group = listOf(
-            notDesigned("Logging", "square.and.pencil", SearchCategoryStyle.orange),
-            notDesigned("Goals", "target", AuraColors.green),
-            notDesigned("Sessions", "clock.arrow.circlepath", AuraColors.indigo),
+            SearchPlace("Logging", "square.and.pencil", SearchCategoryStyle.orange, Route.Logging),
+            SearchPlace("Goals", "target", AuraColors.green, Route.Goals),
+            SearchPlace("Sessions", "clock.arrow.circlepath", AuraColors.indigo, Route.SessionHistory),
             SearchPlace("Modes", "bolt.circle.fill", AuraColors.red, Route.Modes),
-            notDesigned("Calorie Tracker", "fork.knife", SearchCategoryStyle.orange),
+            SearchPlace("Calorie Tracker", "fork.knife", SearchCategoryStyle.orange, Route.CalorieTracker),
         )
         val settings = SearchPlace("Settings", "gearshape.fill", SearchCategoryStyle.grey, Route.Settings)
-        val documents = notDesigned("Clinical Documents", "doc.text.fill", SearchCategoryStyle.blue)
+        val documents = SearchPlace("Clinical Documents", "doc.text.fill", SearchCategoryStyle.blue, Route.ClinicalDocuments)
         val all = group + listOf(settings, documents)
     }
 }

@@ -514,7 +514,7 @@ private fun FindATimeCheckPanel() {
             modifier = Modifier.semantics { heading() }.testTag("find-time-check"),
         )
         Text(
-            "Planning today uses this morning's Quick check, the 3-minute tap test. You can do it now, or plan without it.",
+            "Planning today uses this morning's Quick check, the 45-second tap test. You can do it now, or plan without it.",
             style = AuraType.callout,
             color = AuraColors.gray,
         )

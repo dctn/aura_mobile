@@ -34,6 +34,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
@@ -117,6 +118,8 @@ internal fun MetricBarChart(
     selectedIndex: Int?,
     onSelect: (Int) -> Unit,
     modifier: Modifier = Modifier,
+    /** The unit the page shows (km or mi...), read out after the chart's name. */
+    unit: String = "",
 ) {
     val fractions = remember(points) { MetricMaths.barFractions(points.map { it.value }) }
     val track = AuraColors.track
@@ -125,7 +128,10 @@ internal fun MetricBarChart(
         modifier
             .fillMaxWidth()
             .height(MetricChartHeight)
-            .clearAndSetSemantics { contentDescription = "$name chart" }
+            .clearAndSetSemantics {
+                contentDescription = "$name chart"
+                if (unit.isNotEmpty()) stateDescription = "Values in $unit"
+            }
             .pointerInput(fractions) {
                 detectTapGestures { tap ->
                     val total = size.width.toFloat()

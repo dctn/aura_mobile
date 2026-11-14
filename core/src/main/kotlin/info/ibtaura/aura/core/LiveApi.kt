@@ -242,8 +242,8 @@ class LiveApi(
     }
 
     override suspend fun sessionTrace(id: String): SessionTrace {
-        val trace = get(WireTrace.serializer(), ServiceName.healthData, "/v1/trends/sessions/${esc(id)}", emptyMap())
-        return SessionTrace(status = trace.status ?: "noData", stressDrop = trace.stressDrop)
+        // Session history: `model` also reads the heart-rate and stress points (SessionHistoryWire.kt).
+        return get(WireTrace.serializer(), ServiceName.healthData, "/v1/trends/sessions/${esc(id)}", emptyMap()).model
     }
 
     // MARK: Things a mode adds
@@ -290,6 +290,60 @@ class LiveApi(
         }
         post(ServiceName.task, "/v1/tasks", body)
     }
+
+    // MARK: Tasks page
+
+    override suspend fun createTask(draft: TaskDraft, id: String): TaskItem {
+        val body = JsonObject(draft.createBody() + ("id" to JsonPrimitive(id)))
+        val text = client.send(ServiceName.task, "POST", "/v1/tasks", body = body.toString())
+        return decode(WireTaskAnswer.serializer(), text).task.model
+    }
+
+    override suspend fun updateTask(id: String, version: Int?, changes: TaskChanges): TaskItem? {
+        if (changes.isEmpty) return null
+        return patchTask(id, version, changes.json())
+    }
+
+    override suspend fun completeTask(id: String): TaskCompletion {
+        val text = client.send(ServiceName.task, "POST", "/v1/tasks/${esc(id)}/complete", body = "{}")
+        val answer = decode(WireTaskAnswer.serializer(), text)
+        return TaskCompletion(task = answer.task.model, next = answer.next?.model)
+    }
+
+    override suspend fun reopenTask(id: String, version: Int?): TaskItem =
+        patchTask(id, version, TaskChanges(status = TaskStatus.pending).json())
+
+    override suspend fun deleteTask(id: String) {
+        try {
+            client.send(ServiceName.task, "DELETE", "/v1/tasks/${esc(id)}")
+        } catch (error: AuraError.Server) {
+            if (error.status != 404) throw error
+        }
+    }
+
+    /**
+     * PATCH with If-Match. Without a version, or after a 412 (someone changed it since it was read), the task is read
+     * again (GET /v1/tasks/{id}) for the current one and the change goes once more; a second 412 is thrown.
+     */
+    private suspend fun patchTask(id: String, version: Int?, body: JsonObject): TaskItem {
+        val path = "/v1/tasks/${esc(id)}"
+        var current = version ?: taskVersion(path)
+        var retried = false
+        while (true) {
+            try {
+                val text = client.send(ServiceName.task, "PATCH", path, body = body.toString(),
+                    headers = mapOf("If-Match" to "\"v$current\""))
+                return decode(WireTaskAnswer.serializer(), text).task.model
+            } catch (error: AuraError.Server) {
+                if (error.status != 412 || retried) throw error
+                retried = true
+                current = taskVersion(path)
+            }
+        }
+    }
+
+    private suspend fun taskVersion(path: String): Int =
+        get(WireTaskAnswer.serializer(), ServiceName.task, path, emptyMap()).task.version ?: throw badResponse
 
     // MARK: Consent
 
@@ -535,6 +589,122 @@ class LiveApi(
         }
         post(ServiceName.healthData, "/v1/checkins", body)
     }
+
+    // MARK: Goals
+
+    private val goals by lazy { LiveGoals(client, now) }
+
+    override suspend fun goalsProfile(): GoalsProfile = goals.profile()
+
+    override suspend fun putHealthGoals(changes: Map<String, JsonElement?>, version: Int): GoalsProfile =
+        goals.putHealthGoals(changes, version)
+
+    /**
+     * The goal columns must load; water and focus minutes are extras, null when their route fails (water logs need
+     * Health Data's /v1/logs, focus minutes Session's list).
+     */
+    override suspend fun goalProgressToday(): GoalProgress {
+        val progress = goals.metricsToday()
+        val water = try {
+            goals.waterToday()
+        } catch (error: AuraError.Server) {
+            null
+        }
+        val focus = try {
+            sessions(progress.date, progress.date).filter { it.kind == "focus" }.sumOf { it.minutes }
+        } catch (error: AuraError.Server) {
+            null
+        }
+        return progress.copy(waterMl = water, focusMinutes = focus)
+    }
+
+    override suspend fun habits(includeArchived: Boolean): List<Habit> = goals.habits(includeArchived)
+
+    override suspend fun createHabit(draft: HabitDraft): Habit = goals.createHabit(draft)
+
+    override suspend fun updateHabit(habit: Habit, to: HabitDraft): Habit = goals.updateHabit(habit, to)
+
+    override suspend fun deleteHabit(id: String) = goals.deleteHabit(id)
+
+    override suspend fun logHabit(habitId: String, date: String, count: Int, minutes: Int): HabitLogResult =
+        goals.logHabit(habitId, date, count, minutes)
+
+    override suspend fun deleteHabitLog(habitId: String, logId: String) = goals.deleteHabitLog(habitId, logId)
+
+    override suspend fun habitLogs(from: String, to: String): List<HabitLog> = goals.habitLogs(from, to)
+
+    override suspend fun habitStats(id: String): HabitStats = goals.habitStats(id)
+
+    // MARK: Settings (goals)
+
+    override suspend fun meSettings(): Map<String, JsonElement> {
+        val text = client.send(ServiceName.identity, "GET", "/v1/me")
+        val me = try {
+            wireJson.parseToJsonElement(text) as? JsonObject
+        } catch (_: Exception) {
+            null
+        } ?: throw badResponse
+        return (me["settings"] as? JsonObject)?.toMap() ?: emptyMap()
+    }
+
+    override suspend fun putMeSettings(changes: Map<String, JsonElement?>) {
+        if (changes.isEmpty()) return
+        val body = JsonObject(changes.mapValues { it.value ?: JsonNull })
+        client.send(ServiceName.identity, "PUT", "/v1/me/settings", body = body.toString())
+    }
+
+    // MARK: Session history
+
+    override suspend fun sessionPage(from: String, to: String, kind: String?, cursor: String?, limit: Int?): SessionPage {
+        val query = mutableMapOf("from" to from, "to" to to)
+        kind?.let { query["kind"] = it }
+        cursor?.takeIf { it.isNotEmpty() }?.let { query["cursor"] = it }
+        limit?.let { query["limit"] = it.coerceIn(1, 500).toString() }
+        return get(WireSessionDetailPage.serializer(), ServiceName.session, "/v1/sessions", query).model
+    }
+
+    override suspend fun session(id: String): SessionDetail {
+        val answer = get(WireSessionDetailAnswer.serializer(), ServiceName.session, "/v1/sessions/${esc(id)}", emptyMap())
+        return answer.session?.let { WireSessionDetail.model(it) } ?: throw badResponse
+    }
+
+    override suspend fun rewards(): Rewards =
+        get(WireRewards.serializer(), ServiceName.session, "/v1/rewards", emptyMap()).model
+
+    /** The body is the file itself, not JSON, so it comes back as it is. */
+    override suspend fun exportSessionsCsv(from: String, to: String): String =
+        client.send(ServiceName.session, "GET", "/v1/sessions/export",
+            query = mapOf("from" to from, "to" to to, "format" to "csv"),
+            headers = mapOf("Accept" to "text/csv"))
+
+    // MARK: Event by id
+
+    override suspend fun event(id: String): CalendarEvent? {
+        val text = try {
+            client.send(ServiceName.calendar, "GET", "/v1/calendar/events/${esc(id)}")
+        } catch (error: AuraError.Server) {
+            if (error.status == 404) return null
+            throw error
+        }
+        return decode(WireEventAnswer.serializer(), text).event.model ?: throw badResponse
+    }
+
+    // MARK: Logbook
+
+    private val logbook = LiveLogbook(client)
+
+    override suspend fun logs(from: String, to: String, type: LogType?): List<LogEntry> = logbook.logs(from, to, type)
+
+    override suspend fun addLog(type: LogType, date: String, takenAt: Instant?, data: Map<String, JsonElement>, id: String): LogEntry =
+        logbook.addLog(id, type, date, takenAt, data)
+
+    override suspend fun checkins(from: String, to: String, kind: CheckinKind?): List<Checkin> =
+        logbook.checkins(from, to, kind)
+
+    override suspend fun addCheckin(kind: CheckinKind, takenAt: Instant, answers: Map<String, JsonElement>, id: String): Checkin =
+        logbook.addCheckin(id, kind, takenAt, answers)
+
+    override suspend fun waterGoalMl(): Int? = logbook.waterGoalMl()
 
     // MARK: Helpers
 

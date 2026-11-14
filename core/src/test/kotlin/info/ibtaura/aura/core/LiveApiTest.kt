@@ -197,7 +197,7 @@ class LiveDecodingTest {
             "\"plannedFor\":\"2030-03-18\",\"scheduledAt\":null,\"completedAt\":null}],\"deleted\":[],\"cursor\":null}"
         rig.server.on("/v1/tasks", netJson(200, sample))
         val tasks = rig.api.tasks()
-        assertEquals(listOf(TaskItem("p", "For tomorrow")), tasks)
+        assertEquals(listOf(TaskItem("p", "For tomorrow", plannedFor = "2030-03-18")), tasks)
         assertNull(tasks[0].at)
     }
 
@@ -266,7 +266,7 @@ class LiveDecodingTest {
         val path = "/v1/trends/sessions/session-1"
         val ready = "{\"sessionId\":\"session-1\",\"date\":\"2025-02-01\",\"status\":\"ready\",\"hr\":[],\"stress\":[],\"avgHr\":60,\"stressDrop\":12.5}"
         rig.server.on(path, netJson(200, ready), netJson(200, "{}"))
-        assertEquals(SessionTrace("ready", 12.5), rig.api.sessionTrace("session-1"))
+        assertEquals(SessionTrace("ready", 12.5, avgHr = 60.0), rig.api.sessionTrace("session-1")) // Session history reads avgHr too
         assertEquals(SessionTrace("noData", null), rig.api.sessionTrace("session-1"))
     }
 

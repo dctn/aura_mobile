@@ -59,6 +59,13 @@ import info.ibtaura.auraclarus.design.AuraType
 import info.ibtaura.auraclarus.design.LoadingPage
 import info.ibtaura.auraclarus.design.LocalBottomInset
 import info.ibtaura.auraclarus.design.NotDesignedYet
+import info.ibtaura.auraclarus.search.ClinicalDocumentsScreen
+import info.ibtaura.auraclarus.goals.GoalsScreen
+import info.ibtaura.auraclarus.logbook.CalorieTrackerScreen
+import info.ibtaura.auraclarus.logbook.LoggingScreen
+import info.ibtaura.auraclarus.sessions.SessionDetailScreen
+import info.ibtaura.auraclarus.sessions.SessionHistoryScreen
+import info.ibtaura.auraclarus.goals.UnitsScreen
 import info.ibtaura.auraclarus.design.auraIcon
 import info.ibtaura.auraclarus.home.CalendarScreen
 import info.ibtaura.auraclarus.home.EventEditorScreen
@@ -216,6 +223,18 @@ private fun NavGraphBuilder.auraDestinations(app: AppState, nav: AuraNav) {
     composable<Route.Modes> { RecoveryScreen(app, nav, pushed = true) }
 
     composable<Route.SearchCategory> { SearchCategoryScreen(app, nav, it.toRoute()) }
+    composable<Route.ClinicalDocuments> { ClinicalDocumentsScreen(nav) }
+    composable<Route.Goals> { GoalsScreen(app, nav) }
+    composable<Route.SessionHistory> {
+        SessionHistoryScreen(app, nav, onOpenSession = { id -> nav.push(Route.SessionDetail(id)) })
+    }
+    composable<Route.SessionDetail> { SessionDetailScreen(app, nav, it.toRoute<Route.SessionDetail>().sessionId) }
+    composable<Route.Logging> { LoggingScreen(app, nav) }
+    composable<Route.CalorieTracker> { CalorieTrackerScreen(app, nav) }
+    composable<Route.Units> {
+        val r = it.toRoute<Route.Units>()
+        UnitsScreen(app, nav, r.name, r.field, r.unit, r.format)
+    }
     composable<Route.NotDesigned> { NotDesignedYet(it.toRoute<Route.NotDesigned>().title, onBack = { nav.pop() }) }
 }
 

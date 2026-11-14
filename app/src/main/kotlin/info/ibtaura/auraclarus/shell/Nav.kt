@@ -58,6 +58,18 @@ sealed interface Route {
     // Search
     /** A catalogue section; the screen finds it in `app.catalogue` (or `app.loadCatalogue()`). */
     @Serializable data class SearchCategory(val sectionId: String, val title: String) : Route
+    /** Search > Clinical Documents: an honest empty page until the backend stores documents. */
+    @Serializable data object ClinicalDocuments : Route
+    /** Search > Goals, Settings > Goals: daily goals, sleep need and habits. */
+    @Serializable data object Goals : Route
+    /** Search > Sessions: 30 days of sessions, rewards and CSV export. */
+    @Serializable data object SessionHistory : Route
+    @Serializable data class SessionDetail(val sessionId: String) : Route
+    /** Search > Logging: water, mood, check-ins and the log categories. */
+    @Serializable data object Logging : Route
+    @Serializable data object CalorieTracker : Route
+    /** Settings > Units: metric or imperial for every metric page. */
+    @Serializable data class Units(val name: String, val field: String, val unit: String, val format: String? = null) : Route
 
     /** A page the Figma doesn't have yet ("Units", "Logging", "Goals", ...). */
     @Serializable data class NotDesigned(val title: String) : Route

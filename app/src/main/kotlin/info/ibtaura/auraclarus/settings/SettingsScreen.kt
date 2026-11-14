@@ -28,6 +28,9 @@ import info.ibtaura.auraclarus.design.PillButton
 import info.ibtaura.auraclarus.design.PillStyle
 import info.ibtaura.auraclarus.design.WorkHoursRow
 import info.ibtaura.auraclarus.design.ZoneText
+import info.ibtaura.auraclarus.health.HealthSettingsSection
+import info.ibtaura.auraclarus.goals.rememberUnitSystem
+import info.ibtaura.aura.core.UnitSystem
 import info.ibtaura.auraclarus.shell.AppState
 import info.ibtaura.auraclarus.shell.AuraNav
 import info.ibtaura.auraclarus.shell.Route
@@ -73,6 +76,27 @@ fun SettingsScreen(app: AppState, nav: AuraNav) {
                 modifier = Modifier.testTag("settings-work-hours"),
             )
         }
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text("Preferences", style = AuraType.heading, color = Color.Black, modifier = Modifier.semantics { heading() })
+            WorkHoursRow(
+                title = "Goals and habits",
+                value = null,
+                onClick = { nav.push(Route.Goals) },
+                modifier = Modifier.testTag("settings-goals"),
+                symbol = "target",
+                symbolColor = AuraColors.green,
+            )
+            val units = rememberUnitSystem(app)
+            WorkHoursRow(
+                title = "Units",
+                value = if (units == UnitSystem.imperial) "Imperial (mi, lb)" else "Metric (km, kg)",
+                onClick = { nav.push(Route.Units("Distance", "distanceKm", "km")) },
+                modifier = Modifier.testTag("settings-units"),
+                symbol = "chart.line.uptrend.xyaxis",
+                symbolColor = AuraColors.gray,
+            )
+        }
+        HealthSettingsSection(app)
         AuraCard(spacing = 14.dp) {
             if (email != null) {
                 InfoRow("Account", email)
