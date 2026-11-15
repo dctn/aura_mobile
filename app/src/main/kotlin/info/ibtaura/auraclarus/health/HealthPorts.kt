@@ -145,6 +145,8 @@ internal class HealthConnectDayPort(
     }
     private var syncing = false
 
+    override fun forgetSources() = sources.clear()
+
     override suspend fun isConnected(): Boolean {
         // No debug read here: it ran on every launch and, with many reinstalls, used up Health Connect's request quota
         // so the real sync was always rate-limited. The sync logs its own counts (days read / with data / sent).

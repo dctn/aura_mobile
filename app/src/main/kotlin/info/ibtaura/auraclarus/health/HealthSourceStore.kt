@@ -98,7 +98,17 @@ internal class HealthSourceStore(
         return choices().filterKeys { it.group == group }.values.filter { it.lastSeen >= cutoff() }.maxByOrNull { it.lastSeen }?.source
     }
 
+    /** Sign-out: forgets every app choice, the user's own main apps and the apps seen, so the next account starts fresh. */
+    @Synchronized
+    fun clear() {
+        val edit = prefs.edit()
+        prefs.all.keys.filter { it.startsWith(SOURCE_PREFIX) }.forEach(edit::remove)
+        edit.apply()
+    }
+
     private companion object {
+        /** Every key above starts with this, and no other `aura_health` key does. */
+        const val SOURCE_PREFIX = "source-"
         const val CHOICE = "source-choice-"
         const val OVERRIDE = "source-override-"
         const val SEEN = "source-seen-"

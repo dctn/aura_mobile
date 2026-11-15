@@ -275,6 +275,8 @@ class AppState(
         // The next account mustn't get this account's sleep, nor skip its own check-in.
         clearDayFlags()
         healthConnected = false
+        // Nor this account's Health Connect app choices (package names only, but the Settings pick is the user's).
+        runCatching { health?.forgetSources() }
         // The next account checks its own sleep source and sends its own past nights.
         onboarded = false
         forgetSentNights()

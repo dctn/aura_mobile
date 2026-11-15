@@ -69,4 +69,7 @@ interface HealthPort {
 
     /** Sends the days not yet sent. Throws AuraError on a backend failure; AppState notes it. */
     suspend fun syncRecentDays()
+
+    /** Sign-out: forgets which app each metric comes from (and the user's own picks), so the next account starts fresh. */
+    fun forgetSources() {}
 }
