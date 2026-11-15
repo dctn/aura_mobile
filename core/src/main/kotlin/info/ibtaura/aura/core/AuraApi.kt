@@ -114,6 +114,8 @@ interface AuraApi {
     suspend fun setDifficulty(sessionId: String, difficulty: Difficulty): SessionRecord
     /** The Capacity ledger's line for a session today ("... You rated it Hard."), or null when it isn't charged yet. */
     suspend fun capacityLine(sessionId: String): String?
+    /** Today's morning score: whether it is an estimate, and how many nights it has. Null when none exists yet. */
+    suspend fun morningOpening(): MorningOpening?
     /** Sessions from `from` to `to` (DayKeys), newest first. */
     suspend fun sessions(from: String, to: String): List<SessionRecord>
     /** Records a break taken earlier (POST /v1/sessions/log). Resending the same id is safe. */

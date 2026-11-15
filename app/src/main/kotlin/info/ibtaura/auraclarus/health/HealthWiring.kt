@@ -5,6 +5,8 @@ import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import info.ibtaura.aura.core.HealthSources
+import info.ibtaura.aura.core.HealthStoreStatus
 import info.ibtaura.auraclarus.shell.AppState
 import info.ibtaura.auraclarus.shell.HealthPort
 import info.ibtaura.auraclarus.shell.LaunchFlags
@@ -17,7 +19,14 @@ enum class HealthAvailability {
     /** Not installed, or too old: offer a quiet "Install Health Connect". */
     NeedsInstall,
     /** This phone can't run it: offer nothing. */
-    Unavailable,
+    Unavailable;
+
+    val storeStatus: HealthStoreStatus
+        get() = when (this) {
+            Available -> HealthStoreStatus.available
+            NeedsInstall -> HealthStoreStatus.needsInstall
+            Unavailable -> HealthStoreStatus.unavailable
+        }
 }
 
 /**
@@ -25,13 +34,20 @@ enum class HealthAvailability {
  * `StubSleepSource(hasNight:)`).
  */
 fun makeSleepPort(context: Context, flags: LaunchFlags): SleepPort? {
-    if (flags.isUiTesting) return HealthStubSleepPort(hasNight = flags.healthNight)
+    if (flags.isUiTesting) return HealthStubSleepPort(hasNight = flags.healthNight, granted = !flags.onboarding)
     // Sample mode never touches Health Connect: a made-up night, sent to the in-memory backend.
     if (flags.isSample) return HealthStubSleepPort(hasNight = true)
     val application = context.applicationContext as? Application ?: return null
     val debuggable = (application.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
-    return HealthConnectSleepPort(sharedReader(application), sharedAsker(application), debuggable)
+    return HealthConnectSleepPort(
+        sharedReader(application), sharedAsker(application), debuggable, HealthSourceStore(application),
+        installed = { installedHealthApps(application) },
+    )
 }
+
+/** The installed apps among `HealthSources.known`; the manifest's `<queries>` lists them so they are visible. */
+internal fun installedHealthApps(context: Context): Set<String> =
+    HealthSources.known.filter { context.packageManager.getLaunchIntentForPackage(it) != null }.toSet()
 
 /** Health Connect day sync; a stub that sends one stub day in UI tests. */
 fun makeHealthPort(context: Context, app: AppState): HealthPort? {

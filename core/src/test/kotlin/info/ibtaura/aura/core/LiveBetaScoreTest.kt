@@ -166,6 +166,28 @@ class LiveBetaCapacityTest {
     }
 
     @Test
+    fun morningOpeningReadsTheEstimateAndLastNight() = runBlocking<Unit> {
+        val rig = NetRig()
+        val answer = "{\"date\":\"2030-03-17\",\"ledger\":[],\"current\":66.5,\"opening\":{\"value\":70,\"confidence\":0.3,\"coverage\":0.5," +
+            "\"baselineDays\":3,\"estimated\":true,\"withQuickCheck\":false,\"drivers\":[" +
+            "{\"input\":\"sleepDebt\",\"present\":false},{\"input\":\"totalSleep\",\"present\":true}]," +
+            "\"reason\":\"Only a few nights so far.\"}}"
+        rig.server.on("/v1/capacity/today", netJson(200, answer))
+        assertEquals(
+            MorningOpening(estimated = true, baselineDays = 3, lastNight = true, reason = "Only a few nights so far.", score = 70.0, current = 66.5),
+            rig.api.morningOpening(),
+        )
+        assertEquals(DayKey.string(NetRig.now), rig.server.calls("/v1/capacity/today").first().query["date"])
+    }
+
+    @Test
+    fun morningOpeningMissingIsNull() = runBlocking<Unit> {
+        val rig = NetRig()
+        rig.server.on("/v1/capacity/today", netJson(200, "{\"date\":\"2030-03-17\",\"ledger\":[]}"))
+        assertNull(rig.api.morningOpening())
+    }
+
+    @Test
     fun recoveryOptionsDecodeWithHints() = runBlocking<Unit> {
         val rig = NetRig()
         rig.server.on("/v1/capacity/recovery-options", netJson(200, recoveryOptionsAnswer))

@@ -9,6 +9,7 @@
   "services": {
     "identity": "https://z4gym50rj6.execute-api.us-west-1.amazonaws.com",
     "health-data": "https://zi1gzljvyi.execute-api.us-west-1.amazonaws.com",
+    "apple-health-data": "https://3g6z31d0r6.execute-api.us-west-1.amazonaws.com",
     "notification": "https://3cg0pfx707.execute-api.us-west-1.amazonaws.com",
     "calendar": "https://aob7sn3p56.execute-api.us-west-1.amazonaws.com",
     "capacity": "https://1yahj6uq14.execute-api.us-west-1.amazonaws.com",

@@ -25,6 +25,10 @@ data class LaunchFlags(val raw: Set<String> = emptySet()) {
     val healthNight: Boolean get() = has(HEALTH_NIGHT)
     /** `--uitesting-checkin`: the morning check-in shows on Home. Other walks start with it already sent. */
     val checkin: Boolean get() = has(CHECKIN)
+    /** `--uitesting-onboarding`: the sleep-source onboarding gate shows (other walks start past it). */
+    val onboarding: Boolean get() = has(ONBOARDING)
+    /** `--uitesting-collecting`: today's morning score is an estimate with no nights yet, so Home shows the banner. */
+    val collecting: Boolean get() = has(COLLECTING)
     /** `--sample-data`: set by Settings' "Use sample data" switch (debug builds), never by tests. Made-up data, offline. */
     val isSample: Boolean get() = has(SAMPLE)
 
@@ -41,6 +45,8 @@ data class LaunchFlags(val raw: Set<String> = emptySet()) {
         const val SHORT_CHECK = "--uitesting-short-check"
         const val HEALTH_NIGHT = "--uitesting-health-night"
         const val CHECKIN = "--uitesting-checkin"
+        const val ONBOARDING = "--uitesting-onboarding"
+        const val COLLECTING = "--uitesting-collecting"
         const val SAMPLE = "--sample-data"
 
         fun parse(text: String?): LaunchFlags =

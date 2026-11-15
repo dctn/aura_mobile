@@ -11,16 +11,26 @@ import info.ibtaura.aura.core.AuthService
 import info.ibtaura.aura.core.AuthState
 import info.ibtaura.aura.core.CalendarEvent
 import info.ibtaura.aura.core.CatalogueSection
+import info.ibtaura.aura.core.CollectingCopy
 import info.ibtaura.aura.core.DayKey
 import info.ibtaura.aura.core.FieldAvailability
+import info.ibtaura.aura.core.HealthSources
+import info.ibtaura.aura.core.HealthStoreStatus
 import info.ibtaura.aura.core.MetricMaths
 import info.ibtaura.aura.core.Mode
+import info.ibtaura.aura.core.MorningOpening
 import info.ibtaura.aura.core.RecoveryType
+import info.ibtaura.aura.core.SleepHistory
+import info.ibtaura.aura.core.SleepNight
+import info.ibtaura.aura.core.SleepSourceBlock
+import info.ibtaura.aura.core.SleepSourceCheck
+import info.ibtaura.aura.core.SleepSourceState
 import info.ibtaura.aura.core.WorkSchedule
 import info.ibtaura.auraclarus.home.EventDays
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
@@ -138,6 +148,38 @@ class AppState(
             prefs.putBoolean(HEALTH_KEY, value)
         }
 
+    // MARK: Onboarding (Android): a sleep data source is required to use the app
+
+    private var onboardedState by mutableStateOf(false)
+
+    /** True once onboarding found a sleep source on this phone (past nights, or a sleep app collecting). Saved. */
+    var onboarded: Boolean
+        get() = onboardedState
+        private set(value) {
+            onboardedState = value
+            prefs.putBoolean(ONBOARDED_KEY, value)
+        }
+
+    /** The onboarding gate applies to real use, and to UI tests only with `--uitesting-onboarding`. Never sample mode. */
+    private val gateOn: Boolean get() = !flags.isSample && (!flags.isUiTesting || flags.onboarding)
+
+    /** True while the signed-in user must pass the sleep-source screen before the tabs. */
+    val needsOnboarding: Boolean get() = gateOn && !onboarded
+
+    /** What the last onboarding check found. Checking before the first check and while one runs. */
+    var sleepSource by mutableStateOf<SleepSourceState>(SleepSourceState.Checking)
+        private set
+
+    /** A failed onboarding send ("Couldn't send your nights"), shown with Try again; null when none. */
+    var sleepSourceError by mutableStateOf<String?>(null)
+        private set
+
+    private var checkingSource = false
+
+    /** Today's morning score's estimate parts, for the Home banner. `loadMorningOpening()` fills it. */
+    var morningOpening by mutableStateOf<MorningOpening?>(null)
+        private set
+
     /** Last night went to the backend from Health Connect today, so the check-in doesn't ask for sleep times. */
     var sleepSentToday by mutableStateOf(false)
         private set
@@ -193,6 +235,9 @@ class AppState(
                 .onSuccess { pinsState = it }
         }
         healthConnectedState = prefs.getBoolean(HEALTH_KEY)
+        // Each onboarding walk starts at the gate.
+        if (flags.isUiTesting) prefs.remove(ONBOARDED_KEY)
+        onboardedState = prefs.getBoolean(ONBOARDED_KEY)
         refreshDayFlags()
     }
 
@@ -230,6 +275,14 @@ class AppState(
         // The next account mustn't get this account's sleep, nor skip its own check-in.
         clearDayFlags()
         healthConnected = false
+        // The next account checks its own sleep source and sends its own past nights.
+        onboarded = false
+        forgetSentNights()
+        prefs.remove(SOURCE_APP_KEY)
+        prefs.remove(ONBOARDED_DAY_KEY)
+        sleepSource = SleepSourceState.Checking
+        sleepSourceError = null
+        morningOpening = null
         refreshDayFlags()
         authState = AuthState.SignedOut
     }
@@ -297,6 +350,12 @@ class AppState(
         prefs.remove(HEALTH_KEY)
     }
 
+    /** Drops the "sent" marks of the nights onboarding could have sent (and the missed-night count reads). */
+    private fun forgetSentNights() {
+        val day = LocalDate.parse(today())
+        for (back in 0L..SENT_MARKS_DAYS) prefs.remove(sleepSentKey(day.minusDays(back).toString()))
+    }
+
     fun markMorningCheckinSent() {
         prefs.putBoolean(checkinKey(today()), true)
         morningCheckinSent = true
@@ -339,6 +398,151 @@ class AppState(
         } finally {
             syncingSleep = false
         }
+    }
+
+    /**
+     * Onboarding's check (a tap, or the screen opening; the app is in front): Health Connect, the sleep permission,
+     * then one read of the last 15 nights, then the decision. Past nights go to the backend oldest first (regularity
+     * is worked out from the nights already stored), last night last. Ready or collecting lets the user in.
+     */
+    suspend fun runSleepSourceCheck() {
+        if (checkingSource) return
+        checkingSource = true
+        sleepSource = SleepSourceState.Checking
+        sleepSourceError = null
+        try {
+            val source = sleep
+            if (source == null) {
+                sleepSource = SleepSourceState.Blocked(SleepSourceBlock.noHealthConnect)
+                return
+            }
+            val store = source.storeStatus()
+            val granted = store == HealthStoreStatus.available && source.sleepGranted()
+            val history = if (granted) readHistory(source) else SleepHistory(emptyList(), null)
+            val state = SleepSourceCheck.decide(store, granted, history.nights.size, history.source, source.installedApps())
+            if (state is SleepSourceState.Ready && !sendNights(history.nights)) {
+                sleepSource = state
+                return
+            }
+            if (state.canUseApp) enter(state)
+            sleepSource = state
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            note(e)
+            sleepSource = SleepSourceState.Blocked(SleepSourceBlock.notConnected)
+        } finally {
+            checkingSource = false
+        }
+    }
+
+    /** A failed read (quota) counts as no nights: a sleep app still lets the user in, collecting. */
+    private suspend fun readHistory(source: SleepPort): SleepHistory = try {
+        source.history(SleepSourceCheck.HISTORY_NIGHTS)
+    } catch (e: CancellationException) {
+        throw e
+    } catch (_: Throwable) {
+        SleepHistory(emptyList(), null)
+    }
+
+    private fun enter(state: SleepSourceState) {
+        val app = (state as? SleepSourceState.Ready)?.source ?: (state as? SleepSourceState.Collecting)?.app
+        if (app != null) prefs.putString(SOURCE_APP_KEY, app) else prefs.remove(SOURCE_APP_KEY)
+        if (prefs.getString(ONBOARDED_DAY_KEY) == null) prefs.putString(ONBOARDED_DAY_KEY, today())
+        healthConnected = true
+        onboarded = true
+        // Home loads the score when it opens. Past nights reach it a few seconds later (the backend re-counts the
+        // days after them), so after a backfill read it once more.
+        if (state is SleepSourceState.Ready) {
+            launch {
+                delay(OPENING_RELOAD_MS)
+                loadMorningOpening()
+            }
+        }
+    }
+
+    /** Onboarding's Connect: asks Health Connect for sleep, then checks again. A refusal shows on the screen. */
+    suspend fun connectSleepSource() {
+        val source = sleep ?: return
+        try {
+            source.requestAccess()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Throwable) {
+            // Refused or couldn't ask: the check below shows "Connect" again.
+        }
+        runSleepSourceCheck()
+    }
+
+    /**
+     * Sends the nights not yet sent from this phone, oldest first, marking each day sent. False (with
+     * `sleepSourceError`) when one fails.
+     */
+    private suspend fun sendNights(nights: List<SleepNight>): Boolean {
+        val unsent = nights.filter { !prefs.getBoolean(sleepSentKey(it.date)) }
+        for (night in unsent.sortedBy { it.date }) {
+            try {
+                api.putSleepNight(night)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                note(e)
+                sleepSourceError = if (e == AuraError.ConsentRequired) {
+                    "Allow Aura to use your health data, then try again."
+                } else {
+                    "Couldn't send your nights. Check your connection and try again."
+                }
+                return false
+            }
+            prefs.putBoolean(sleepSentKey(night.date), true)
+        }
+        refreshDayFlags()
+        return true
+    }
+
+    /**
+     * On each resume once past onboarding: Health Connect still there and sleep still allowed (no data read). If not,
+     * the gate comes back with the reason.
+     */
+    suspend fun recheckSleepSource() {
+        if (!gateOn || !onboarded || checkingSource) return
+        val source = sleep ?: return
+        val store = source.storeStatus()
+        val granted = store == HealthStoreStatus.available && runCatching { source.sleepGranted() }.getOrDefault(true)
+        if (granted) return
+        sleepSource = SleepSourceCheck.decide(store, false, 0, null, emptySet())
+        onboarded = false
+    }
+
+    /** Reads today's opening for the Home banner. A failure keeps the last one (no banner beats a wrong one). */
+    suspend fun loadMorningOpening() {
+        if (authState !is AuthState.SignedIn) return
+        try {
+            morningOpening = api.morningOpening()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Throwable) {
+            // Not a reason to bother the user: the banner just doesn't change.
+        }
+    }
+
+    /** The sleep app onboarding found (a package name), for "Open <app>"; null when none. */
+    val sleepSourceApp: String? get() = prefs.getString(SOURCE_APP_KEY)
+
+    /** Home's banner while the morning score is an estimate; null when it isn't (or nothing is loaded yet). */
+    val collectingBanner: CollectingCopy.Banner?
+        get() = CollectingCopy.banner(morningOpening, sleepSourceApp?.let { HealthSources.name(it) }, missedNights())
+
+    /** Nights in a row, back from today, with no sleep sent, counting only since onboarding. */
+    private fun missedNights(): Int {
+        val since = prefs.getString(ONBOARDED_DAY_KEY)?.let { runCatching { LocalDate.parse(it) }.getOrNull() } ?: return 0
+        var day = LocalDate.parse(today())
+        var missed = 0
+        while (!day.isBefore(since) && !prefs.getBoolean(sleepSentKey(day.toString())) && missed < 30) {
+            missed += 1
+            day = day.minusDays(1)
+        }
+        return missed
     }
 
     /** Sends Health Connect days when connected (Android only). Runs with `syncSleepIfNeeded`. */
@@ -495,6 +699,11 @@ class AppState(
     companion object {
         private const val PINS_KEY = "pinnedMetrics"
         private const val HEALTH_KEY = "healthConnected"
+        private const val ONBOARDED_KEY = "onboarded"
+        private const val OPENING_RELOAD_MS = 8_000L
+        private const val SENT_MARKS_DAYS = 45L
+        private const val ONBOARDED_DAY_KEY = "onboardedDay"
+        private const val SOURCE_APP_KEY = "sleepSourceApp"
         private const val PREFETCH_GAP_MS = 60_000L
         private val json = Json { ignoreUnknownKeys = true }
 

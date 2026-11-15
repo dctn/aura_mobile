@@ -2,6 +2,8 @@ package info.ibtaura.auraclarus.shell
 
 import info.ibtaura.aura.core.Mode
 import info.ibtaura.aura.core.RecoveryType
+import info.ibtaura.aura.core.HealthStoreStatus
+import info.ibtaura.aura.core.SleepHistory
 import info.ibtaura.aura.core.SleepNight
 import java.time.Instant
 
@@ -46,6 +48,18 @@ interface SleepPort {
      * builder), or null when there isn't one.
      */
     suspend fun lastNight(from: Instant, to: Instant): SleepNight?
+
+    /** Onboarding: whether Health Connect is on this phone, installable, or not possible. */
+    fun storeStatus(): HealthStoreStatus
+
+    /** True when Aura may read sleep. A permission check only, never a data read, so it is safe on every resume. */
+    suspend fun sleepGranted(): Boolean
+
+    /** Onboarding only, after a tap with the app in front: the nights of the last `nights` days, oldest first. */
+    suspend fun history(nights: Int): SleepHistory
+
+    /** The installed apps among `HealthSources.known` (package names). */
+    fun installedApps(): Set<String>
 }
 
 /** Health Connect day data (steps, heart rate, workouts) sent to `putHealthDays`. Implemented in `health/`. */

@@ -47,6 +47,7 @@ import info.ibtaura.auraclarus.design.symbol
 import info.ibtaura.auraclarus.shell.AppState
 import info.ibtaura.auraclarus.shell.CacheKeys
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.time.Instant
 import kotlin.math.roundToInt
@@ -82,11 +83,27 @@ internal fun HomeTodaySection(app: AppState, onStart: (modeId: String, headline:
         }
     }
 
+    // One GET for the estimate banner and the rings' live score; again after last night is sent and on every reload.
+    LaunchedEffect(app.dataVersion, app.sleepSentToday) { app.loadMorningOpening() }
+    // A session that ends is charged by Capacity a few seconds later (from its "ended" event): read the score again.
+    val running = app.run?.showsMiniBar == true
+    var sawRun by remember { mutableStateOf(false) }
+    LaunchedEffect(running) {
+        if (running) {
+            sawRun = true
+        } else if (sawRun) {
+            sawRun = false
+            delay(SESSION_CHARGE_WAIT_MS)
+            app.loadMorningOpening()
+        }
+    }
+
     val today = DayKey.string(Instant.now())
     val openAlerts = alerts.filter { !it.done && it.id !in handled && it.date.startsWith(today) }
 
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(18.dp)) {
         SectionTitle("Today")
+        CollectingBanner(app)
         if (checkinSentHere || !app.morningCheckinSent) {
             MorningCheckinCard(app, onSent = { checkinSentHere = true })
         }
@@ -230,3 +247,6 @@ private fun HomeMoodCard(app: AppState) {
         }
     }
 }
+
+/** How long Home waits after a session ends before reading the score that includes its cost. */
+private const val SESSION_CHARGE_WAIT_MS = 6_000L

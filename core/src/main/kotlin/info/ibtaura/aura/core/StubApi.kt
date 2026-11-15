@@ -39,6 +39,9 @@ class StubApi(
     private val sample: Boolean = false,
     /** Capacity score for a day; null keeps the fixed `zoneScore` (72). Used by dayZones and allocate. */
     private val zoneScoreFor: ((java.time.LocalDate) -> Int)? = null,
+    /** Today's opening; the default is a full one (not an estimate). UI tests set a collecting one. */
+    private val opening: MorningOpening? =
+        MorningOpening(estimated = false, baselineDays = 14, lastNight = true, score = 82.0, current = 76.0),
 ) : AuraApi {
     /** Swift's actor/lock: every piece of state below is read and written under it. */
     private val mutex = Mutex()
@@ -570,6 +573,8 @@ class StubApi(
             rated
         }
     }
+
+    override suspend fun morningOpening(): MorningOpening? = opening
 
     /** Capacity's wording for a rated or unrated focus session; null for any other. */
     override suspend fun capacityLine(sessionId: String): String? = mutex.withLock {

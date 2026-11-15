@@ -742,7 +742,7 @@ data class SleepSchedule(val bedtime: String, val wakeTime: String)
  * LIGHT -> `asleepCore`, DEEP -> `asleepDeep`, REM -> `asleepREM`, SLEEPING and UNKNOWN -> `asleepUnspecified`,
  * AWAKE, AWAKE_IN_BED and OUT_OF_BED -> `awake`.
  */
-data class SleepSample(val start: Instant, val end: Instant, val kind: Kind) {
+data class SleepSample(val start: Instant, val end: Instant, val kind: Kind, val source: String = "") {
     enum class Kind(val raw: String) {
         inBed("inBed"), asleepCore("asleepCore"), asleepDeep("asleepDeep"), asleepREM("asleepREM"),
         asleepUnspecified("asleepUnspecified"), awake("awake");
@@ -771,6 +771,22 @@ data class SleepNight(
     val totalSleepMin: Int,
     val awakeMin: Int? = null,
     val inBedMin: Int? = null,
+)
+
+/** GET /v1/capacity/today's opening: the parts the collecting banner reads. */
+data class MorningOpening(
+    /** True while the morning score is an estimate (no last night, or too few nights yet). */
+    val estimated: Boolean,
+    /** Nights stored in the 14 dates before last night. */
+    val baselineDays: Int,
+    /** True when last night's sleep is in the score. */
+    val lastNight: Boolean,
+    /** Capacity's "This is an estimate. <reason>" sentence; null when the opening is not an estimate. */
+    val reason: String? = null,
+    /** This morning's capacity score (100 is the person's normal); null when Capacity sent none. */
+    val score: Double? = null,
+    /** The score now, after the day's costs and give-backs; null when Capacity sent none. */
+    val current: Double? = null,
 )
 
 data class SleepNightResult(

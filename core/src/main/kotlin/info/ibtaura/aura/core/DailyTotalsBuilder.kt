@@ -8,8 +8,8 @@ import java.time.ZoneId
 
 // Android only, no iOS equivalent: one Health Connect day for PUT /v1/health/days/{date}.
 
-/** One timed value from Health Connect (a resting heart rate, a weight, ...). */
-data class HealthReading(val at: Instant, val value: Double)
+/** One timed value from Health Connect (a resting heart rate, a weight, ...); `source` is the app that wrote it. */
+data class HealthReading(val at: Instant, val value: Double, val source: String = "")
 
 /** A stretch of time, e.g. one mindfulness session. */
 data class HealthSpan(val start: Instant, val end: Instant)

@@ -82,6 +82,7 @@ import info.ibtaura.auraclarus.home.TasksScreen
 import info.ibtaura.auraclarus.metric.MetricScreen
 import info.ibtaura.auraclarus.metric.RecordedScreen
 import info.ibtaura.auraclarus.metric.SourcesScreen
+import info.ibtaura.auraclarus.onboarding.SleepSourceScreen
 import info.ibtaura.auraclarus.recovery.ModeDetailScreen
 import info.ibtaura.auraclarus.recovery.RecoveryScreen
 import info.ibtaura.auraclarus.run.MiniRunBar
@@ -98,10 +99,15 @@ import info.ibtaura.auraclarus.signin.SignInScreen
 fun RootScreen(app: AppState) {
     LaunchedEffect(Unit) { app.restore() }
     val auth = app.authState
+    val onboarding = app.needsOnboarding
     LaunchedEffect(auth) {
         // A restored session or a new sign-in: wake the backend while Home's first calls go out.
         app.warmUp()
         app.sendTimeZoneIfNeeded()
+    }
+    // No Health Connect reads before onboarding is passed; passing it starts the first sync.
+    LaunchedEffect(auth, onboarding) {
+        if (onboarding) return@LaunchedEffect
         app.syncSleepIfNeeded()
         app.syncHealthIfNeeded()
     }
@@ -110,15 +116,21 @@ fun RootScreen(app: AppState) {
         app.reloadIfNewDay()
         // Connections and cold functions go idle in the background; does nothing until signed in.
         app.warmUp()
-        app.launch {
-            app.syncSleepIfNeeded()
-            app.syncHealthIfNeeded()
+        if (app.authState is AuthState.SignedIn) {
+            app.launch {
+                // Health Connect removed or sleep no longer allowed: the onboarding gate comes back.
+                app.recheckSleepSource()
+                if (!app.needsOnboarding) {
+                    app.syncSleepIfNeeded()
+                    app.syncHealthIfNeeded()
+                }
+            }
         }
     }
     when (auth) {
         null -> LoadingPage()
         AuthState.SignedOut -> SignInScreen(app)
-        is AuthState.SignedIn -> MainTabs(app)
+        is AuthState.SignedIn -> if (onboarding) SleepSourceScreen(app) else MainTabs(app)
     }
 }
 

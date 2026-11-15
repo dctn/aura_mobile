@@ -10,7 +10,14 @@ import info.ibtaura.aura.core.DailyHealthInput
 import info.ibtaura.aura.core.DailyTotalsBuilder
 import info.ibtaura.aura.core.DayKey
 import info.ibtaura.aura.core.HealthDay
+import info.ibtaura.aura.core.HealthMetric
 import info.ibtaura.aura.core.HealthMetrics
+import info.ibtaura.aura.core.HealthSourceGroup
+import info.ibtaura.aura.core.HealthSourcePicker
+import info.ibtaura.aura.core.HealthSources
+import info.ibtaura.aura.core.HealthStoreStatus
+import info.ibtaura.aura.core.SleepHistory
+import info.ibtaura.aura.core.SleepHistoryBuilder
 import info.ibtaura.aura.core.SleepNight
 import info.ibtaura.aura.core.SleepNightBuilder
 import info.ibtaura.aura.core.SleepSample
@@ -36,7 +43,34 @@ internal class HealthConnectSleepPort(
     private val reader: HealthConnectReader,
     private val asker: HealthPermissionAsker,
     private val debuggable: Boolean = false,
+    /** Which app the night comes from when several wrote it; null keeps every app's samples (merged by time). */
+    private val sources: HealthSourceStore? = null,
+    /** The installed apps among `HealthSources.known`. */
+    private val installed: () -> Set<String> = { emptySet() },
 ) : HealthSleepSource {
+
+    override fun storeStatus(): HealthStoreStatus = availability().storeStatus
+
+    override suspend fun sleepGranted(): Boolean =
+        reader.isAvailable && HealthConnectReader.SLEEP in reader.grantedPermissions()
+
+    override fun installedApps(): Set<String> = installed()
+
+    /**
+     * One read of every sleep session from `nights` days ago to now, for onboarding (a tap, app in front). Each night
+     * keeps one app, as last night does. Counts and package names only in the log.
+     */
+    override suspend fun history(nights: Int): SleepHistory {
+        if (!sleepGranted()) return SleepHistory(emptyList(), null)
+        val now = Instant.now()
+        val from = LocalDate.now(DayKey.zone).minusDays(nights.toLong()).atTime(18, 0).atZone(DayKey.zone).toInstant()
+        val all = reader.sleepSamples(from, now)
+        val history = SleepHistoryBuilder.build(
+            all, DayKey.zone, sources?.choices()?.get(HealthMetric.sleep), sources?.overrides()?.get(HealthSourceGroup.sleep),
+        )
+        if (debuggable) Log.i("AuraHealth", "history samples=${all.size} nights=${history.nights.size} from=${history.source}")
+        return history
+    }
 
     override fun availability(): HealthAvailability = when (reader.sdkStatus()) {
         HealthConnectClient.SDK_AVAILABLE -> HealthAvailability.Available
@@ -59,21 +93,32 @@ internal class HealthConnectSleepPort(
         val now = Instant.now()
         if (now.isBefore(nextTry)) return null
         if (!reader.isAvailable) return null
+        val previous = nextTry
         nextTry = now.plusSeconds(15 * 60)
         try {
             if (HealthConnectReader.SLEEP !in reader.grantedPermissions()) {
                 if (debuggable) Log.i("AuraHealth", "sleep: permission not granted")
                 return null
             }
-            val samples = reader.sleepSamples(from, to)
+            val all = reader.sleepSamples(from, to)
+            // One app's night only, the same app the day sync keeps for sleep.
+            val samples = sources?.let {
+                HealthSourcePicker.nightSamples(all, it.choices()[HealthMetric.sleep], it.overrides()[HealthSourceGroup.sleep])
+            } ?: all
             val night = SleepNightBuilder.build(samples, DayKey.zone)
-            if (debuggable) Log.i("AuraHealth", "sleep: samples=${samples.size} night=${night != null}")
+            if (debuggable) {
+                val apps = samples.map { it.source }.distinct()
+                Log.i("AuraHealth", "sleep: samples=${samples.size}/${all.size} from=$apps night=${night != null}")
+            }
             return night
         } catch (e: CancellationException) {
+            // A read cut short (e.g. the launch effect restarting as sign-in settles) didn't look, so it mustn't
+            // start the 15-minute wait: the next call reads straight away.
+            nextTry = previous
             throw e
         } catch (e: Throwable) {
             if (isRateLimit(e)) nextTry = now.plusSeconds(60 * 60)
-            if (debuggable) Log.i("AuraHealth", "sleep read failed: ${e.javaClass.simpleName}${if (isRateLimit(e)) " (rate limited)" else ""}")
+            if (debuggable) Log.i("AuraHealth", "sleep read failed: ${e.javaClass.simpleName}: ${e.message?.take(160)}${if (isRateLimit(e)) " (rate limited)" else ""}")
             throw e
         }
     }
@@ -90,6 +135,8 @@ internal class HealthConnectDayPort(
     private val reader: HealthConnectReader,
 ) : HealthPort {
     private val prefs = context.getSharedPreferences("aura_health", Context.MODE_PRIVATE)
+    /** Which app each metric comes from (HealthSourcePicker's choices and the user's own from Settings). */
+    val sources = HealthSourceStore(prefs)
     private val debuggable = (context.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
 
     /** Debug builds only, and never a health value: counts, source apps and why a sync stopped. */
@@ -146,8 +193,13 @@ internal class HealthConnectDayPort(
                 retryAfter(if (limited) RATE_LIMIT_WAIT else FAILURE_WAIT, if (limited) WAIT_RATE_LIMIT else WAIT_FAILURE)
                 return
             }
-            val toSend = inputs.map { DailyTotalsBuilder.build(it) }.filter { it.hasData() }
+            // One app per metric: the same HRV or night from two apps would be averaged or sent twice.
+            val picked = HealthSourcePicker.pickDays(inputs, sources.choices(), sources.overrides())
+            val toSend = picked.inputs.map { DailyTotalsBuilder.build(it) }.filter { it.hasData() }
             debugLog("days read=${inputs.size} withData=${toSend.size} covered=$covered->$chunkEnd")
+            debugLog("sources " + picked.choices.entries.joinToString { "${it.key.raw}=${it.value.source}" } +
+                " seen=" + picked.seen.entries.joinToString { "${it.key.raw}:${it.value.size}" } +
+                " totalsFrom=" + inputs.flatMap { it.sources }.distinct())
             if (toSend.isNotEmpty()) {
                 try {
                     app.api.putHealthDays(toSend)
@@ -162,6 +214,12 @@ internal class HealthConnectDayPort(
                 }
             }
             debugLog("days sent=${toSend.size}")
+            // Names only, never a value: which kinds of data each sent day carried.
+            toSend.forEach { d -> debugLog("sent ${d.date} metrics=${metricNames(d.metrics)} workouts=${d.workouts.size}") }
+            sources.save(picked)
+            // The reader lists the totals' (and mindful) apps per day before picking; Settings shows them.
+            sources.saveTotals(inputs.flatMap { i -> i.sources.filter { it.isNotBlank() }.map { it to i.day } }
+                .groupBy({ it.first }, { it.second }).mapValues { (_, days) -> days.max() })
             prefs.edit()
                 .putInt("$account-covered", maxOf(chunkEnd, 1))
                 .putLong("$account-retryAt", now.toEpochMilli() + FAILURE_WAIT * 1000)
@@ -241,6 +299,11 @@ internal data class HealthSyncStatus(
 internal fun isRateLimit(e: Throwable): Boolean =
     generateSequence(e) { it.cause }.take(4).any { it.message?.contains("rate limit", ignoreCase = true) == true }
 
+/** The metric names that have a value (debug logs; the data class's own toString, names kept, values dropped). */
+internal fun metricNames(m: HealthMetrics): List<String> =
+    m.toString().substringAfter('(').substringBeforeLast(')').split(", ")
+        .filterNot { it.endsWith("=null") }.map { it.substringBefore('=') }.filter { it.isNotBlank() }
+
 /** True when the day has any metric or workout; empty days aren't sent. */
 internal fun HealthDay.hasData(): Boolean = workouts.isNotEmpty() || metrics != HealthMetrics()
 
@@ -248,10 +311,28 @@ internal fun HealthDay.hasData(): Boolean = workouts.isNotEmpty() || metrics != 
  * UI tests (iOS `StubSleepSource`): with `--uitesting-health-night` last night is 23:20 to 06:50 with a 10 minute
  * wake, else there's nothing. Always available, and asking always succeeds.
  */
-internal class HealthStubSleepPort(private val hasNight: Boolean) : HealthSleepSource {
+internal class HealthStubSleepPort(
+    private val hasNight: Boolean,
+    /** False until `requestAccess`, for the onboarding walk; true everywhere else. */
+    private var granted: Boolean = true,
+) : HealthSleepSource {
     override fun availability(): HealthAvailability = HealthAvailability.Available
 
-    override suspend fun requestAccess() {}
+    override suspend fun requestAccess() {
+        granted = true
+    }
+
+    override fun storeStatus(): HealthStoreStatus = HealthStoreStatus.available
+
+    override suspend fun sleepGranted(): Boolean = granted
+
+    /** With a night: the stub night, from Samsung Health. Without: none, so onboarding is collecting. */
+    override suspend fun history(nights: Int): SleepHistory {
+        val night = lastNight(Instant.EPOCH, Instant.now()) ?: return SleepHistory(emptyList(), null)
+        return SleepHistory(listOf(night), HealthSources.SAMSUNG)
+    }
+
+    override fun installedApps(): Set<String> = setOf(HealthSources.SAMSUNG)
 
     override suspend fun lastNight(from: Instant, to: Instant): SleepNight? {
         if (!hasNight) return null

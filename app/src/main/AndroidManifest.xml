@@ -22,6 +22,21 @@
 
     <queries>
         <package android:name="com.google.android.apps.healthdata" />
+        <!-- Watch and band apps (HealthSources.known), so the Health Connect setup guide can offer "Open <app>". -->
+        <package android:name="com.ouraring.oura" />
+        <package android:name="com.whoop.android" />
+        <package android:name="com.garmin.android.apps.connectmobile" />
+        <package android:name="com.fitbit.FitbitMobile" />
+        <package android:name="com.sec.android.app.shealth" />
+        <package android:name="fi.polar.polarflow" />
+        <package android:name="com.withings.wiscale2" />
+        <package android:name="com.stt.android.suunto" />
+        <package android:name="com.huami.watch.hmwatchmanager" />
+        <package android:name="com.xiaomi.wearable" />
+        <package android:name="com.xiaomi.hm.health" />
+        <package android:name="com.huawei.health" />
+        <package android:name="com.google.android.apps.fitness" />
+        <package android:name="com.strava" />
     </queries>
 
     <application

@@ -73,17 +73,17 @@ object SleepNightBuilder {
     }
 
     /** The last run of merged spans with every gap under `clusterGap`, or null when there are none. */
-    internal fun latestCluster(merged: List<Span>): List<Span>? {
-        if (merged.isEmpty()) return null
-        var cluster = mutableListOf<Span>()
+    internal fun latestCluster(merged: List<Span>): List<Span>? = clusters(merged).lastOrNull()
+
+    /** Every run of merged spans with each gap under `clusterGap`, oldest first. */
+    internal fun clusters(merged: List<Span>): List<List<Span>> {
+        val runs = mutableListOf<MutableList<Span>>()
         for (span in merged) {
-            val previous = cluster.lastOrNull()
-            if (previous != null && secondsBetween(previous.end, span.start) >= clusterGap) {
-                cluster = mutableListOf()
-            }
-            cluster.add(span)
+            val previous = runs.lastOrNull()?.lastOrNull()
+            if (previous == null || secondsBetween(previous.end, span.start) >= clusterGap) runs.add(mutableListOf())
+            runs.last().add(span)
         }
-        return cluster
+        return runs
     }
 
     /** How much of the merged spans falls inside the window, in seconds. */

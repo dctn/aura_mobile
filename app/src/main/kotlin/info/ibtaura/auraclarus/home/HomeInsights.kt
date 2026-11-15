@@ -32,7 +32,9 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import info.ibtaura.aura.core.CalendarEvent
+import info.ibtaura.aura.core.MorningOpening
 import info.ibtaura.aura.core.ScoresToday
 import info.ibtaura.auraclarus.design.AuraCard
 import info.ibtaura.auraclarus.design.AuraColors
@@ -45,6 +47,7 @@ import info.ibtaura.auraclarus.shell.CacheKeys
 import kotlinx.coroutines.CancellationException
 import java.time.Instant
 import java.time.ZoneId
+import java.util.Locale
 import kotlin.math.roundToInt
 
 /**
@@ -96,7 +99,14 @@ internal fun HomeInsightsSection(app: AppState, onEventClick: ((CalendarEvent) -
         SectionTitle("Insights")
         AuraCard(padding = 20.dp, spacing = 12.dp) {
             Row(horizontalArrangement = Arrangement.spacedBy(32.dp), verticalAlignment = Alignment.CenterVertically) {
-                HomeRings(scores, Modifier.padding(start = 9.dp))
+                Column(
+                    Modifier.padding(start = 9.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    HomeRings(scores, app.morningOpening)
+                    HomeMorningLine(app.morningOpening)
+                }
                 HomeUpcomingList(upcoming, onEventClick, Modifier.weight(1f))
             }
             if (scoresFailed || eventsFailed) {
@@ -112,14 +122,42 @@ private fun endOfToday(now: Instant): Instant {
     return now.atZone(zone).toLocalDate().plusDays(1).atStartOfDay(zone).toInstant()
 }
 
-/** Outer attention, middle memory, inner thinking: `/v1/scores` returns four and the Figma draws three. */
+/**
+ * Outer attention, middle memory, inner thinking: `/v1/scores` returns four and the Figma draws three. This morning's
+ * live capacity score sits in the centre (gray while it is an estimate; the Today banner says why).
+ */
 @Composable
-private fun HomeRings(scores: ScoresToday?, modifier: Modifier = Modifier) {
+private fun HomeRings(scores: ScoresToday?, opening: MorningOpening?, modifier: Modifier = Modifier) {
     Box(modifier.size(127.dp), contentAlignment = Alignment.Center) {
         HomeRing("Attention", scores?.attention?.value, AuraColors.ringOuter, 127.dp)
         HomeRing("Memory", scores?.memory?.value, AuraColors.ringMiddle, 91.dp)
         HomeRing("Thinking", scores?.thinking?.value, AuraColors.ringInner, 53.dp)
+        HomeCapacityCentre(opening)
     }
+}
+
+/**
+ * The live capacity score (the morning score after today's costs and give-backs) in the inner ring's hole; the morning
+ * score when Capacity sent no live one; a dash until it has loaded.
+ */
+@Composable
+private fun HomeCapacityCentre(opening: MorningOpening?) {
+    // One decimal, so a session's small cost (about 1 point an hour) shows at once.
+    val score = (opening?.current ?: opening?.score)?.let(::oneDecimal)
+    val estimate = opening?.estimated == true
+    val spoken = when {
+        score == null -> "Capacity score: not loaded yet"
+        estimate -> "Capacity score now: $score, an estimate"
+        else -> "Capacity score now: $score"
+    }
+    Text(
+        score ?: "–",
+        style = AuraType.calloutSemibold.copy(fontSize = 14.sp),
+        maxLines = 1,
+        softWrap = false,
+        color = if (score == null || estimate) AuraColors.gray else Color.Black,
+        modifier = Modifier.testTag("home-capacity").clearAndSetSemantics { contentDescription = spoken },
+    )
 }
 
 /** One ring on a pale track of its own colour. The fill starts at nine o'clock and runs clockwise. */
@@ -145,6 +183,22 @@ private fun HomeRing(title: String, value: Double?, color: Color, diameter: Dp) 
         }
     }
 }
+
+/** "88 this morning" under the rings, so the live number in the centre has its starting point. */
+@Composable
+private fun HomeMorningLine(opening: MorningOpening?) {
+    val morning = opening?.score?.let(::oneDecimal) ?: return
+    if (opening.current == null) return
+    Text(
+        "$morning this morning",
+        style = AuraType.caption,
+        color = AuraColors.gray,
+        modifier = Modifier.testTag("home-capacity-morning"),
+    )
+}
+
+/** "87.8": the capacity scale with one decimal, the same in every language. */
+internal fun oneDecimal(value: Double): String = String.format(Locale.ROOT, "%.1f", value)
 
 /** The blue "Upcoming" header and up to two events, each a button when `onEventClick` is set ("home-upcoming-<id>"). */
 @Composable

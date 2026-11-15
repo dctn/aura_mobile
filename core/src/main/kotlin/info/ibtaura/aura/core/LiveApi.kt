@@ -507,6 +507,12 @@ class LiveApi(
      * Today's ledger line with source "work" for the session. A recharge after a new rating adds a line, so the last
      * one is the current one. No session answer carries this text.
      */
+    override suspend fun morningOpening(): MorningOpening? {
+        val query = mapOf("date" to DayKey.string(now()))
+        val today = get(WireCapacityToday.serializer(), ServiceName.capacity, "/v1/capacity/today", query)
+        return today.opening?.model?.copy(current = today.current)
+    }
+
     override suspend fun capacityLine(sessionId: String): String? {
         val query = mapOf("date" to DayKey.string(now()))
         val today = get(WireCapacityToday.serializer(), ServiceName.capacity, "/v1/capacity/today", query)

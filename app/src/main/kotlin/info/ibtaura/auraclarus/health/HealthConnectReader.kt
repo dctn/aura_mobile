@@ -96,9 +96,11 @@ internal class HealthConnectReader(private val context: Context) {
         readAll(SleepSessionRecord::class, TimeRangeFilter.between(from, to)).flatMap { samples(it) }
 
     private fun samples(session: SleepSessionRecord): List<SleepSample> {
-        val out = mutableListOf(SleepSample(session.startTime, session.endTime, SleepSample.Kind.inBed))
+        // Each sample keeps the app that wrote the session, so the picker can keep one app's night.
+        val source = origin(session)
+        val out = mutableListOf(SleepSample(session.startTime, session.endTime, SleepSample.Kind.inBed, source))
         if (session.stages.isEmpty()) {
-            out.add(SleepSample(session.startTime, session.endTime, SleepSample.Kind.asleepUnspecified))
+            out.add(SleepSample(session.startTime, session.endTime, SleepSample.Kind.asleepUnspecified, source))
         }
         for (stage in session.stages) {
             val kind = when (stage.stage) {
@@ -110,7 +112,7 @@ internal class HealthConnectReader(private val context: Context) {
                 SleepSessionRecord.STAGE_TYPE_OUT_OF_BED -> SleepSample.Kind.awake
                 else -> null
             } ?: continue
-            out.add(SleepSample(stage.startTime, stage.endTime, kind))
+            out.add(SleepSample(stage.startTime, stage.endTime, kind, source))
         }
         return out
     }
@@ -131,23 +133,23 @@ internal class HealthConnectReader(private val context: Context) {
 
         val totals = dailyTotals(first, last, granted)
         val restingHr = if (RESTING_HR in granted) {
-            readAll(RestingHeartRateRecord::class, range).map { origin(it) to HealthReading(it.time, it.beatsPerMinute.toDouble()) }
+            readAll(RestingHeartRateRecord::class, range).map { origin(it) to HealthReading(it.time, it.beatsPerMinute.toDouble(), origin(it)) }
         } else emptyList()
         val hrv = if (HRV in granted) {
-            readAll(HeartRateVariabilityRmssdRecord::class, range).map { origin(it) to HealthReading(it.time, it.heartRateVariabilityMillis) }
+            readAll(HeartRateVariabilityRmssdRecord::class, range).map { origin(it) to HealthReading(it.time, it.heartRateVariabilityMillis, origin(it)) }
         } else emptyList()
         val breaths = if (RESPIRATORY in granted) {
-            readAll(RespiratoryRateRecord::class, range).map { origin(it) to HealthReading(it.time, it.rate) }
+            readAll(RespiratoryRateRecord::class, range).map { origin(it) to HealthReading(it.time, it.rate, origin(it)) }
         } else emptyList()
         val spo2 = if (OXYGEN in granted) {
-            readAll(OxygenSaturationRecord::class, range).map { origin(it) to HealthReading(it.time, it.percentage.value) }
+            readAll(OxygenSaturationRecord::class, range).map { origin(it) to HealthReading(it.time, it.percentage.value, origin(it)) }
         } else emptyList()
         val weight = if (WEIGHT in granted) {
-            readAll(WeightRecord::class, range).map { origin(it) to HealthReading(it.time, it.weight.inKilograms) }
+            readAll(WeightRecord::class, range).map { origin(it) to HealthReading(it.time, it.weight.inKilograms, origin(it)) }
         } else emptyList()
         val skin = if (SKIN_TEMPERATURE in granted && featureAvailable(HealthConnectFeatures.FEATURE_SKIN_TEMPERATURE)) {
             readAll(SkinTemperatureRecord::class, range).flatMap { record ->
-                record.deltas.map { origin(record) to HealthReading(it.time, it.delta.inCelsius) }
+                record.deltas.map { origin(record) to HealthReading(it.time, it.delta.inCelsius, origin(record)) }
             }
         } else emptyList()
         val mindful = if (MINDFULNESS in granted && featureAvailable(HealthConnectFeatures.FEATURE_MINDFULNESS_SESSION)) {
@@ -172,11 +174,12 @@ internal class HealthConnectReader(private val context: Context) {
             val nightFrom = day.minusDays(1).atTime(18, 0).atZone(zone).toInstant()
             val nightTo = day.atTime(14, 0).atZone(zone).toInstant()
             val daySleep = sleep.filter { it.end > nightFrom && it.start < nightTo }
+            // Only the apps this day takes whole: the totals (Health Connect settles their overlap) and mindful time
+            // (overlaps count once). Readings, sleep and workouts carry their own app; HealthSourcePicker keeps one
+            // app each and adds it here.
             val sources = buildList {
                 dayTotals?.sources?.let { addAll(it) }
-                dayReadings.forEach { list -> list.forEach { add(it.first) } }
                 dayMindful.forEach { add(it.first) }
-                dayWorkouts.forEach { w -> w.source?.let { add(it) } }
             }.filter { it.isNotBlank() }.distinct()
             DailyHealthInput(
                 day = day,

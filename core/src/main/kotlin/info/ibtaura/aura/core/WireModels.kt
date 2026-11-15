@@ -503,11 +503,33 @@ internal data class WireLedgerEntry(
     val detail: String? = null,
 )
 
-/** GET /v1/capacity/today?date: only the ledger is read. */
+/** GET /v1/capacity/today?date: the ledger and the opening's estimate parts are read. */
 @Serializable
-internal data class WireCapacityToday(val ledger: List<JsonElement>? = null) {
+internal data class WireCapacityToday(
+    val ledger: List<JsonElement>? = null,
+    val opening: WireOpening? = null,
+    val current: Double? = null,
+) {
     val entries: List<WireLedgerEntry> get() = ledger.lossyItems(WireLedgerEntry.serializer())
 }
+
+@Serializable
+internal data class WireOpening(
+    val value: Double? = null,
+    val estimated: Boolean = false,
+    val baselineDays: Int = 0,
+    val drivers: List<JsonElement>? = null,
+    val reason: String? = null,
+) {
+    val model: MorningOpening
+        get() = MorningOpening(
+            estimated = estimated, baselineDays = baselineDays, reason = reason, score = value,
+            lastNight = drivers.lossyItems(WireDriver.serializer()).any { it.input == "totalSleep" && it.present },
+        )
+}
+
+@Serializable
+internal data class WireDriver(val input: String? = null, val present: Boolean = false)
 
 @Serializable
 internal data class WireRecoveryOption(

@@ -4,9 +4,12 @@ import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.os.Build
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.size
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -20,6 +23,8 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
@@ -27,7 +32,12 @@ import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.health.connect.client.HealthConnectClient
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
+import info.ibtaura.aura.core.HealthSourceGroup
+import info.ibtaura.aura.core.HealthSources
 import info.ibtaura.auraclarus.design.AuraCard
+import info.ibtaura.auraclarus.design.AuraMenuPicker
 import info.ibtaura.auraclarus.design.AuraColors
 import info.ibtaura.auraclarus.design.AuraType
 import info.ibtaura.auraclarus.design.CardDivider
@@ -56,11 +66,22 @@ fun HealthSettingsSection(app: AppState) {
     var busy by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf<String?>(null) }
     var refresh by remember { mutableIntStateOf(0) }
-    val availability = healthAvailability(app)
+    var sources by remember { mutableStateOf(SourceRows()) }
+    // Coming back from Play (Health Connect installed) or from a band app (sharing turned on): look again.
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { refresh += 1 }
+    val availability = remember(refresh, app.healthConnected) { healthAvailability(app) }
     val port = app.health as? HealthConnectDayPort
+    val bandApps = remember(refresh) { installedBandApps(context) }
 
     LaunchedEffect(app.healthConnected, refresh, app.dataVersion) {
         status = port?.status() ?: HealthSyncStatus()
+        sources = port?.sources?.let { store ->
+            val seen = store.seen()
+            // A chosen app with no data lately isn't used, so it shows as Automatic.
+            val chosen = store.overrides().filter { (group, app) -> app in seen[group].orEmpty() }
+            SourceRows(seen, chosen, HealthSourceGroup.entries.associateWith { g -> store.mainSource(g) }, store.totals())
+        }
+            ?: SourceRows()
         val reader = healthReader(context)
         if (reader == null || !reader.isAvailable) {
             granted = null
@@ -106,6 +127,17 @@ fun HealthSettingsSection(app: AppState) {
                     )
                 }
             }
+            val hasData = sources.totals.isNotEmpty() || sources.seen.isNotEmpty()
+            if (availability != HealthAvailability.Unavailable && !(connected && hasData)) {
+                CardDivider()
+                SetupSteps(
+                    installed = availability == HealthAvailability.Available,
+                    connected = connected,
+                    hasData = hasData,
+                    bandApps = bandApps,
+                    onOpen = { openApp(context, it) },
+                )
+            }
             if (connected) {
                 CardDivider()
                 StatusLine(
@@ -118,6 +150,13 @@ fun HealthSettingsSection(app: AppState) {
                 )
                 StatusLine("History", "${status.coveredDays.coerceAtMost(30)} of the last 30 days")
                 waitText(status)?.let { StatusLine("Next read", it) }
+                if (port != null) {
+                    CardDivider()
+                    MainSources(sources) { group, source ->
+                        port.sources.setOverride(group, source)
+                        refresh += 1
+                    }
+                }
             }
             message?.let { Text(it, style = AuraType.caption, color = AuraColors.gray) }
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -186,6 +225,136 @@ fun HealthSettingsSection(app: AppState) {
     }
 }
 
+/** What Settings knows about where the data comes from; package names only. */
+private data class SourceRows(
+    val seen: Map<HealthSourceGroup, Set<String>> = emptyMap(),
+    val overrides: Map<HealthSourceGroup, String> = emptyMap(),
+    val main: Map<HealthSourceGroup, String?> = emptyMap(),
+    val totals: Set<String> = emptySet(),
+)
+
+/**
+ * "Main source" per group: the app each kind of data comes from when several apps write it to Health Connect. With
+ * two or more apps seen the user can pick one; "Automatic" lets Aura choose (bands first, then the app with most data).
+ */
+@Composable
+private fun MainSources(rows: SourceRows, onPick: (HealthSourceGroup, String?) -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text("Data sources", style = AuraType.bodyMedium, color = Color.Black)
+        StatusLine("Activity", rows.totals.map { HealthSources.name(it) }.sorted().joinToString(", ").ifEmpty { NONE })
+        HealthSourceGroup.entries.forEach { group ->
+            val apps = rows.seen[group].orEmpty().sortedBy { HealthSources.name(it) }
+            if (apps.isEmpty()) {
+                Row(Modifier.semantics(mergeDescendants = true) {}.testTag("settings-health-source-${group.raw}"), verticalAlignment = Alignment.CenterVertically) {
+                    Text(group.title, style = AuraType.callout, color = AuraColors.gray, modifier = Modifier.weight(1f))
+                    Text(NONE, style = AuraType.callout, color = AuraColors.gray)
+                }
+                return@forEach
+            }
+            val override = rows.overrides[group]
+            if (apps.size < 2 && override == null) {
+                StatusLine(group.title, HealthSources.name(apps.first()))
+                return@forEach
+            }
+            val auto = rows.main[group]?.takeIf { override == null }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(group.title, style = AuraType.callout, color = AuraColors.gray, modifier = Modifier.weight(1f))
+                AuraMenuPicker(
+                    options = listOf("") + apps,
+                    selected = override.orEmpty(),
+                    label = { if (it.isEmpty()) auto?.let { a -> "Automatic (${HealthSources.name(a)})" } ?: "Automatic" else HealthSources.name(it) },
+                    onSelect = { onPick(group, it.ifEmpty { null }) },
+                    modifier = Modifier.testTag("settings-health-source-${group.raw}"),
+                    tag = "settings-health-source-${group.raw}",
+                )
+            }
+        }
+        if (HealthSourceGroup.entries.any { rows.seen[it].isNullOrEmpty() }) {
+            Text(
+                "To add sleep, heart or workouts, turn on sharing in your watch or band's app, for example Samsung Health > " +
+                    "Settings > Health Connect. When two apps share the same kind of data, you can pick one here.",
+                style = AuraType.caption,
+                color = AuraColors.gray,
+            )
+        }
+        Text(
+            "Steps, distance and calories follow Health Connect's own App priority list (Permissions > Data and access).",
+            style = AuraType.caption,
+            color = AuraColors.gray,
+        )
+    }
+}
+
+private const val NONE = "No app yet"
+
+/**
+ * The three steps to get data in: Health Connect on the phone, sharing turned on in the watch or band's app, and Aura
+ * connected. Shown until data has arrived. Install and Connect are the card's own buttons; step 2 opens the band's app
+ * when one is installed, since sharing can only be turned on there.
+ */
+@Composable
+private fun SetupSteps(installed: Boolean, connected: Boolean, hasData: Boolean, bandApps: List<String>, onOpen: (String) -> Unit) {
+    Column(Modifier.testTag("settings-health-setup"), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Text("Set up", style = AuraType.bodyMedium, color = Color.Black)
+        SetupStep(1, installed, "Install Health Connect", if (installed) "On this phone" else "Free from Google Play. Built in from Android 14.")
+        val band = bandApps.firstOrNull()
+        SetupStep(
+            2,
+            connected && hasData,
+            "Turn on sharing in your watch or band's app",
+            when {
+                connected && hasData -> "Data is arriving"
+                band != null -> "In ${HealthSources.name(band)}, open Settings > Health Connect and allow sleep, steps and heart data."
+                else -> "Install your watch or band's app (Samsung Health, Fitbit, Oura, Garmin Connect...), then turn on Health Connect in its settings."
+            },
+        ) {
+            if (band != null && !(connected && hasData)) {
+                PillButton(
+                    "Open ${HealthSources.name(band)}",
+                    { onOpen(band) },
+                    Modifier.fillMaxWidth().testTag("settings-health-open-band"),
+                    style = PillStyle.Secondary,
+                    fills = true,
+                )
+            }
+        }
+        SetupStep(3, connected, "Connect Aura", if (connected) "Connected" else "Allow Aura to read your data in Health Connect.")
+    }
+}
+
+@Composable
+internal fun SetupStep(number: Int, done: Boolean, title: String, detail: String, action: @Composable () -> Unit = {}) {
+    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        Box(
+            Modifier.size(24.dp).clip(CircleShape).background(if (done) AuraColors.green else AuraColors.separator),
+            contentAlignment = Alignment.Center,
+        ) {
+            if (done) {
+                Icon(auraIcon("checkmark"), contentDescription = "Done", tint = Color.White, modifier = Modifier.size(14.dp))
+            } else {
+                Text("$number", style = AuraType.caption, color = Color.Black)
+            }
+        }
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Column(Modifier.semantics(mergeDescendants = true) {}, verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(title, style = AuraType.callout, color = Color.Black)
+                Text(detail, style = AuraType.caption, color = AuraColors.gray)
+            }
+            action()
+        }
+    }
+}
+
+/** Known watch and band apps installed on this phone, best-ranked first (needs the manifest's <queries>). */
+internal fun installedBandApps(context: Context): List<String> =
+    HealthSources.known.filter { context.packageManager.getLaunchIntentForPackage(it) != null }
+        .sortedBy { HealthSources.rank(info.ibtaura.aura.core.HealthMetric.sleep, it) }
+
+internal fun openApp(context: Context, pkg: String) {
+    val intent = context.packageManager.getLaunchIntentForPackage(pkg)?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) ?: return
+    runCatching { context.startActivity(intent) }
+}
+
 @Composable
 private fun StatusLine(label: String, value: String) {
     Row(Modifier.semantics(mergeDescendants = true) {}, verticalAlignment = Alignment.CenterVertically) {
@@ -218,7 +387,7 @@ private fun waitText(status: HealthSyncStatus): String? {
 }
 
 /** Health Connect's own permission screen: the system settings page on 14+, the app before that. */
-private fun openHealthConnectSettings(context: Context) {
+internal fun openHealthConnectSettings(context: Context) {
     val action = if (Build.VERSION.SDK_INT >= 34) {
         "android.health.connect.action.MANAGE_HEALTH_PERMISSIONS"
     } else {
