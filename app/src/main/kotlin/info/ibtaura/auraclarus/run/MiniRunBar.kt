@@ -92,12 +92,25 @@ fun MiniRunBar(app: AppState, nav: AuraNav) {
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-                Text(
-                    miniStatus(run.engine, now),
-                    style = AuraType.caption.copy(fontFeatureSettings = "tnum"),
-                    color = RunLook.note,
-                    maxLines = 1,
-                )
+                Row {
+                    Text(
+                        miniStatus(run.engine, now),
+                        style = AuraType.caption.copy(fontFeatureSettings = "tnum"),
+                        color = RunLook.note,
+                        maxLines = 1,
+                    )
+                    // A session taken on from another device says where it began, on the same line.
+                    RunSync.startedOnText(run.startedOn)?.let { place ->
+                        Text(
+                            " · $place",
+                            style = AuraType.caption,
+                            color = RunLook.note,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.testTag("run-started-elsewhere"),
+                        )
+                    }
+                }
             }
         }
         val paused = run.engine.isPaused

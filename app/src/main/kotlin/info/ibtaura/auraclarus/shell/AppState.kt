@@ -11,6 +11,7 @@ import info.ibtaura.aura.core.AuthService
 import info.ibtaura.aura.core.AuthState
 import info.ibtaura.aura.core.CalendarEvent
 import info.ibtaura.aura.core.CatalogueSection
+import info.ibtaura.aura.core.CheckinKind
 import info.ibtaura.aura.core.CollectingCopy
 import info.ibtaura.aura.core.DayKey
 import info.ibtaura.aura.core.FieldAvailability
@@ -697,6 +698,114 @@ class AppState(
     }
 
     fun event(id: String): CalendarEvent? = events[id]
+
+    // MARK: Cross-device sync
+    //
+    // One account, many devices. The backend allows one running session per account and has no push channel, so
+    // while the app is in front it polls (RootScreen runs `syncWhileInFront` under the lifecycle): the running
+    // session (adopted or matched by the run controller's `syncWith`), today's morning check-in, and a quiet reload
+    // of the open screens now and then. No Health Connect reads here (quota). Rules and intervals: SyncCadence.
+
+    /** Milliseconds since boot, counting deep sleep (only read inside the loop, never at construction). */
+    private val syncClock: () -> Long = { android.os.SystemClock.elapsedRealtime() }
+    private var syncingDevices = false
+
+    /** When the loop last stopped (the app went to the background), and for which sign-in; null before. */
+    private var awayAt: Long? = null
+    private var awayAuth: AuthState? = null
+    private var awayVersion = 0
+
+    /** The `dataVersion` the loop last saw, and when it first saw it: the screens' last reload. */
+    private var seenVersion = -1
+    private var seenVersionAt = 0L
+
+    private val syncOn: Boolean get() = authState is AuthState.SignedIn && !needsOnboarding
+
+    /**
+     * One sync round: the account's running session to the run controller, then today's morning check-in from the
+     * server (one filed on another phone stops the ask here). Signed in and past onboarding only; never two at once.
+     * A failed read goes to `note` (sign-in, consent) and changes nothing else.
+     */
+    suspend fun syncAcrossDevices() {
+        if (!syncOn || syncingDevices) return
+        syncingDevices = true
+        try {
+            SyncCadence.pullSession(
+                read = { api.activeSession() },
+                stamp = { run?.hasActive },
+                apply = { remote -> if (syncOn) run?.syncWith(remote) },
+            )?.let { note(it) }
+            // Sample mode's made-up check-ins mustn't hide the card it shows off.
+            if (syncOn && !flags.isSample) syncMorningCheckin()
+        } finally {
+            syncingDevices = false
+        }
+    }
+
+    private suspend fun syncMorningCheckin() {
+        refreshDayFlags()
+        if (morningCheckinSent) return
+        val today = today()
+        val filed = try {
+            api.checkins(today, today, CheckinKind.morning)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            note(e)
+            return
+        }
+        // Still the same sign-in and day as the read was for.
+        if (syncOn && today == today() && SyncCadence.morningCheckinDone(filed, today)) markMorningCheckinSent()
+    }
+
+    /**
+     * The foreground loop, run each time the app comes to the front and cancelled when it leaves: one sync at once,
+     * then every 15 s while a run shows (60 s otherwise). Coming back after more than 30 s away, or 5 minutes in front
+     * with no reload, every screen loads again.
+     */
+    suspend fun syncWhileInFront() {
+        if (!syncOn) return
+        // A new day reloads by itself (idempotent; RootScreen's resume calls it too), so it isn't reloaded twice.
+        reloadIfNewDay()
+        val since = awayAt
+        if (since != null && awayAuth == authState && awayVersion == dataVersion &&
+            SyncCadence.refreshOnReturn(syncClock() - since)
+        ) {
+            refreshScreens()
+        }
+        noteDataVersion()
+        try {
+            while (true) {
+                syncAcrossDevices()
+                delay(SyncCadence.interval(run?.hasActive == true))
+                noteDataVersion()
+                if (SyncCadence.refreshDue(syncClock() - seenVersionAt)) refreshScreens()
+            }
+        } finally {
+            awayAt = syncClock()
+            awayAuth = authState
+            awayVersion = dataVersion
+        }
+    }
+
+    /** Restarts the 5-minute count whenever something else reloaded the screens (a save, consent, a new day). */
+    private fun noteDataVersion() {
+        if (dataVersion != seenVersion) {
+            seenVersion = dataVersion
+            seenVersionAt = syncClock()
+        }
+    }
+
+    /**
+     * Makes every open screen load again (tasks, calendar, mood, scores...): `dataVersion` marks the whole cache stale,
+     * so pages keep showing what they have while they reload. Settings kept in memory (catalogue, work hours) stay.
+     * Not in UI tests, whose walks don't expect the extra loads, nor while signed out.
+     */
+    private fun refreshScreens() {
+        if (flags.isUiTesting || !syncOn) return
+        dataVersion += 1
+        noteDataVersion()
+    }
 
     companion object {
         private const val PINS_KEY = "pinnedMetrics"

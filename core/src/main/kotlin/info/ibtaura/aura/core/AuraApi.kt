@@ -39,6 +39,9 @@ interface AuraApi {
         title: String,
         recoveryType: RecoveryType?,
     ): StartedSession
+
+    /** The session running for this account on any device, or null when none runs (GET /v1/sessions/active, 204). */
+    suspend fun activeSession(): RemoteSession?
     suspend fun sessionAction(id: String, action: SessionAction)
     suspend fun sessionTrace(id: String): SessionTrace
 
@@ -291,6 +294,12 @@ interface AuthService {
     suspend fun finish(step: AuthStep, code: String): AuthState
     suspend fun resend(step: AuthStep): AuthStep
     suspend fun signOut()
+
+    /** Cognito's hosted sign-in ("Continue with Google"): its URLs, or null when this build has none configured. */
+    val hostedSignIn: HostedSignIn?
+
+    /** The hosted sign-in came back with `code`: swaps it (with the PKCE `verifier`) for tokens and signs in. */
+    suspend fun finishHostedSignIn(code: String, verifier: String): AuthState
 }
 
 /** Dates the backend reads as yyyy-MM-dd: Gregorian (ISO) whatever the phone's calendar is, in the phone's time zone. */

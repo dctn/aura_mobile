@@ -3,6 +3,8 @@
   "region": "us-west-1",
   "userPoolId": "us-west-1_KSpdUo5a7",
   "clientId": "54fbmqoiqktq2c9k202s234h5v",
+  "cognitoDomain": "aura-clarus-dev.auth.us-west-1.amazoncognito.com",
+  "oauthClientId": "2hap9k4fglk5qu8i87qolbt8oj",
   "platform": "android",
   "appVersion": "0.1.0",
   "consentPolicyVersion": "2026-10",

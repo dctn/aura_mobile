@@ -1,8 +1,10 @@
 package info.ibtaura.auraclarus.signin
 
+import androidx.activity.compose.LocalActivity
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -17,6 +19,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import info.ibtaura.aura.core.AuraError
 import info.ibtaura.aura.core.AuthStep
@@ -34,7 +37,8 @@ import kotlinx.coroutines.launch
 
 /**
  * Email, then the code from the email (SignIn/SignInView.swift). The Figma has no frame for this; it uses the same
- * cards and pills. Never log the email or the code.
+ * cards and pills. Never log the email or the code. Below the email, "Continue with Google" when the build has a
+ * Cognito domain (GoogleSignIn.kt).
  */
 @Composable
 fun SignInScreen(app: AppState) {
@@ -45,6 +49,9 @@ fun SignInScreen(app: AppState) {
     var errorText by remember { mutableStateOf<String?>(null) }
     var noticeText by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
+    // "Continue with Google" (GoogleSignIn.kt); null or unavailable when the build has no Cognito domain.
+    val google = LocalGoogleSignIn.current
+    val activity = LocalActivity.current
 
     fun begin() {
         busy = true
@@ -85,7 +92,8 @@ fun SignInScreen(app: AppState) {
             SignInEmailCard(email) { email = it }
         }
 
-        val error = errorText
+        // The Google sign-in's own error shows only on the email step, where its button is.
+        val error = errorText ?: google?.errorText?.takeIf { current == null }
         val notice = noticeText
         if (error != null) {
             Text(error, style = AuraType.callout, color = AuraColors.red)
@@ -94,10 +102,12 @@ fun SignInScreen(app: AppState) {
         }
 
         if (current == null) {
+            val googleBusy = google?.busy == true
             PillButton(
                 if (busy) "Sending..." else "Send code",
                 onClick = {
                     val address = trimmedEmail
+                    google?.clearError()
                     run {
                         val next = app.auth.requestCode(address)
                         code = ""
@@ -106,8 +116,19 @@ fun SignInScreen(app: AppState) {
                 },
                 modifier = Modifier.testTag("signin-send-code"),
                 fills = true,
-                enabled = !busy && emailLooksValid,
+                enabled = !busy && !googleBusy && emailLooksValid,
             )
+            if (google != null && google.available) {
+                GoogleButton(
+                    busy = googleBusy,
+                    enabled = !busy && !googleBusy,
+                    onClick = {
+                        errorText = null
+                        noticeText = null
+                        activity?.let { google.start(it) }
+                    },
+                )
+            }
         } else {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 PillButton(
@@ -171,6 +192,31 @@ internal object SignInCodeRules {
             is AuraError.Server -> error.message.ifEmpty { fallback }
             else -> fallback
         }
+    }
+}
+
+/**
+ * "or", then a neutral pill in the screen's own style, as Google's branding asks: the words "Continue with Google"
+ * on a plain button. There is no Google logo asset in the app, so it's text only.
+ */
+@Composable
+private fun GoogleButton(busy: Boolean, enabled: Boolean, onClick: () -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Text(
+            "or",
+            style = AuraType.callout,
+            color = AuraColors.gray,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        PillButton(
+            if (busy) "Signing in..." else "Continue with Google",
+            onClick = onClick,
+            modifier = Modifier.testTag("signin-google"),
+            style = PillStyle.Secondary,
+            fills = true,
+            enabled = enabled,
+        )
     }
 }
 

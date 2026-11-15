@@ -178,8 +178,12 @@ fun TasksScreen(app: AppState, nav: AuraNav) {
         pending = pending - failure.undo.id
         tasks = tasks?.undoing(failure.undo)
         messenger.tell(failure.words)
-        // Changed or deleted elsewhere: the list is out of date, so load it again.
-        if (failure.reload) retry += 1
+        // Changed or deleted elsewhere (another device): the list is out of date, so it loads again at once, and so do
+        // the other screens showing the task (the retry makes this page load even though the bump is its own).
+        if (failure.reload) {
+            retry += 1
+            own.bump(app)
+        }
     }
 
     // Shown at once and saved in the app's scope, so leaving the page doesn't cancel it.

@@ -2,6 +2,7 @@ package info.ibtaura.auraclarus.shell
 
 import info.ibtaura.aura.core.Mode
 import info.ibtaura.aura.core.RecoveryType
+import info.ibtaura.aura.core.RemoteSession
 import info.ibtaura.aura.core.HealthStoreStatus
 import info.ibtaura.aura.core.SleepHistory
 import info.ibtaura.aura.core.SleepNight
@@ -33,6 +34,13 @@ interface RunPort {
 
     /** Ends a running session on the backend before sign-out, while the token still works. */
     suspend fun endForSignOut()
+
+    /**
+     * Cross-device sync with the account's running session (`api.activeSession()`; null when none runs anywhere).
+     * Holding no run, this picks up a session started on another device. Holding one, it matches it: paused, resumed
+     * or extended elsewhere, or ended elsewhere (closed here, with nothing sent). AppState's sync loop calls it.
+     */
+    fun syncWith(remote: RemoteSession?) {}
 }
 
 /**

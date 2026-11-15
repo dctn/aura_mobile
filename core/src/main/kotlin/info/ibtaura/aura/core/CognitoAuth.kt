@@ -155,11 +155,19 @@ internal class CognitoClient(
         return json
     }
 
-    /** REFRESH_TOKEN_AUTH. Throws `AuraError.SignedOut` only when Cognito refused this token or its user. */
-    suspend fun refresh(refreshToken: String): AuthTokens {
+    /** The app client that issued `tokens`: their own, else this client's (sessions saved before it was kept). */
+    fun issuer(tokens: AuthTokens): String = tokens.clientId?.takeIf { it.isNotEmpty() } ?: clientId
+
+    /**
+     * REFRESH_TOKEN_AUTH with the app client that issued [current] (a refresh token only works with that one). Throws
+     * `AuraError.SignedOut` only when Cognito refused this token or its user.
+     */
+    suspend fun refresh(current: AuthTokens): AuthTokens {
+        val refreshToken = current.refreshToken
+        val issuer = issuer(current)
         val body = buildJsonObject {
             put("AuthFlow", "REFRESH_TOKEN_AUTH")
-            put("ClientId", clientId)
+            put("ClientId", issuer)
             putJsonObject("AuthParameters") { put("REFRESH_TOKEN", refreshToken) }
         }
         val result = try {
@@ -177,6 +185,8 @@ internal class CognitoClient(
             refreshToken = auth.str("RefreshToken") ?: refreshToken,
             expiresIn = auth.int("ExpiresIn"),
             now = now(),
+            // Kept as it was: an old session stays "no client recorded", a Google one stays on its own client.
+            clientId = current.clientId,
         )
         if (tokens.sub.isEmpty()) throw CognitoWords.unsupported("TOKENS_WITHOUT_IDENTITY")
         return tokens
@@ -195,6 +205,7 @@ internal class CognitoClient(
             refreshToken = refreshToken,
             expiresIn = auth.int("ExpiresIn"),
             now = now(),
+            clientId = clientId,
         )
         if (tokens.sub.isEmpty()) throw CognitoWords.unsupported("TOKENS_WITHOUT_IDENTITY")
         return tokens
@@ -202,7 +213,7 @@ internal class CognitoClient(
 }
 
 /** Runs the call; cancelling the coroutine cancels it. Answers with the status and the body text. */
-private suspend fun Call.await(): Pair<Int, String> = suspendCancellableCoroutine { continuation ->
+internal suspend fun Call.await(): Pair<Int, String> = suspendCancellableCoroutine { continuation ->
     continuation.invokeOnCancellation { runCatching { cancel() } }
     enqueue(object : Callback {
         override fun onFailure(call: Call, e: IOException) {
@@ -333,7 +344,7 @@ internal class AuthSession(private val client: CognitoClient, private val store:
 
     private suspend fun runRefresh(current: AuthTokens, started: Int): AuthTokens {
         try {
-            val fresh = client.refresh(current.refreshToken)
+            val fresh = client.refresh(current)
             return mutex.withLock {
                 // Signed out, or in again, while this ran: saving these would bring back the account that left.
                 if (epoch != started) throw AuraError.SignedOut
@@ -377,6 +388,10 @@ class CognitoAuth internal constructor(
 
     private val client = CognitoClient(endpoint = endpoint, clientId = config.clientId, http = http, now = now)
     private val session = AuthSession(client, store)
+
+    /** "Continue with Google" through Cognito's hosted sign-in; null when the config names no Cognito domain. */
+    override val hostedSignIn: HostedSignIn? = HostedSignIn.from(config)
+    private val hostedTokens = hostedSignIn?.let { HostedTokenClient(it, http, now) }
 
     /**
      * Called when a session begins or ends here (sign-in, sign-out, a refused token ending it), so what the API kept
@@ -429,6 +444,15 @@ class CognitoAuth internal constructor(
         }
     }
 
+    /** Swaps the hosted sign-in's code for tokens (issued by, and refreshed with, the OAuth client), then signs in. */
+    override suspend fun finishHostedSignIn(code: String, verifier: String): AuthState {
+        val exchange = hostedTokens ?: throw HostedSignIn.notConfigured()
+        val tokens = exchange.exchange(code, verifier)
+        session.begin(tokens)
+        onSessionChanged?.invoke()
+        return AuthState.SignedIn(tokens.email)
+    }
+
     override suspend fun resend(step: AuthStep): AuthStep {
         try {
             return when (step.kind) {
@@ -453,7 +477,8 @@ class CognitoAuth internal constructor(
         onSessionChanged?.invoke()
         if (held == null) return
         val body = buildJsonObject {
-            put("ClientId", client.clientId)
+            // Only the client that issued a refresh token can revoke it.
+            put("ClientId", client.issuer(held))
             put("Token", held.refreshToken)
         }
         try {

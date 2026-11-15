@@ -167,7 +167,9 @@ private fun RunStage(app: AppState, nav: AuraNav, controller: RunController, run
                 onHide = { nav.closeRun() },
                 onInfo = {
                     val length = if (run.engine.isOpenEnded) "Open-ended" else RunEngine.lengthText(run.engine.duration)
-                    val text = "${run.mode.note} $length, timed on this phone and saved as a session. " +
+                    val timed = if (run.startedOn != null) "started on another device and kept in step here" else
+                        "timed on this phone and saved as a session"
+                    val text = "${run.mode.note} $length, $timed. " +
                         "Hide keeps it running above the tabs. End lets you stop early or count it as done."
                     alert = RunAlert.Info(run.title, text)
                 },

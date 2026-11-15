@@ -66,6 +66,15 @@ internal fun RunCenter(
     val clockText = RunEngine.clock(snapshot.remaining ?: snapshot.elapsed)
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         RunHeading(run.mode.kicker(run.minutes), run.title, accent, isNight)
+        RunSync.startedOnText(run.startedOn)?.let { place ->
+            Text(
+                place,
+                style = AuraType.caption,
+                color = if (isNight) RunLook.nightDim else RunLook.note,
+                maxLines = 1,
+                modifier = Modifier.padding(top = 6.dp).testTag("run-started-elsewhere"),
+            )
+        }
         when (run.mode.run) {
             // Frame 07.
             RunKind.breathe -> {

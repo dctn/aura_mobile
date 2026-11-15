@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.SharedPreferences
 import android.media.AudioManager
 import android.media.ToneGenerator
+import android.widget.Toast
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -21,6 +22,7 @@ import info.ibtaura.aura.core.DayKey
 import info.ibtaura.aura.core.InstantSerializer
 import info.ibtaura.aura.core.Mode
 import info.ibtaura.aura.core.RecoveryType
+import info.ibtaura.aura.core.RemoteSession
 import info.ibtaura.aura.core.RunEngine
 import info.ibtaura.aura.core.RunKind
 import info.ibtaura.aura.core.RunPhase
@@ -78,6 +80,10 @@ data class ActiveRun(
     val otherSession: OtherSession? = null,
     /** The recovery break's picked type, kept as text so a saved run still decodes if the types change. */
     val recoveryTypeRaw: String? = null,
+    /** The device that started the session this run took on (phone, mac, windows…); null for a run started here. */
+    val startedOn: String? = null,
+    /** The session version last matched with the server, so only a newer change elsewhere moves the end. */
+    val syncVersion: Int = 0,
 ) {
     /** The type a recovery session sends: the one picked, else the mode's. Null for every other kind. */
     val recoveryType: RecoveryType?
@@ -151,6 +157,10 @@ class RunController(
     private var startingFor: Instant? = null
     private var completingFor: Instant? = null
     private var sendingTasksFor: Instant? = null
+    /** Until when the server may not show our last action yet: a sync read that left before it landed is stale. */
+    private var settlesAt: Instant = Instant.MIN
+    /** Sessions this phone closed lately, by id, so a slow server can't bring a finished run back through sync. */
+    private val recentlyClosed = HashMap<String, Instant>()
 
     private val alarms = RunEndAlarm(context)
 
@@ -208,6 +218,7 @@ class RunController(
 
     /** Clears the run on the phone with no backend call. */
     override fun close() {
+        active?.sessionId?.let { recentlyClosed[it] = Instant.now() }
         wake?.cancel()
         wake = null
         sessionStart = null
@@ -384,6 +395,7 @@ class RunController(
         val run = active ?: return
         if (run.sessionBegun) return
         val begun = run.copy(sessionBegun = true)
+        settlesAt = maxOf(settlesAt, Instant.now().plusSeconds(START_SETTLE_SECONDS))
         active = begun
         save()
         requestSession(begun)
@@ -417,6 +429,8 @@ class RunController(
 
     private fun sessionStarted(session: StartedSession, startsAt: Instant) {
         if (startingFor == startsAt) startingFor = null
+        // A sync read that left before the start landed may still say nothing runs, or show an older session.
+        settlesAt = maxOf(settlesAt, Instant.now().plusSeconds(START_SETTLE_SECONDS))
         val run = active ?: return
         if (run.engine.startsAt != startsAt) return
         if (session.joined) {
@@ -480,6 +494,8 @@ class RunController(
                 val alreadyEnded = isFinal && (e as? AuraError)?.serverCode == "action_not_allowed"
                 if (isFinal) completeEnded(startsAt, delivered = alreadyEnded)
                 if (!alreadyEnded) report(e)
+            } finally {
+                settlesAt = maxOf(settlesAt, Instant.now().plusSeconds(SETTLE_SECONDS))
             }
         }
     }
@@ -554,6 +570,87 @@ class RunController(
         onError?.invoke(error)
     }
 
+    // MARK: Other devices
+
+    /**
+     * Matches this phone with the account's running session (one per account). Pass only a successful read: null means
+     * nothing runs anywhere, and closes a run held here. Nothing is ever sent from here.
+     */
+    override fun syncWith(remote: RemoteSession?) {
+        val now = Instant.now()
+        recentlyClosed.entries.removeAll { Duration.between(it.value, now).seconds > RECENTLY_CLOSED_SECONDS }
+        val run = active
+        val local = run?.let {
+            LocalRunState(
+                engine = it.engine,
+                sessionId = it.sessionId,
+                finished = it.finishedAt != null,
+                createsSession = it.mode.run != RunKind.plan,
+                lastVersion = it.syncVersion,
+            )
+        }
+        val actions = RunSync.decide(local, remote, isSending(now), recentlyClosed.keys, now)
+        for (action in actions) {
+            when (action) {
+                SyncAction.Adopt -> remote?.let { adopt(it, now) }
+                SyncAction.EndedElsewhere -> {
+                    close()
+                    tell("Ended on your other device")
+                }
+                is SyncAction.Pause -> active?.let { held ->
+                    active = held.copy(engine = held.engine.pause(action.at))
+                    cancelEndNotification()
+                }
+                SyncAction.Resume -> active?.let { held ->
+                    active = held.copy(engine = held.engine.resume(now))
+                    scheduleEndNotification()
+                }
+                // A 3-second walk run never matches the server's length, which would stretch it back out.
+                is SyncAction.MoveEnd -> if (!isShortRun) active?.let { held ->
+                    val engine = RunSync.movedEnd(held.engine, action.end, now)
+                    active = held.copy(engine = engine, minutes = maxOf(1, Math.round(engine.duration / 60).toInt()))
+                    scheduleEndNotification()
+                }
+                is SyncAction.Seen -> active?.let { held -> active = held.copy(syncVersion = action.version) }
+            }
+        }
+        if (actions.isEmpty()) return
+        save()
+        // Re-plans the wake for the new end; a run shortened past now finishes here as usual.
+        update(canBeep = false)
+    }
+
+    /** True while one of our own actions may not be on the server yet, so its state may lag our taps. */
+    private fun isSending(now: Instant): Boolean =
+        lastAction?.isActive == true || sessionStart?.isActive == true || startingFor != null || completingFor != null ||
+            now.isBefore(settlesAt)
+
+    /** Takes on a session started on another device: the mini bar shows it, and Pause and End here reach it. */
+    private fun adopt(remote: RemoteSession, now: Instant) {
+        val mode = RunSync.modeFor(remote, app.modes)
+        val engine = RunSync.engineFor(remote, now)
+        val minutes = remote.plannedMinutes
+            ?: if (engine.isOpenEnded) 0 else maxOf(1, Math.round(engine.duration / 60).toInt())
+        active = ActiveRun(
+            mode = mode,
+            minutes = minutes,
+            title = remote.title?.trim().orEmpty().ifEmpty { mode.name },
+            engine = engine,
+            startId = remote.id,
+            sessionId = remote.id,
+            sessionBegun = true,
+            recoveryTypeRaw = remote.recoveryType?.raw,
+            startedOn = remote.device ?: "unknown",
+            syncVersion = remote.version,
+        )
+        // No expanding: the mini bar shows it, and the run page is a tap away.
+        scheduleEndNotification()
+    }
+
+    private fun tell(words: String) {
+        runCatching { Toast.makeText(context, words, Toast.LENGTH_LONG).show() }
+    }
+
     // MARK: Local notification
 
     private fun scheduleEndNotification() {
@@ -598,6 +695,12 @@ class RunController(
     companion object {
         private const val PREFS = "aura_run"
         private const val STORE_KEY = "activeRun"
+        /** How long after our last action a sync read may still show the state before it. */
+        private const val SETTLE_SECONDS = 5L
+        /** The same after a start is asked for and after it lands: sync never closes a run that young. */
+        private const val START_SETTLE_SECONDS = 10L
+        /** How long a session closed here stays closed to sync, against a server that is slow to end it. */
+        private const val RECENTLY_CLOSED_SECONDS = 300L
 
         /** The controller driving the run now; at most one per process. */
         private var latest: RunController? = null

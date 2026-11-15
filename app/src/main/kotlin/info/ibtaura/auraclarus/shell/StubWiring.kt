@@ -16,13 +16,13 @@ fun stubServices(flags: LaunchFlags): Pair<AuraApi, AuthService> {
         MorningOpening(estimated = false, baselineDays = 14, lastNight = true, score = 82.0, current = 76.0)
     }
     val api = if (flags.noSchedule) {
-        StubApi(workSchedule = null, joinsRunningSession = flags.joinedSession,
+        StubApi(workSchedule = null, joinsRunningSession = flags.joinedSession, remoteSession = flags.remoteSession,
             needsQuickCheck = flags.needsCheck, shortChecksCount = flags.shortCheck, opening = opening)
     } else {
-        StubApi(joinsRunningSession = flags.joinedSession,
+        StubApi(joinsRunningSession = flags.joinedSession, remoteSession = flags.remoteSession,
             needsQuickCheck = flags.needsCheck, shortChecksCount = flags.shortCheck, opening = opening)
     }
-    return api to StubAuth()
+    return api to StubAuth(startsSignedIn = !flags.signedOut)
 }
 
 /** Sample mode: weeks of made-up data, edits kept in memory until the app restarts. No network. */

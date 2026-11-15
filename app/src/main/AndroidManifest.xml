@@ -59,6 +59,22 @@
             </intent-filter>
         </activity>
 
+        <!-- "Continue with Google": Cognito's hosted sign-in redirects to auraclarus://auth (and auraclarus://auth/signout
+             after its logout); this hands the redirect to MainActivity (signin/GoogleRedirectActivity.kt). -->
+        <activity
+            android:name=".signin.GoogleRedirectActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="auraclarus" android:host="auth" />
+            </intent-filter>
+        </activity>
+
         <!-- Health Connect's privacy page: the permission screen's rationale link. -->
         <activity
             android:name=".health.HealthPrivacyActivity"

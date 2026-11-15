@@ -252,6 +252,13 @@ class LiveApi(
         return decode(WireStartedSession.serializer(), text).model
     }
 
+    override suspend fun activeSession(): RemoteSession? {
+        // 204 (nothing running) comes back as an empty body.
+        val text = client.send(ServiceName.session, "GET", "/v1/sessions/active")
+        if (text.isBlank()) return null
+        return decode(WireActiveSession.serializer(), text).model
+    }
+
     override suspend fun sessionAction(id: String, action: SessionAction) {
         post(ServiceName.session, "/v1/sessions/${esc(id)}/actions", buildJsonObject { put("action", action.raw) })
     }

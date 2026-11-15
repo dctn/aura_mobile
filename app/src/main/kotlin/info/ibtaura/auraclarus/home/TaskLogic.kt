@@ -99,7 +99,7 @@ internal object TaskText {
     fun errorWords(error: Throwable, action: String = "save"): String = when (error) {
         AuraError.Offline -> "You're offline. Try again when you're connected."
         is AuraError.Server -> when (error.status) {
-            412 -> "This task changed somewhere else. Pull down to reload, then try again."
+            412 -> "This task changed somewhere else. The latest is shown now; try again."
             404 -> "This task is gone. It may have been deleted somewhere else."
             400 -> error.message.ifEmpty { "Aura couldn't $action that. Check the fields." }
             else -> "Couldn't $action. Try again."

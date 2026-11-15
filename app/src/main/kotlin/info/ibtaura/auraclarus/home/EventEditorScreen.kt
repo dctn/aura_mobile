@@ -193,7 +193,9 @@ private fun EventEditorForm(app: AppState, event: CalendarEvent?, close: () -> U
     // The task this block does, for the "Task:" row and the planner caption.
     var linkedTask by remember { mutableStateOf<TaskItem?>(null) }
     var taskGone by remember { mutableStateOf(false) }
-    LaunchedEffect(linkedTaskId) {
+    // Goes up when a task save finds the task changed elsewhere, so the latest copy loads.
+    var taskReload by remember { mutableIntStateOf(0) }
+    LaunchedEffect(linkedTaskId, taskReload) {
         linkedTask = null
         taskGone = false
         val id = linkedTaskId ?: return@LaunchedEffect
@@ -438,6 +440,10 @@ private fun EventEditorForm(app: AppState, event: CalendarEvent?, close: () -> U
                     taskGone = false
                 }
                 messenger.tell(failure.words)
+                if (failure.reload) {
+                    taskReload += 1
+                    app.dataVersion += 1
+                }
             },
         )
     }

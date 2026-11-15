@@ -21,7 +21,10 @@ import kotlin.math.pow
  *
  * Null `workSchedule` starts with no work hours set, as a new account does (`--uitesting-no-schedule`).
  * `joinsRunningSession` starts with a session already running on the desktop, which the first start joins until it is
- * stopped (`--uitesting-joined-session`). `needsQuickCheck` makes Find a time for today answer 409
+ * stopped (`--uitesting-joined-session`); `activeSession()` hides it, as in a race where both devices tap Start.
+ * `remoteSession` is the same session, but `activeSession()` shows it, so the app picks it up at launch
+ * (`--uitesting-remote-session`); `pauseElsewhere`, `resumeElsewhere` and `endElsewhere` change it as the other device
+ * would. `needsQuickCheck` makes Find a time for today answer 409
  * `quick_check_required` unless `skipCheck` is sent or a valid Quick check was taken today (`--uitesting-needs-check`).
  * `shortChecksCount` makes any Quick check with at least one reaction valid, whatever its length
  * (`--uitesting-short-check`). `now` is the clock (Android only; Swift reads `Date()`). Days are in `DayKey.zone`.
@@ -42,12 +45,25 @@ class StubApi(
     /** Today's opening; the default is a full one (not an estimate). UI tests set a collecting one. */
     private val opening: MorningOpening? =
         MorningOpening(estimated = false, baselineDays = 14, lastNight = true, score = 82.0, current = 76.0),
+    /** A session already running on another device that `activeSession()` reports (cross-device sync). */
+    private val remoteSession: Boolean = false,
 ) : AuraApi {
     /** Swift's actor/lock: every piece of state below is read and written under it. */
     private val mutex = Mutex()
     private var held: WorkSchedule? = workSchedule
     /** True while the other device's session is still running and a start joins it. */
-    private var otherRunning: Boolean = joinsRunningSession
+    private var otherRunning: Boolean = joinsRunningSession || remoteSession
+    /** When the other device's session started, and its pause state (`remoteSession`). */
+    private val otherStartedAt: Instant = now().minusSeconds(5 * 60)
+    private var otherPausedAt: Instant? = null
+    private var otherPausedSeconds = 0L
+    private var otherVersion = 1
+    /** This phone's own running session (the account's active one), with its mode and pause state. */
+    private var activeLocal: String? = null
+    private var activeMode: String = "timer"
+    private var localPausedAt: Instant? = null
+    private var localPausedSeconds = 0L
+    private var localVersion = 1
     /** Find a time's real runs, one per date (a `DayKey`). */
     private val savedPlans = HashMap<String, DayPlan>()
     /** Quick checks by id, as first answered, so a resend gets the same answer. */
@@ -227,6 +243,13 @@ class StubApi(
             startedSessions.getOrPut(id) {
                 SessionRecord(id = id, kind = kind, title = title, startedAt = now, minutes = granted ?: 0, recoveryType = type)
             }
+            if (activeLocal != id) {
+                activeLocal = id
+                activeMode = mode
+                localPausedAt = null
+                localPausedSeconds = 0L
+                localVersion = 1
+            }
             StartedSession(id = id, plannedMinutes = granted)
         }
     }
@@ -237,10 +260,14 @@ class StubApi(
      */
     override suspend fun sessionAction(id: String, action: SessionAction) {
         val ends = action == SessionAction.stop || action == SessionAction.complete
-        if (!ends) return
+        if (!ends) {
+            mutex.withLock { pauseOrResume(id, action == SessionAction.pause, now()) }
+            return
+        }
         val end = now()
         mutex.withLock {
             if (id == runningElsewhereId) otherRunning = false
+            if (id == activeLocal) activeLocal = null
             // The first end counts. An open-ended run gets the minutes it ran; a focus session gets its cost.
             val record = startedSessions[id] ?: return@withLock
             if (record.outcome != null) return@withLock
@@ -257,6 +284,67 @@ class StubApi(
             )
         }
     }
+
+    /** Pause or resume either the other device's session or this phone's own; each change raises its version. */
+    private fun pauseOrResume(id: String, pause: Boolean, at: Instant) {
+        if (id == runningElsewhereId && otherRunning) {
+            val since = otherPausedAt
+            if (pause && since == null) otherPausedAt = at
+            if (!pause && since != null) {
+                otherPausedSeconds += (at.epochSecond - since.epochSecond).coerceAtLeast(0)
+                otherPausedAt = null
+            }
+            otherVersion += 1
+        } else if (id == activeLocal) {
+            val since = localPausedAt
+            if (pause && since == null) localPausedAt = at
+            if (!pause && since != null) {
+                localPausedSeconds += (at.epochSecond - since.epochSecond).coerceAtLeast(0)
+                localPausedAt = null
+            }
+            localVersion += 1
+        }
+    }
+
+    /**
+     * The account's running session: the other device's when `remoteSession` shows it, else this phone's own. The end
+     * moves later by the time spent paused, as the backend's endsAt does.
+     */
+    override suspend fun activeSession(): RemoteSession? {
+        val now = now()
+        return mutex.withLock {
+            if (otherRunning && remoteSession) {
+                val pausedSoFar = otherPausedSeconds + (otherPausedAt?.let { now.epochSecond - it.epochSecond } ?: 0)
+                return@withLock RemoteSession(
+                    id = runningElsewhereId, kind = "focus", mode = "timer",
+                    state = if (otherPausedAt != null) "paused" else "running", title = "Deep work", device = "mac",
+                    plannedMinutes = 30, startedAt = otherStartedAt,
+                    endsAt = otherStartedAt.plusSeconds(30 * 60 + pausedSoFar),
+                    pauses = otherPausedAt?.let { listOf(SessionSpan(it, 0.0)) } ?: emptyList(), version = otherVersion,
+                )
+            }
+            val id = activeLocal ?: return@withLock null
+            val record = startedSessions[id] ?: return@withLock null
+            val start = record.startedAt ?: now
+            val pausedSoFar = localPausedSeconds + (localPausedAt?.let { now.epochSecond - it.epochSecond } ?: 0)
+            RemoteSession(
+                id = id, kind = record.kind, mode = activeMode, state = if (localPausedAt != null) "paused" else "running",
+                title = record.title, device = "phone", plannedMinutes = record.minutes.takeIf { it > 0 },
+                startedAt = start, endsAt = record.minutes.takeIf { it > 0 }?.let { start.plusSeconds(it * 60L + pausedSoFar) },
+                pauses = localPausedAt?.let { listOf(SessionSpan(it, 0.0)) } ?: emptyList(),
+                recoveryType = record.recoveryType, version = localVersion,
+            )
+        }
+    }
+
+    /** UI tests: the other device pauses its session. */
+    suspend fun pauseElsewhere() = mutex.withLock { pauseOrResume(runningElsewhereId, true, now()) }
+
+    /** UI tests: the other device resumes its session. */
+    suspend fun resumeElsewhere() = mutex.withLock { pauseOrResume(runningElsewhereId, false, now()) }
+
+    /** UI tests: the other device ends its session; `activeSession()` then answers null. */
+    suspend fun endElsewhere() = mutex.withLock { otherRunning = false }
 
     /** No band data, except on the seeded history (Session history) and sample sessions, which have a trace to chart. */
     override suspend fun sessionTrace(id: String): SessionTrace = historyTrace(id) ?: sampleTrace(id) ?: SessionTrace(status = "noData")
@@ -1374,16 +1462,35 @@ internal object StubZones {
     }
 }
 
-/** Always signed in, for UI tests and CI. */
-class StubAuth : AuthService {
-    override suspend fun restore(): AuthState = AuthState.SignedIn(email = null)
+/**
+ * Signed in at launch for UI tests and CI, unless [startsSignedIn] is false (`--uitesting-signed-out`). Any sign-in,
+ * the hosted one included, completes at once with no network and no browser.
+ */
+class StubAuth(startsSignedIn: Boolean = true) : AuthService {
+    @Volatile
+    private var signedIn = startsSignedIn
+
+    override suspend fun restore(): AuthState = if (signedIn) AuthState.SignedIn(email = null) else AuthState.SignedOut
 
     override suspend fun requestCode(email: String): AuthStep =
         AuthStep(kind = AuthStep.Kind.signIn, email = email, session = "stub", codeLength = 8)
 
-    override suspend fun finish(step: AuthStep, code: String): AuthState = AuthState.SignedIn(email = step.email)
+    override suspend fun finish(step: AuthStep, code: String): AuthState {
+        signedIn = true
+        return AuthState.SignedIn(email = step.email)
+    }
 
     override suspend fun resend(step: AuthStep): AuthStep = step
 
-    override suspend fun signOut() {}
+    override suspend fun signOut() {
+        signedIn = false
+    }
+
+    /** Present, so the Google button shows; the app never opens it under UI tests (see `finishHostedSignIn`). */
+    override val hostedSignIn: HostedSignIn = HostedSignIn(domain = "stub.auth.invalid", clientId = "stub-oauth-client")
+
+    override suspend fun finishHostedSignIn(code: String, verifier: String): AuthState {
+        signedIn = true
+        return AuthState.SignedIn(email = null)
+    }
 }

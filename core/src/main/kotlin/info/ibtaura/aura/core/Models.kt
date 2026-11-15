@@ -44,6 +44,10 @@ data class AppConfig(
     val appVersion: String,
     val consentPolicyVersion: String,
     val services: Map<String, String>,
+    /** The Cognito domain for the hosted sign-in ("Continue with Google"). Missing: the Google button stays hidden. */
+    val cognitoDomain: String? = null,
+    /** The app client the hosted sign-in uses (code grant + PKCE, no secret). Email sign-in keeps `clientId`. */
+    val oauthClientId: String? = null,
 ) {
     fun baseURL(service: ServiceName): HttpUrl? = services[service.raw]?.toHttpUrlOrNull()
 
@@ -413,6 +417,39 @@ data class StartedSession(
     /** When the running session ends when `joined` is true. Null when open-ended. */
     val endsAt: Instant? = null,
 )
+
+/** A pause or break of a session: when it began and how long it lasted (so far, while it lasts). */
+data class SessionSpan(val at: Instant, val minutes: Double)
+
+/**
+ * The session running for this account on any device (GET /v1/sessions/active): one at a time per account. Other
+ * devices read it to show the run and to keep pause, resume, extend and end the same everywhere.
+ */
+data class RemoteSession(
+    val id: String,
+    /** focus, meeting, recovery, walk or brainstorm. */
+    val kind: String,
+    /** The backend's session mode (timer, flowtime, pomodoro…). */
+    val mode: String,
+    /** running, paused or break. */
+    val state: String,
+    val title: String? = null,
+    /** Where it was started: phone, mac, windows (older answers: desktop, web). */
+    val device: String? = null,
+    /** Null when open-ended. */
+    val plannedMinutes: Int? = null,
+    val startedAt: Instant,
+    /** When it ends with the pauses and extensions so far; null when open-ended. */
+    val endsAt: Instant? = null,
+    val pauses: List<SessionSpan> = emptyList(),
+    val breaks: List<SessionSpan> = emptyList(),
+    val recoveryType: RecoveryType? = null,
+    /** Raised by every change; a different version means something changed on some device. */
+    val version: Int = 0,
+) {
+    /** True while it is paused or on a break: its clock is stopped. */
+    val isPaused: Boolean get() = state == "paused" || state == "break"
+}
 
 enum class SessionAction(val raw: String) {
     pause("pause"), resume("resume"), stop("stop"), complete("complete");

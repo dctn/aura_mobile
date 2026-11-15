@@ -53,6 +53,8 @@ dependencies {
     implementation(libs.androidx.lifecycle.process)
     implementation(libs.androidx.datastore.preferences)
     implementation(libs.androidx.health.connect)
+    // Custom Tabs for "Continue with Google" (signin/GoogleSignIn.kt).
+    implementation(libs.androidx.browser)
     implementation(libs.kotlinx.coroutines.android)
 
     implementation(platform(libs.compose.bom))

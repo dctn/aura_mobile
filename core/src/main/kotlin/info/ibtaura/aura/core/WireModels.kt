@@ -380,6 +380,46 @@ internal data class WireStartedSession(
             endsAt = WireDate.parse(session.endsAt))
 }
 
+/** `{"session": sessionView}` from GET /v1/sessions/active (200); 204 has no body. Only the keys the app reads. */
+@Serializable
+internal data class WireActiveSession(val session: Session) {
+    @Serializable
+    internal data class Session(
+        val id: String,
+        val kind: String? = null,
+        val mode: String? = null,
+        val state: String? = null,
+        val title: String? = null,
+        val device: String? = null,
+        val plannedMinutes: Int? = null,
+        val startedAt: String? = null,
+        val endsAt: String? = null,
+        val pauses: List<Span>? = null,
+        val breaks: List<Span>? = null,
+        val recoveryType: String? = null,
+        val version: Int? = null,
+    )
+
+    @Serializable
+    internal data class Span(val at: String? = null, val minutes: Double? = null)
+
+    /** Null when the session has no readable start (nothing to show a clock for). */
+    val model: RemoteSession?
+        get() {
+            val start = WireDate.parse(session.startedAt) ?: return null
+            fun spans(list: List<Span>?) = list.orEmpty().mapNotNull { span ->
+                WireDate.parse(span.at)?.let { SessionSpan(it, span.minutes ?: 0.0) }
+            }
+            return RemoteSession(
+                id = session.id, kind = session.kind ?: "focus", mode = session.mode ?: "timer",
+                state = session.state ?: "running", title = session.title, device = session.device,
+                plannedMinutes = session.plannedMinutes, startedAt = start, endsAt = WireDate.parse(session.endsAt),
+                pauses = spans(session.pauses), breaks = spans(session.breaks),
+                recoveryType = session.recoveryType?.let { RecoveryType.fromRaw(it) }, version = session.version ?: 0,
+            )
+        }
+}
+
 @Serializable
 internal data class WireTrace(
     val status: String? = null,

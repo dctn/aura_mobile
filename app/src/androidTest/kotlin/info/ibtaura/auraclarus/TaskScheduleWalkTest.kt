@@ -78,7 +78,7 @@ class TaskScheduleWalkTest : WalkTestCase() {
     private fun openTasksFromHome() {
         Walk.openTab("Home")
         Walk.findText("Insights", timeoutMs = 20_000)
-        Walk.find("home-work-task", "Task row")
+        // The Work rows sit below the fold now that Home is longer, so scroll before looking (open() brings it in).
         Walk.dragPage(0.7, 0.2)
         Walk.dragPage(0.7, 0.2)
         Walk.open("home-work-task", until = "tasks-page", message = "Tasks didn't open")

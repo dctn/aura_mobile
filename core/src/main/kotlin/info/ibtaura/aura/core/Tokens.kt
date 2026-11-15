@@ -19,6 +19,11 @@ data class AuthTokens(
     /** When the access token stops being accepted. */
     @Serializable(with = InstantSerializer::class)
     val expiresAt: Instant,
+    /**
+     * The app client that issued these tokens: a refresh token only refreshes (and revokes) with that client. Null for
+     * sessions saved before this was kept, which were all issued by the config's `clientId`.
+     */
+    val clientId: String? = null,
 ) {
     /** The Cognito `sub`, from the id token. Empty when the token doesn't carry one. */
     val sub: String get() = JWT.string(JWT.claims(idToken), "sub") ?: ""
@@ -34,14 +39,24 @@ data class AuthTokens(
 
     companion object {
         /** Builds tokens from Cognito's `AuthenticationResult`: the access token's own expiry, else `ExpiresIn`, else an hour. */
-        fun issued(accessToken: String, idToken: String, refreshToken: String, expiresIn: Int?, now: Instant): AuthTokens {
+        fun issued(
+            accessToken: String,
+            idToken: String,
+            refreshToken: String,
+            expiresIn: Int?,
+            now: Instant,
+            clientId: String? = null,
+        ): AuthTokens {
             val fromToken = JWT.expiry(accessToken)
             val expiry = when {
                 fromToken != null -> fromToken
                 expiresIn != null && expiresIn > 0 -> now.plusSeconds(expiresIn.toLong())
                 else -> now.plusSeconds(3600)
             }
-            return AuthTokens(idToken = idToken, accessToken = accessToken, refreshToken = refreshToken, expiresAt = expiry)
+            return AuthTokens(
+                idToken = idToken, accessToken = accessToken, refreshToken = refreshToken, expiresAt = expiry,
+                clientId = clientId,
+            )
         }
     }
 }

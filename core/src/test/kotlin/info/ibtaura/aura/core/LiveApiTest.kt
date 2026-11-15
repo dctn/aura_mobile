@@ -362,6 +362,32 @@ class LiveBodyTest {
     }
 
     @Test
+    fun activeSessionReadsTheRunningOne() = runBlocking<Unit> {
+        val rig = NetRig()
+        val answer = "{\"session\":{\"id\":\"mac-1\",\"kind\":\"focus\",\"mode\":\"timer\",\"state\":\"paused\",\"device\":\"mac\"," +
+            "\"title\":\"Deep work\",\"plannedMinutes\":50,\"startedAt\":\"2030-03-17T17:21:40.000Z\",\"endsAt\":\"2030-03-17T18:16:40.000Z\"," +
+            "\"pauses\":[{\"at\":\"2030-03-17T17:40:00.000Z\",\"minutes\":5}],\"breaks\":[],\"version\":4,\"extra\":true}}"
+        rig.server.on("/v1/sessions/active", netJson(200, answer))
+        val active = rig.api.activeSession()
+        assertNotNull(active)
+        assertEquals("mac-1", active.id)
+        assertEquals("paused", active.state)
+        assertTrue(active.isPaused)
+        assertEquals("mac", active.device)
+        assertEquals(50, active.plannedMinutes)
+        assertEquals(4, active.version)
+        assertEquals(listOf(SessionSpan(java.time.Instant.parse("2030-03-17T17:40:00Z"), 5.0)), active.pauses)
+        assertEquals(java.time.Instant.parse("2030-03-17T18:16:40Z"), active.endsAt)
+    }
+
+    @Test
+    fun noActiveSessionIsNull() = runBlocking<Unit> {
+        val rig = NetRig()
+        rig.server.on("/v1/sessions/active", netJson(204, ""))
+        assertNull(rig.api.activeSession())
+    }
+
+    @Test
     fun startAnswerWithoutTheNewFieldsStillDecodes() = runBlocking<Unit> {
         val rig = NetRig()
         rig.server.on("/v1/sessions", netJson(201, "{\"session\":{\"id\":\"one\",\"title\":null,\"endsAt\":null},\"joined\":false}"))
